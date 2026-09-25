@@ -1,13 +1,18 @@
 import { FieldPath, Timestamp } from "firebase-admin/firestore";
 
 import { CHUNKS_PER_READ, type Source } from "./config";
+import { decryptChunk, encryptChunk } from "./encryption";
 import { firestore } from "./firebase";
 
 /**
  * How logs are kept in Firestore:
  *
  *   logs/{id}                 { source, pw?, createdAt }
- *   logs/{id}/chunks/{offset} { t: "<JSON Lines>" }
+ *   logs/{id}/chunks/{offset} { e: <encrypted JSON Lines, bytes> }
+ *
+ * Chunk text is encrypted before it's stored (lib/encryption.ts); Firestore
+ * never sees it in the clear. The metadata holds nothing sensitive: the
+ * password is only a scrypt hash.
  *
  * Each chunk is a separate document whose id is its byte offset in the log,
  * zero-padded so ids sort in log order. Appending is therefore one write of a
@@ -39,7 +44,10 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   // `create` fails if the id is already taken, rather than overwriting it.
   // (Firestore rejects undefined fields, so `pw` is only set when present.)
   batch.create(log, { source: meta.source, ...(meta.pw ? { pw: meta.pw } : {}), createdAt: Timestamp.now() });
-  if (text) batch.set(log.collection("chunks").doc(chunkKey(0)), { t: text });
+  if (text) {
+    const key = chunkKey(0);
+    batch.set(log.collection("chunks").doc(key), { e: encryptChunk(id, key, text) });
+  }
   try {
     await batch.commit();
   } catch (err) {
@@ -49,9 +57,14 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   }
 }
 
-/** Stores one chunk at `offset`. One write, no reads. */
+/** Encrypts and stores one chunk at `offset`. One write, no reads. */
 export async function appendChunk(id: string, offset: number, text: string): Promise<void> {
-  await logs().doc(id).collection("chunks").doc(chunkKey(offset)).set({ t: text });
+  const key = chunkKey(offset);
+  await logs()
+    .doc(id)
+    .collection("chunks")
+    .doc(key)
+    .set({ e: encryptChunk(id, key, text) });
 }
 
 // Metadata never changes after creation, so each server instance keeps what
@@ -84,7 +97,7 @@ export async function readChunks(
   let query = logs().doc(id).collection("chunks").orderBy(FieldPath.documentId()).limit(CHUNKS_PER_READ);
   if (after) query = query.startAfter(after);
   const snap = await query.get();
-  const text = snap.docs.map((doc) => doc.get("t") as string).join("");
+  const text = snap.docs.map((doc) => decryptChunk(id, doc.id, doc.get("e"))).join("");
   const last = snap.docs.length ? snap.docs[snap.docs.length - 1].id : null;
   return { text, last, more: snap.docs.length === CHUNKS_PER_READ };
 }

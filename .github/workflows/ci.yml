@@ -44,6 +44,8 @@ jobs:
         working-directory: site
     env:
       AGENT_GRAPH_SECRET: ci-only-secret
+      # 32 bytes of 0x03, base64url: a throwaway key for tests only.
+      AGENT_GRAPH_ENCRYPTION_KEY: AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM
       FIREBASE_PROJECT_ID: demo-agent-graph
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +60,7 @@ jobs:
           java-version: 21
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run test:unit
       - run: npm run build
       - run: npm install -g firebase-tools
       # The API tests, against the built site and the Firestore emulator.

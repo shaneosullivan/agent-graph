@@ -13,6 +13,7 @@ It's a Next.js app with Firestore for storage. The viewer's graph logic isn't re
 | `app/api/logs/…` | The API (below) |
 | `lib/store.ts` | Firestore reads and writes |
 | `lib/crypto.ts` | Ids, write keys, viewer cookies, password hashes |
+| `lib/encryption.ts` | Encrypts log chunks before they're stored |
 | `public/viewer/site-source.js` | Feeds the viewer from the API instead of a local server (hand-written) |
 | `public/viewer/app.js`, `app.css`, `agent_graph.wasm`, `lib/viewer-shell.ts` | **Generated** from the Rust crate by `scripts/sync-viewer.mjs`; don't edit |
 
@@ -53,6 +54,14 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 
 Passwords are hashed with scrypt. Firestore's security rules (`firestore.rules`) deny all direct access; only the server, using the Admin SDK, touches the data.
 
+**Logs are encrypted at rest.** Google already encrypts Firestore's disks. On top of that, the site encrypts every chunk before storing it, so the database holds only ciphertext. Anyone who can read Firestore itself (the console, exports and backups, a leaked service-account key) sees nothing readable.
+- **Cipher:** AES-256-GCM, which also detects any change to stored data.
+- **Per-log keys:** each log's key is derived (HKDF) from the master key `AGENT_GRAPH_ENCRYPTION_KEY` and the log's id.
+- **Binding:** each chunk is bound to its log and position, so chunks can't be swapped or reordered undetected.
+- **Cost:** a fraction of a millisecond per chunk, and appends still make no database reads.
+- **Not encrypted:** the metadata (when a log was created, how it was shared, the password *hash*) and the chunk ids, which reveal a log's size.
+- **The server can still read logs.** It holds the key; this isn't end-to-end encryption.
+
 ## Develop
 
 Requires Node 22, plus the Firebase CLI and Java for the Firestore emulator.
@@ -65,7 +74,7 @@ npm install
 cp .env.example .env.local
 ```
 
-In `.env.local`, uncomment the two emulator lines and set any `AGENT_GRAPH_SECRET`. Then start the emulator:
+In `.env.local`, uncomment the two emulator lines and set `AGENT_GRAPH_SECRET` and `AGENT_GRAPH_ENCRYPTION_KEY` (both generated as shown in the file). Then start the emulator:
 
 ```bash
 npm run emulators
@@ -81,6 +90,12 @@ To stream your own agents to it:
 
 ```bash
 agent-graph watch-remote --url=http://localhost:3000
+```
+
+The encryption has unit tests:
+
+```bash
+npm run test:unit
 ```
 
 The API tests run against any running copy of the site:
@@ -109,8 +124,12 @@ npm run test:ci
      node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
      ```
      Changing it invalidates every write key and viewer cookie.
+   - `AGENT_GRAPH_ENCRYPTION_KEY`: another 32 random bytes, generated the same way. **Back it up and never change it**: without it, stored logs can't be decrypted.
    - `FIREBASE_SERVICE_ACCOUNT`: the service account's JSON key, on one line.
    - `NEXT_PUBLIC_SITE_URL`: `https://agentgraph.chofter.com`
 5. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
 
-Not built yet: rate limiting on log creation, and a way to delete a log.
+Not built yet:
+- rate limiting on log creation;
+- a way to delete a log;
+- rotating the encryption key (the stored format carries a version byte, so a second key can be added later).

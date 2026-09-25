@@ -110,7 +110,11 @@ test("password-protected logs need the password to read", async () => {
 test("bad input is refused", async () => {
   const log = await create(line(1));
   assert.equal((await append(log.id, "abc", line(2), log.writeToken)).status, 400, "bad offset");
-  assert.equal((await append(log.id, 99_999_999_999, line(2), log.writeToken)).status, 413, "past the size limit");
+  assert.equal(
+    (await append(log.id, 99_999_999_999, line(2), log.writeToken)).status,
+    413,
+    "past the size limit",
+  );
   const big = "x".repeat(600 * 1024);
   assert.equal((await append(log.id, 10, big, log.writeToken)).status, 413, "chunk too big");
   assert.equal((await content("not-an-id")).status, 404);
@@ -123,3 +127,41 @@ test("bad input is refused", async () => {
   });
   assert.equal(badPassword.status, 400);
 });
+
+test(
+  "logs are encrypted in Firestore",
+  { skip: !process.env.FIRESTORE_EMULATOR_HOST && "reads the database directly, so needs the emulator" },
+  async () => {
+    const marker = "a very recognisable summary 7c1f";
+    const event = (n) =>
+      JSON.stringify({
+        v: 1,
+        id: `01K0000000000000000000${String(n).padStart(4, "0")}`,
+        ts: "2026-09-25T10:00:00.000Z",
+        type: "status",
+        node: "x:s",
+        data: { state: "working", summary: marker },
+      }) + "\n";
+    const log = await create(event(1));
+    assert.equal((await append(log.id, Buffer.byteLength(event(1)), event(2), log.writeToken)).status, 204);
+
+    // What's actually stored, read past the site (the emulator's admin token).
+    const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "demo-agent-graph";
+    const res = await fetch(
+      `http://${process.env.FIRESTORE_EMULATOR_HOST}/v1/projects/${project}/databases/(default)/documents/logs/${log.id}/chunks`,
+      { headers: { Authorization: "Bearer owner" } },
+    );
+    assert.equal(res.status, 200);
+    const stored = await res.json();
+    assert.equal(stored.documents.length, 2);
+    for (const doc of stored.documents) {
+      assert.deepEqual(Object.keys(doc.fields), ["e"], "only ciphertext");
+      const bytes = Buffer.from(doc.fields.e.bytesValue, "base64");
+      assert.ok(!bytes.includes(Buffer.from("recognisable")), "no plaintext in the stored bytes");
+    }
+    assert.doesNotMatch(JSON.stringify(stored), /recognisable/);
+
+    // The site still reads it back.
+    assert.equal((await content(log.id)).text, event(1) + event(2));
+  },
+);

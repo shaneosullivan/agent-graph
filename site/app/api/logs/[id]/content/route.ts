@@ -30,7 +30,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     }
   }
 
-  const { text, last, more } = await readChunks(id, after);
+  let chunks: Awaited<ReturnType<typeof readChunks>>;
+  try {
+    chunks = await readChunks(id, after);
+  } catch (err) {
+    console.error(`reading log ${id}:`, err);
+    return new Response("This log couldn't be read.", { status: 500 });
+  }
+  const { text, last, more } = chunks;
   const headers: Record<string, string> = {
     "Content-Type": "application/x-ndjson; charset=utf-8",
     "Cache-Control": "private, no-store",

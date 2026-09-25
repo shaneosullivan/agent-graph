@@ -448,6 +448,11 @@ Viewers can step through the log exactly as they can locally. Each log can have 
   - The page and the content API both check it, so the log's text never reaches a browser without the password.
 - **Saved passwords.** `--save-default-password` saves the password as the default for later runs, in `~/.agent-graph/remote.json`, readable only by you. It's stored in plain text, because the site needs the password itself. `--password= --save-default-password` clears it.
 - **Firestore** rules deny all direct access; only the site's server, using the Admin SDK, reads or writes.
+- **Encrypted at rest.** On top of Google's disk encryption, every chunk is encrypted before it's stored, so Firestore holds only ciphertext. Someone who can read the database (console, exports, a leaked service-account key) can't read the logs.
+  - AES-256-GCM, with a per-log key derived from `AGENT_GRAPH_ENCRYPTION_KEY`, a key separate from the signing secret.
+  - Each chunk is bound to its log and offset, so tampering, swapping or reordering is detected.
+  - Metadata and chunk sizes aren't hidden.
+  - The server holds the key, so this protects stored data; it isn't end-to-end encryption.
 
 **Live vs pasted.**
 - A streamed log is judged against the viewer's clock, so a share that stopped long ago shows as stale.
@@ -508,7 +513,7 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 - **Privacy.** Redaction defaults must be conservative. Task text and subagent descriptions can still contain sensitive details, so `~/.agent-graph/` is created readable only by the current user.
 - **Terminal widths.** `tail` cuts lines by character count, so wide (CJK) characters can overflow a line. A `unicode-width` dependency would fix it if it matters.
 - **Fonts on minimal Linux.** `snapshot` uses system fonts. On a machine with none installed (some containers), text in the image is missing. Bundling one open font would remove that dependency.
-- **The public site.** Nothing limits how many logs one client creates, and there's no way yet to delete a shared log. Both are needed before the site is widely used. Rotating `AGENT_GRAPH_SECRET` invalidates every write key and viewer cookie.
+- **The public site.** Nothing limits how many logs one client creates, and there's no way yet to delete a shared log. Both are needed before the site is widely used. Rotating `AGENT_GRAPH_SECRET` invalidates every write key and viewer cookie. Losing `AGENT_GRAPH_ENCRYPTION_KEY` makes every stored log unreadable, and there's no key rotation yet (the format has a version byte for it).
 - **Items still to verify:**
   - Hooks on real Windows: the quoted, forward-slash hook command under Claude Code's Windows shell (CI covers our code on Windows, but not Claude Code itself)
   - `CLAUDE_ENV_FILE` behaviour on current Claude Code
