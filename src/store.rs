@@ -40,11 +40,72 @@ pub fn append(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// Writes `bytes` to `path` via a temporary file and a rename, so readers never
-/// see a half-written file.
+/// see a half-written file. The temporary file is always a new one (never a
+/// file or link someone left at a predictable name), and the rename replaces
+/// `path` itself, even if it's a link.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?
+        .to_string_lossy();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let mut attempt = 0;
+    let (tmp, mut file) = loop {
+        let tmp = dir.join(format!(
+            ".{name}.{}-{nanos}-{attempt}.tmp",
+            std::process::id()
+        ));
+        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && attempt < 100 => attempt += 1,
+            Err(e) => return Err(e),
+        }
+    };
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| {
+            drop(file);
+            fs::rename(&tmp, path)
+        });
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Errors if `path`, or a folder between `root` and it, is a symbolic link.
+/// For files a project ships, so one can't lead a write out of the project.
+pub fn refuse_links(root: &Path, path: &Path) -> io::Result<()> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} isn't in {}", path.display(), root.display()),
+        )
+    })?;
+    let mut at = root.to_path_buf();
+    for part in relative.components() {
+        at.push(part);
+        match fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(io::Error::other(format!(
+                    "{} is a symbolic link",
+                    at.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => break,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Default)]
@@ -84,6 +145,52 @@ pub fn load_events(dir: &Path) -> io::Result<Loaded> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_writes_replace_the_file_and_leave_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        write_atomic(&file, b"one").unwrap();
+        write_atomic(&file, b"two").unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "two");
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["settings.json"], "no temporary files left");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_writes_replace_a_link_rather_than_follow_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        fs::write(&outside, "keep me").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        write_atomic(&link, b"new").unwrap();
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "keep me");
+        assert!(
+            !fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_inside_a_project_are_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path();
+        fs::create_dir_all(project.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.path(), project.join("linked")).unwrap();
+        assert!(refuse_links(project, &project.join("real/settings.json")).is_ok());
+        assert!(refuse_links(project, &project.join("missing/a/b")).is_ok());
+        assert!(refuse_links(project, &project.join("linked/settings.json")).is_err());
+        assert!(refuse_links(project, &project.join("linked")).is_err());
+        assert!(refuse_links(project, Path::new("/elsewhere")).is_err());
+    }
 
     #[test]
     fn load_skips_bad_lines_and_other_files() {

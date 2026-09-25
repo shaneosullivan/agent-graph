@@ -538,3 +538,81 @@ fn run_succeeds_quietly_and_reports_a_missing_program() {
     let events = events_in(home.path());
     assert_eq!(events[2]["data"]["state"], "failed");
 }
+
+// ---------- review fixes ----------
+
+/// R1: a repo can ship symlinks where `install --scope project` writes. None
+/// of them may lead a write outside the project.
+#[cfg(unix)]
+#[test]
+fn install_never_writes_through_links_a_project_plants() {
+    use std::os::unix::fs::symlink;
+
+    let install = |project: &Path| {
+        bin()
+            .args(["install", "claude-code", "--scope", "project", "--yes"])
+            .current_dir(project)
+            .output()
+            .unwrap()
+    };
+    let outside = |dir: &Path| {
+        let file = dir.join("outside.txt");
+        std::fs::write(&file, "keep me").unwrap();
+        file
+    };
+
+    // A link where the temporary file, or the backup, would go.
+    for planted in ["settings.tmp", "settings.json.agent-graph.bak"] {
+        let root = tempfile::tempdir().unwrap();
+        let victim = outside(root.path());
+        let project = root.path().join("repo");
+        let claude = project.join(".claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        std::fs::write(claude.join("settings.json"), r#"{"x": "$(touch pwned)"}"#).unwrap();
+        symlink(&victim, claude.join(planted)).unwrap();
+
+        let out = install(&project);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(read(&victim), "keep me", "{planted} led the write outside");
+        let installed: serde_json::Value =
+            serde_json::from_str(&read(claude.join("settings.json"))).unwrap();
+        assert!(installed["hooks"].is_object(), "installed all the same");
+    }
+
+    // The settings file itself, or the .claude folder, is a link out. The
+    // outside file is JSON, so reading it through the link would work: it
+    // mustn't be read, rewritten, or copied into the project as a backup.
+    let root = tempfile::tempdir().unwrap();
+    let secret = root.path().join("secret.json");
+    std::fs::write(&secret, r#"{"token": "s3cret"}"#).unwrap();
+    let project = root.path().join("repo");
+    std::fs::create_dir_all(project.join(".claude")).unwrap();
+    symlink(&secret, project.join(".claude/settings.json")).unwrap();
+    let out = install(&project);
+    assert!(!out.status.success(), "refuses a linked settings file");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("link"));
+    assert_eq!(read(&secret), r#"{"token": "s3cret"}"#);
+    let copied = std::fs::read_dir(project.join(".claude"))
+        .unwrap()
+        .flatten()
+        .any(|e| read(e.path()).contains("s3cret") && e.file_name() != "settings.json");
+    assert!(!copied, "the outside file wasn't copied into the project");
+
+    let root = tempfile::tempdir().unwrap();
+    let elsewhere = root.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let project = root.path().join("repo");
+    std::fs::create_dir_all(&project).unwrap();
+    symlink(&elsewhere, project.join(".claude")).unwrap();
+    let out = install(&project);
+    assert!(!out.status.success(), "refuses a linked .claude folder");
+    assert_eq!(
+        std::fs::read_dir(&elsewhere).unwrap().count(),
+        0,
+        "nothing written outside the project"
+    );
+}

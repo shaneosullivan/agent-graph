@@ -15,8 +15,8 @@ Status is updated as each is done.
 ### R1. `install` and `snapshot` write through symlinks a repo can plant
 - **Where:** `src/store.rs` (`write_atomic`), `src/cli.rs` (`apply`, backups)
 - **Problem:** Writes go to a predictable `<file>.tmp` with `fs::write`, which follows symlinks, then rename it into place; the backup `fs::copy` follows a symlink too. With `--scope project`/`local`, those paths are inside the repo, so a repo that ships `.claude/settings.tmp -> ~/.bashrc` gets `~/.bashrc` replaced with JSON it controls, which bash then runs.
-- **Fix:** create temporary and backup files exclusively (`create_new`, random name) and never write through a symlink we didn't expect.
-- **Status:** open
+- **Fix:** temporary files are always new (`create_new`, unique name) and renamed over the target, so a link there is replaced, not followed; backups are written the same way; and for project and local scope, a settings or command file that is, or goes through, a link in the project is refused before it's read. (A project whose `.claude` is deliberately a link now gets a clear error.)
+- **Status:** fixed. Test: `install_never_writes_through_links_a_project_plants` (tests/cli.rs), plus `store` unit tests. Reviewed.
 
 ### R2. The `/agent-graph` skill pre-approves `agent-graph snapshot *`, whose `--out` overwrites any file
 - **Where:** `src/slash.rs` (`allowed-tools`), `src/cli.rs` (`snapshot --out`)

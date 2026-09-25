@@ -374,6 +374,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
 
     if opts.slash_command {
         let file = slash::command_file(client, scope, &cwd)?;
+        inside_project(scope, &cwd, &file.path)?;
         let existing = std::fs::read_to_string(&file.path).ok();
         let ours = existing.as_deref().is_some_and(slash::is_ours);
         match (opts.add, existing.as_deref()) {
@@ -456,9 +457,20 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
     Ok(())
 }
 
+/// A project can ship anything, including links out of itself. For project
+/// and local scope, refuses a path that is, or goes through, a link in it.
+fn inside_project(scope: Scope, cwd: &Path, path: &Path) -> Result<(), String> {
+    if scope == Scope::User {
+        return Ok(());
+    }
+    store::refuse_links(cwd, path)
+        .map_err(|e| format!("{e}; Agent Graph won't read or write through links in a project"))
+}
+
 /// The change to Claude Code's settings for the hooks, if any.
 fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Option<Change>, String> {
     let path = install::claude_settings_path(scope, cwd).ok_or("can't find your home directory")?;
+    inside_project(scope, cwd, &path)?;
     let existed = path.exists();
     let before: Value = if existed {
         let text = std::fs::read_to_string(&path)
@@ -532,8 +544,11 @@ fn apply(change: &Change) -> Result<(), String> {
         return Ok(());
     };
     if change.backup {
+        // Written like any other file, so a link left at the backup's name
+        // is replaced rather than written through.
         let backup = path.with_extension("json.agent-graph.bak");
-        std::fs::copy(path, &backup)
+        std::fs::read(path)
+            .and_then(|original| store::write_atomic(&backup, &original))
             .map_err(|e| format!("backing up to {}: {e}", backup.display()))?;
         println!("Backed up the old file to {}", backup.display());
     }
