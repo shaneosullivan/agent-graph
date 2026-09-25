@@ -5,8 +5,12 @@
 //! thread. Pages learn about new events over Server-Sent Events and then ask
 //! for the graph again, so the Rust reducer stays the only implementation of
 //! the graph logic.
+//!
+//! Being on the computer the sessions ran on, it can also reopen one in its
+//! agent (`POST /api/open`, see `open`).
 
 mod http;
+pub mod open;
 pub mod tail;
 
 use std::net::{TcpListener, TcpStream};
@@ -18,7 +22,9 @@ use std::time::Duration;
 use http::{Request, respond};
 use tail::Tail;
 
-use crate::timeline::{self as api, ApiError, Timed};
+use crate::event::Payload;
+use crate::resume::{self, Resume};
+use crate::timeline::{self as api, ApiError, Environment, Timed};
 
 /// How often the events directory is checked for new lines.
 const POLL: Duration = Duration::from_millis(250);
@@ -61,12 +67,26 @@ pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
     }
 }
 
+/// Runs a command that reopens a session: `open::in_terminal`, or a stand-in
+/// in tests.
+pub type Launch = fn(&Resume) -> Result<(), String>;
+
 /// Loads the events, then serves `listener` and watches for new events on
 /// background threads.
 pub fn start(
     events_dir: &Path,
     listener: TcpListener,
     stale_after: Duration,
+) -> Result<(), String> {
+    start_with(events_dir, listener, stale_after, open::in_terminal)
+}
+
+/// `start`, opening sessions with `launch`.
+pub fn start_with(
+    events_dir: &Path,
+    listener: TcpListener,
+    stale_after: Duration,
+    launch: Launch,
 ) -> Result<(), String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let shared = Arc::new(Shared {
@@ -76,6 +96,7 @@ pub fn start(
         stale_after,
         port,
         events_dir: events_dir.to_path_buf(),
+        launch,
     });
     shared
         .poll()
@@ -108,6 +129,7 @@ struct Shared {
     stale_after: Duration,
     port: u16,
     events_dir: PathBuf,
+    launch: Launch,
 }
 
 impl Shared {
@@ -141,10 +163,21 @@ fn handle(mut stream: TcpStream, shared: &Shared) {
 fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Result<()> {
     // Only answer requests addressed to this machine by name. This stops a web
     // page from reaching the viewer through DNS rebinding.
-    if !host_allowed(req.host.as_deref(), shared.port) {
+    if !host_allowed(req.header("host"), shared.port) {
         return respond(stream, 403, "text/plain", &[], b"Forbidden");
     }
-    if req.method != "GET" {
+    if req.method == "POST" {
+        // Other websites can send requests to localhost too. Browsers say
+        // where a POST comes from, so only this viewer's own page gets here.
+        if !same_origin(req.header("origin"), req.header("host")) {
+            return respond(stream, 403, "text/plain", &[], b"Forbidden");
+        }
+        return match req.path.as_str() {
+            "/api/open" => open_session(stream, req, shared),
+            _ => respond(stream, 404, "text/plain", &[], b"Not found"),
+        };
+    }
+    if req.method != "GET" || req.path == "/api/open" {
         return respond(stream, 405, "text/plain", &[], b"Method not allowed");
     }
     let json = |stream: &mut TcpStream, result: Result<String, ApiError>| match result {
@@ -182,6 +215,7 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
                     req.param("until"),
                     crate::clock::now(),
                     shared.stale_after,
+                    Environment::Local,
                 )
             };
             json(stream, result)
@@ -259,6 +293,73 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
     }
 }
 
+/// `POST /api/open?node=<id>`: reopens a session in its agent, in a new
+/// terminal window. Only the node id comes from the page; the command is
+/// worked out from the log. Replies `{"ok": true, "command": …}`, or
+/// `{"error": …, "command": …}` with the command to run yourself.
+fn open_session(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Result<()> {
+    let reply = |stream: &mut TcpStream, status: u16, body: serde_json::Value| {
+        respond(
+            stream,
+            status,
+            "application/json",
+            &[],
+            body.to_string().as_bytes(),
+        )
+    };
+    let id = req.param("node").unwrap_or_default();
+    let (found, transcript) = {
+        let tail = shared.tail.lock().expect("tail lock");
+        let found = api::graph_at(&tail.events, None, crate::clock::now(), shared.stale_after)
+            .ok()
+            .and_then(|(graph, _, _)| graph.nodes.get(id).and_then(resume::resume));
+        (found, transcript_of(&tail.events, id))
+    };
+    let Some(r) = found else {
+        let error = "That can't be opened: only sessions whose agent can resume them can.";
+        return reply(stream, 404, serde_json::json!({ "error": error }));
+    };
+    let command = open::command_line(&r);
+    let problem = if !Path::new(&r.cwd).is_dir() {
+        Some(format!("Its folder, {}, isn't on this computer.", r.cwd))
+    } else {
+        transcript
+            .filter(|t| !Path::new(t).is_file())
+            .map(|t| format!("{} doesn't have it any more: {t} is gone.", r.app))
+    };
+    if let Some(error) = problem {
+        return reply(
+            stream,
+            404,
+            serde_json::json!({ "error": error, "command": command }),
+        );
+    }
+    match (shared.launch)(&r) {
+        Ok(()) => reply(
+            stream,
+            200,
+            serde_json::json!({ "ok": true, "command": command }),
+        ),
+        Err(e) => reply(
+            stream,
+            500,
+            serde_json::json!({ "error": format!("Couldn't open a terminal: {e}."), "command": command }),
+        ),
+    }
+}
+
+/// Where the agent keeps a session's conversation, from its latest start.
+fn transcript_of(events: &[Timed], id: &str) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .filter(|t| t.event.node == id && t.event.kind == "session.started")
+        .find_map(|t| match t.event.payload() {
+            Payload::SessionStarted(d) => d.transcript_path,
+            _ => None,
+        })
+}
+
 /// Sends `changed` whenever new events arrive, until the page goes away.
 fn stream_changes(stream: &mut TcpStream, shared: &Shared) -> std::io::Result<()> {
     use std::io::Write;
@@ -281,6 +382,15 @@ fn host_allowed(host: Option<&str>, port: u16) -> bool {
     ["localhost", "127.0.0.1", "[::1]"]
         .iter()
         .any(|name| host.eq_ignore_ascii_case(&format!("{name}:{port}")))
+}
+
+/// Whether a request's `Origin` is this viewer's own page. `host` has already
+/// been checked; a missing `Origin` (or "null") doesn't count.
+fn same_origin(origin: Option<&str>, host: Option<&str>) -> bool {
+    match (origin, host) {
+        (Some(origin), Some(host)) => origin.eq_ignore_ascii_case(&format!("http://{host}")),
+        _ => false,
+    }
 }
 
 fn open_browser(url: &str) {
@@ -337,5 +447,15 @@ mod tests {
         assert!(!host_allowed(Some("localhost:8080"), 7777));
         assert!(!host_allowed(Some("evil.example:7777"), 7777));
         assert!(!host_allowed(None, 7777));
+    }
+
+    #[test]
+    fn only_the_viewer_itself_may_post() {
+        let host = Some("localhost:7777");
+        assert!(same_origin(Some("http://localhost:7777"), host));
+        assert!(!same_origin(Some("http://127.0.0.1:7777"), host));
+        assert!(!same_origin(Some("https://evil.example"), host));
+        assert!(!same_origin(Some("null"), host));
+        assert!(!same_origin(None, host));
     }
 }

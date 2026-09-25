@@ -10,6 +10,7 @@ pub mod event;
 pub mod paths;
 pub mod reducer;
 pub mod render;
+pub mod resume;
 pub mod store;
 pub mod timeline;
 

@@ -193,7 +193,8 @@
             ["Tree", "The selected session's agents, what each is doing, its task progress, and what it's waiting on."],
             ["Details", "Click any session or agent: its tasks, what it's waiting on, the agents it started, its messages, and when things happened."],
             ["Timeline", "Every event in the session is a stop on a slider. Drag it, click it, or use ← and → to see the graph exactly as it was at that moment; the node that step changed is ringed. \"Live\" (or L, or End) jumps back to now."],
-            ["Save image", "A picture of the session as it is at the step you're on."]
+            ["Save image", "A picture of the session as it is at the step you're on."],
+            ["Resume", "A Claude Code session's details have a button that reopens it in a new terminal window, in its folder (`claude --resume`). One that hasn't ended is probably still open somewhere, so that opens a copy of its conversation instead. If it can't open a window, it tells you the command to run. The shared site doesn't have this."]
           ]
         },
         { "text": "The page updates as events arrive, without reloading." }

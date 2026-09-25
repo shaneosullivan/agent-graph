@@ -1,5 +1,5 @@
-//! Just enough HTTP/1.1 for a local viewer: GET requests, fixed-length
-//! responses, and one long-lived event stream.
+//! Just enough HTTP/1.1 for a local viewer: requests without bodies,
+//! fixed-length responses, and one long-lived event stream.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -9,7 +9,7 @@ pub struct Request {
     pub method: String,
     pub path: String,
     pub query: Vec<(String, String)>,
-    pub host: Option<String>,
+    headers: Vec<(String, String)>,
 }
 
 impl Request {
@@ -17,6 +17,14 @@ impl Request {
         self.query
             .iter()
             .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The first header called `name`, ignoring case.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
     }
 }
@@ -42,11 +50,11 @@ pub fn read_request(stream: &mut TcpStream) -> io::Result<Request> {
     let mut first = lines.next().unwrap_or_default().split(' ');
     let method = first.next().unwrap_or_default().to_string();
     let target = first.next().unwrap_or("/");
-    let host = lines
+    let headers = lines
         .take_while(|l| !l.is_empty())
         .filter_map(|l| l.split_once(':'))
-        .find(|(k, _)| k.trim().eq_ignore_ascii_case("host"))
-        .map(|(_, v)| v.trim().to_string());
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .collect();
 
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let query = query
@@ -61,7 +69,7 @@ pub fn read_request(stream: &mut TcpStream) -> io::Result<Request> {
         method,
         path: percent_decode(path),
         query,
-        host,
+        headers,
     })
 }
 
@@ -99,6 +107,7 @@ pub fn start_event_stream(stream: &mut TcpStream) -> io::Result<()> {
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",

@@ -2,13 +2,14 @@
 //! both the local viewer's API and the shared site (via WebAssembly).
 //! Everything here is pure: events and a clock in, JSON out.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, SystemTime};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::event::{Envelope, Payload, SpawnKind, State, TaskStatus};
 use crate::reducer::{self, Graph, Node, NodeKind};
+use crate::resume;
 
 /// An event with its time parsed once, kept in the order the reducer applies them.
 #[derive(Debug, Clone)]
@@ -37,6 +38,26 @@ pub enum ApiError {
     Failed(String),
 }
 
+/// Where a graph is being shown, which decides what the page can offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Environment {
+    /// `agent-graph view`, on the computer the sessions ran on: sessions can
+    /// be reopened in their agent.
+    Local,
+    /// The shared site, away from the sessions: nothing can be opened.
+    Site,
+}
+
+/// A session the page can reopen (see `resume`).
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Open {
+    /// The agent it opens in: "Claude Code".
+    pub app: &'static str,
+    /// It's still running, so this opens a copy of its conversation.
+    pub copy: bool,
+}
+
 #[derive(Serialize)]
 struct GraphResponse<'a> {
     /// The event the graph is as-of, or `None` for live.
@@ -45,6 +66,10 @@ struct GraphResponse<'a> {
     events: usize,
     #[serde(flatten)]
     graph: Graph,
+    /// Sessions that can be reopened, by node id. Only ever filled in for
+    /// `Environment::Local`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    open: BTreeMap<String, Open>,
 }
 
 /// The graph after every event up to and including `until` (or all of them,
@@ -65,18 +90,37 @@ pub fn graph_at(
     Ok((reduce(slice, now, stale_after), slice.len(), now))
 }
 
-/// `graph_at` as JSON.
+/// `graph_at` as JSON, for a page in `env`.
 pub fn graph(
     events: &[Timed],
     until: Option<&str>,
     now: SystemTime,
     stale_after: Duration,
+    env: Environment,
 ) -> Result<String, ApiError> {
     let (graph, count, _) = graph_at(events, until, now, stale_after)?;
+    let open = match env {
+        Environment::Local => graph
+            .nodes
+            .values()
+            .filter_map(|n| {
+                let r = resume::resume(n)?;
+                Some((
+                    n.id.clone(),
+                    Open {
+                        app: r.app,
+                        copy: r.copy,
+                    },
+                ))
+            })
+            .collect(),
+        Environment::Site => BTreeMap::new(),
+    };
     Ok(to_json(&GraphResponse {
         at: until,
         events: count,
         graph,
+        open,
     }))
 }
 
@@ -355,6 +399,7 @@ mod tests {
 
     const SESSION: &str = "claude-code:5f2c1e8a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
     const STALE: Duration = Duration::from_secs(1800);
+    const LOCAL: Environment = Environment::Local;
 
     #[test]
     fn timeline_labels_every_event_in_the_tree() {
@@ -420,9 +465,10 @@ mod tests {
         let events = fixture_events();
         // Stop 6 is the Explore agent starting: the session is blocked on it.
         let at = &events[6].event.id;
-        let json: Value =
-            serde_json::from_str(&graph(&events, Some(at), SystemTime::now(), STALE).unwrap())
-                .unwrap();
+        let json: Value = serde_json::from_str(
+            &graph(&events, Some(at), SystemTime::now(), STALE, LOCAL).unwrap(),
+        )
+        .unwrap();
         assert_eq!(json["at"], at.as_str());
         assert_eq!(json["events"], 7);
         let session = &json["nodes"][SESSION];
@@ -433,16 +479,57 @@ mod tests {
         );
 
         let live: Value =
-            serde_json::from_str(&graph(&events, None, SystemTime::now(), STALE).unwrap()).unwrap();
+            serde_json::from_str(&graph(&events, None, SystemTime::now(), STALE, LOCAL).unwrap())
+                .unwrap();
         assert_eq!(live["at"], Value::Null);
         assert_eq!(live["nodes"][SESSION]["state"], "completed");
+    }
+
+    #[test]
+    fn only_a_local_page_can_open_sessions() {
+        let events = fixture_events();
+        let at = |env| -> Value {
+            serde_json::from_str(&graph(&events, None, SystemTime::now(), STALE, env).unwrap())
+                .unwrap()
+        };
+        let local = at(Environment::Local);
+        let open = local["open"].as_object().unwrap();
+        assert_eq!(
+            open.keys().collect::<Vec<_>>(),
+            [SESSION],
+            "the session, not its agents"
+        );
+        assert_eq!(
+            open[SESSION],
+            serde_json::json!({ "app": "Claude Code", "copy": false }),
+            "it ended, so it's resumed rather than copied"
+        );
+        assert!(at(Environment::Site).get("open").is_none());
+
+        // Still running: open a copy, not a second process on it.
+        let running = &events[..events.len() - 1];
+        let json: Value =
+            serde_json::from_str(&graph(running, None, SystemTime::now(), STALE, LOCAL).unwrap())
+                .unwrap();
+        assert_eq!(json["open"][SESSION]["copy"], true);
+    }
+
+    #[test]
+    fn a_session_id_that_is_not_plain_is_never_offered() {
+        let line = r#"{"v":1,"id":"01K0000000000000000000000A","ts":"2026-09-25T10:00:00.000Z","type":"session.started","node":"claude-code:--dangerously-skip-permissions","source":{"provider":"claude-code"},"data":{"cwd":"/w/app"}}"#;
+        let events = vec![Timed::new(serde_json::from_str(line).unwrap())];
+        let json: Value =
+            serde_json::from_str(&graph(&events, None, SystemTime::now(), STALE, LOCAL).unwrap())
+                .unwrap();
+        assert_eq!(json["nodes"].as_object().unwrap().len(), 1);
+        assert!(json.get("open").is_none());
     }
 
     #[test]
     fn unknown_ids_are_not_found() {
         let events = fixture_events();
         assert!(matches!(
-            graph(&events, Some("nope"), SystemTime::now(), STALE),
+            graph(&events, Some("nope"), SystemTime::now(), STALE, LOCAL),
             Err(ApiError::NotFound(_))
         ));
         assert!(matches!(

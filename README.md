@@ -46,7 +46,7 @@ Their own sessions aren't recorded yet; only Claude Code has hooks so far.
 | Command | What it does |
 |---|---|
 | `agent-graph tail` | Live, full-screen tree in the terminal, redrawn as events arrive. `q` quits, `a` shows older sessions, `--ascii` for plain characters. |
-| `agent-graph view --open` | Live web view on `http://localhost:7777`. Has a timeline slider for stepping back through a session, and saves images. |
+| `agent-graph view --open` | Live web view on `http://localhost:7777`. Has a timeline slider for stepping back through a session, saves images, and reopens a Claude Code session in a new terminal window. |
 | `agent-graph snapshot` | Saves a phone-sized PNG of the current session and prints its path, ready for an agent to send you. `--out x.svg` for SVG, `--json` for the raw graph. |
 | `agent-graph tree` | One-off text tree (`--all` includes older sessions). |
 | `agent-graph watch-remote` | Shares the graph live at [agentgraph.chofter.com](https://agentgraph.chofter.com) and prints the link straight away. See below. |

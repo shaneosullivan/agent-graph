@@ -10,13 +10,21 @@
 //! const ptr = alloc(n); /* write n bytes at ptr */ append(ptr, n); dealloc(ptr, n);
 //! const out = query(ptr, n); /* read result_len() bytes at out */ dealloc(out, result_len());
 //! ```
+//!
+//! Requests are JSON:
+//!
+//! - `{"op": "graph", "env": "site", "until": …, "now_ms": …, "stale_minutes": …}`:
+//!   the graph now, or as of event `until`. `env` says where it's being shown
+//!   (`"site"` or `"local"`, see `timeline::Environment`) and is required.
+//! - `{"op": "timeline", "root": …, "now_ms": …, "stale_minutes": …}`
+//! - `{"op": "info"}`
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 
 use agent_graph::event::Envelope;
-use agent_graph::timeline::{self, ApiError, Timed};
+use agent_graph::timeline::{self, ApiError, Environment, Timed};
 use serde::Deserialize;
 
 #[derive(Default)]
@@ -113,6 +121,8 @@ pub fn append_text(text: &str) -> usize {
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Request {
     Graph {
+        /// Where the graph is being shown.
+        env: Environment,
         until: Option<String>,
         #[serde(default)]
         now_ms: Option<f64>,
@@ -143,6 +153,7 @@ pub fn answer(request: &str) -> String {
         let log = log.borrow();
         let result = match request {
             Request::Graph {
+                env,
                 until,
                 now_ms,
                 stale_minutes,
@@ -151,6 +162,7 @@ pub fn answer(request: &str) -> String {
                 until.as_deref(),
                 now(&log, now_ms),
                 minutes(stale_minutes),
+                env,
             ),
             Request::Timeline {
                 root,
@@ -206,9 +218,9 @@ mod tests {
     use super::*;
 
     const LINES: &str = concat!(
-        r#"{"v":1,"id":"01K0000000000000000000000A","ts":"2026-09-25T10:00:00.000Z","type":"session.started","node":"x:s","data":{"cwd":"/w/app"}}"#,
+        r#"{"v":1,"id":"01K0000000000000000000000A","ts":"2026-09-25T10:00:00.000Z","type":"session.started","node":"claude-code:s","source":{"provider":"claude-code"},"data":{"cwd":"/w/app"}}"#,
         "\n",
-        r#"{"v":1,"id":"01K0000000000000000000000B","ts":"2026-09-25T10:00:01.000Z","type":"status","node":"x:s","data":{"state":"working"}}"#,
+        r#"{"v":1,"id":"01K0000000000000000000000B","ts":"2026-09-25T10:00:01.000Z","type":"status","node":"claude-code:s","data":{"state":"working"}}"#,
         "\nnot json\n",
     );
 
@@ -218,18 +230,19 @@ mod tests {
         assert_eq!(append_text(LINES), 2);
         assert_eq!(append_text(LINES), 0, "same events again");
 
-        let graph: serde_json::Value = serde_json::from_str(&answer(r#"{"op":"graph"}"#)).unwrap();
-        assert_eq!(graph["nodes"]["x:s"]["state"], "working");
+        let graph: serde_json::Value =
+            serde_json::from_str(&answer(r#"{"op":"graph","env":"site"}"#)).unwrap();
+        assert_eq!(graph["nodes"]["claude-code:s"]["state"], "working");
         assert_eq!(graph["events"], 2);
 
         let past: serde_json::Value = serde_json::from_str(&answer(
-            r#"{"op":"graph","until":"01K0000000000000000000000A"}"#,
+            r#"{"op":"graph","env":"site","until":"01K0000000000000000000000A"}"#,
         ))
         .unwrap();
-        assert_eq!(past["nodes"]["x:s"]["state"], "idle");
+        assert_eq!(past["nodes"]["claude-code:s"]["state"], "idle");
 
         let timeline: serde_json::Value =
-            serde_json::from_str(&answer(r#"{"op":"timeline","root":"x:s"}"#)).unwrap();
+            serde_json::from_str(&answer(r#"{"op":"timeline","root":"claude-code:s"}"#)).unwrap();
         assert_eq!(timeline["stops"].as_array().unwrap().len(), 2);
 
         let info: serde_json::Value = serde_json::from_str(&answer(r#"{"op":"info"}"#)).unwrap();
@@ -238,6 +251,27 @@ mod tests {
         let missing: serde_json::Value =
             serde_json::from_str(&answer(r#"{"op":"timeline","root":"x:nope"}"#)).unwrap();
         assert_eq!(missing["status"], 404);
+    }
+
+    #[test]
+    fn the_page_says_where_it_is() {
+        reset();
+        append_text(LINES);
+        let graph = |request: &str| -> serde_json::Value {
+            serde_json::from_str(&answer(request)).unwrap()
+        };
+        assert!(
+            graph(r#"{"op":"graph","env":"site"}"#)
+                .get("open")
+                .is_none(),
+            "nothing to open on the site"
+        );
+        assert_eq!(
+            graph(r#"{"op":"graph","env":"local"}"#)["open"]["claude-code:s"]["app"],
+            "Claude Code"
+        );
+        assert_eq!(graph(r#"{"op":"graph"}"#)["status"], 400, "env is required");
+        assert_eq!(graph(r#"{"op":"graph","env":"moon"}"#)["status"], 400);
     }
 
     #[test]

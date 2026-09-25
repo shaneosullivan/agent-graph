@@ -30,6 +30,7 @@ const S = {
   lastFlashed: null,
   error: null,
   skew: 0, // server clock minus ours; non-zero when AGENT_GRAPH_NOW pins it
+  opened: null, // { id, busy?, error?, command? }: the last Open button press
 };
 
 // ---------- helpers ----------
@@ -97,6 +98,17 @@ const source = window.agentGraphSource || {
   },
   /** What to call the newest point in the timeline. */
   liveLabel: 'Live',
+  /**
+   * Reopens session `id` in its agent, in a new terminal window. Only a page
+   * on the computer the sessions ran on can; a source without `open` offers
+   * nothing to open. Rejects with an error that may carry a `command` to run.
+   */
+  async open(id) {
+    const res = await fetch(`/api/open?node=${encodeURIComponent(id)}`, { method: 'POST', cache: 'no-store' });
+    const body = await res.json().catch(() => ({ error: `${res.status} ${res.statusText}` }));
+    if (!res.ok) throw Object.assign(new Error(body.error), { command: body.command });
+    return body;
+  },
 };
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -553,6 +565,9 @@ function renderDetail() {
     ),
   );
 
+  const openBox = renderOpen(n.id);
+  if (openBox) pane.append(openBox);
+
   if (n.state === 'input_required') {
     pane.append(h('div', { class: 'attention-box' }, `Needs you: ${n.attention || 'waiting for input'}`));
   }
@@ -663,6 +678,64 @@ function renderDetail() {
     ['Last event', clock(n.last_event_at)],
   ].filter(([, v]) => v);
   pane.append(section('Details', h('dl', { class: 'facts' }, facts.map(([k, v]) => [h('dt', null, k), h('dd', null, v)]))));
+}
+
+/**
+ * A button that reopens the session in its agent, if this page can (see
+ * `source.open`). Whether it can comes from the live graph, even when looking
+ * back: it's about the session now.
+ */
+function renderOpen(id) {
+  const offer = source.open && S.live && S.live.open && S.live.open[id];
+  if (!offer) return null;
+  // Kept in S, so the outcome survives the panel redrawing as events arrive.
+  const done = S.opened && S.opened.id === id ? S.opened : null;
+  const button = h(
+    'button',
+    {
+      class: 'btn',
+      disabled: Boolean(done && done.busy),
+      title: offer.copy
+        ? 'It hasn’t ended, so it’s probably open somewhere already. This opens a copy of its conversation in a new terminal window.'
+        : 'Resume it in a new terminal window.',
+      onclick: () => openSession(id),
+    },
+    offer.copy ? `Open a copy in ${offer.app}` : `Resume in ${offer.app}`,
+  );
+  let note = null;
+  if (done && done.error) {
+    note = h(
+      'div',
+      { class: 'open-note' },
+      h('span', { class: 'open-error' }, done.error),
+      done.command
+        ? [
+            h('span', { class: 'open-command' }, 'Run it yourself:'),
+            h(
+              'div',
+              { class: 'idline' },
+              h('code', { class: 'mono', title: done.command }, done.command),
+              h('button', { class: 'copy', onclick: (e) => copy(done.command, e.currentTarget) }, 'Copy'),
+            ),
+          ]
+        : null,
+    );
+  } else if (done && !done.busy) {
+    note = h('div', { class: 'open-note' }, h('span', { class: 'open-ok' }, 'Opened in a new terminal window.'));
+  }
+  return h('div', { class: 'open-box' }, button, note);
+}
+
+async function openSession(id) {
+  S.opened = { id, busy: true };
+  renderDetail();
+  try {
+    await source.open(id);
+    S.opened = { id };
+  } catch (err) {
+    S.opened = { id, error: err.message || 'Couldn’t open it.', command: err.command };
+  }
+  renderDetail();
 }
 
 function section(title, ...body) {

@@ -248,6 +248,12 @@ main { padding: 22px 28px 40px; }
   flex: none; border: 1px solid var(--line); background: var(--panel-2); border-radius: 6px;
   font-size: 11px; padding: 1px 7px; cursor: pointer; color: var(--muted);
 }
+.open-box { margin-top: 14px; }
+.open-box .btn:disabled { opacity: 0.6; cursor: progress; }
+.open-note { font-size: 12.5px; margin-top: 8px; }
+.open-ok { color: var(--muted); }
+.open-error { color: var(--failed); display: block; }
+.open-command { color: var(--muted); display: block; margin-top: 6px; }
 .detail section { margin-top: 20px; }
 .detail h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 8px; }
 .detail .lead { margin-top: 12px; }

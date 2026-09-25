@@ -385,6 +385,12 @@ Serves `http://localhost:7777` (`--open` opens it). The layout:
   - Drag, click, or use ←/→ to step. The graph re-renders as it was at that moment, and the node that step changed is ringed.
   - The last stop is "live". New events extend the timeline without moving you if you're looking at the past.
 - **Save image** downloads a PNG of the session as shown, at the step being viewed.
+- **Resume in Claude Code**, in a session's details, reopens it in a new terminal window.
+  - It runs `claude --resume <id>` in the session's folder, which is where Claude Code files it. When the agent exits, the window is left with a shell in that folder.
+  - A session that hasn't ended is probably still open in another terminal, and two processes on one conversation would both write to it. So for those the button says **Open a copy** and adds `--fork-session`, which branches the conversation instead.
+  - The window: macOS opens a one-off `.command` script (in Terminal, or whatever the user has chosen for those), which deletes itself. Windows uses `start` to run `cmd /K`. Linux uses `$TERMINAL`, or the first common terminal it finds. If none works, the page shows the error and the command to run by hand.
+  - Codex and others get the button when their adapters land (`codex resume <id>`).
+  - Only sessions on this computer can be reopened, so the shared site never offers it (below).
 
 How it works:
 - **One graph implementation.** A thread tails the event files (reading only new, complete lines) and tells pages about changes over Server-Sent Events. Pages then ask for the graph again, live or `?until=<event id>`, so the Rust reducer stays the only implementation of the graph logic. There's no JavaScript copy to drift out of step.
@@ -393,6 +399,11 @@ How it works:
   - It answers only requests whose `Host` is `localhost`, `127.0.0.1` or `[::1]` on its port, which stops other websites reaching it through DNS rebinding.
   - It sends a strict Content Security Policy (`default-src 'none'`, same-origin scripts, styles and fetches only).
   - It loads nothing from the internet.
+  - Resuming runs a program, so it gets more care:
+    - It's a `POST /api/open?node=<id>`, answered only when the `Origin` header is the viewer's own. Other websites can send requests to localhost too, but browsers always say where a POST came from.
+    - Only the node id comes from the page. The command is worked out from the log (`resume.rs`), and only for session ids made of letters, digits, `-` and `_` that start with a letter or digit, so a crafted log can't slip in an option like `--dangerously-skip-permissions`.
+    - The folder never reaches a shell's parser unquoted: it's the working directory on Windows, a separate argument on Linux, and single-quoted in the macOS script.
+    - Before launching, the server checks the folder exists and, when the log names one, that the session's transcript does too. Otherwise it says the session isn't on this computer.
 
 ### `agent-graph snapshot`: an image to send
 
@@ -428,6 +439,7 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 **One implementation, again.** The site's viewer is the same page as `agent-graph view` (`app.js`, `app.css`, and the markup from `index.html`):
 - `app.js` reads through a small data-source interface. By default that's the local server's API.
 - On the site, `site-source.js` supplies it instead. It fetches the log's text, then computes graphs and timelines in the browser with the Rust reducer compiled to WebAssembly (the `wasm/` crate: 300 KB, 100 KB gzipped).
+- Graph requests say where they'll be shown: `timeline::graph` takes an `Environment`, and the WebAssembly `graph` request requires `"env"`. Only `"local"` lists the sessions that can be reopened; the site sends `"site"`, and its data source has no `open` either, so the Resume button never appears there.
 - The crate builds without its CLI dependencies (`--no-default-features`), and the WebAssembly boundary is plain bytes in memory, with no binding generator.
 - `site/scripts/sync-viewer.mjs` copies the viewer and the `.wasm` into the site, and CI checks the copies are current.
 
@@ -478,8 +490,9 @@ Viewers can step through the log exactly as they can locally. Each log can have 
   - `adapter/`: one module per provider.
   - `emit.rs`, `store.rs`, `reducer.rs`, `clock.rs`.
   - `timeline.rs`: the graph at any moment, and timeline stops. Shared by the local viewer and the site.
+  - `resume.rs`: the command that reopens a session in its agent.
   - `render.rs` (text), `live.rs` (`tail`), `image.rs` (`snapshot`), `remote.rs` (`watch-remote`).
-  - `view/`: the local web server, plus the page's HTML/CSS/JS embedded in the binary.
+  - `view/`: the local web server (`open.rs` opens terminal windows), plus the page's HTML/CSS/JS embedded in the binary.
   - `install.rs`, `slash.rs` (the `/agent-graph` command), `cli.rs`.
   - `help.rs`: the help text, generated at compile time (below).
   - Everything except the core (`event`, `reducer`, `timeline` and friends) sits behind the default `cli` feature, so the core also builds for WebAssembly (`wasm/`).
