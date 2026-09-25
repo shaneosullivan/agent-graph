@@ -35,7 +35,7 @@ jobs:
       - run: cargo build -p agent-graph-wasm --target wasm32-unknown-unknown --profile wasm
       # The site's copy of the viewer must match the crate's.
       - run: node site/scripts/sync-viewer.mjs
-      - run: git diff --exit-code -- site/public/viewer/app.js site/public/viewer/app.css site/lib/viewer-shell.ts site/lib/cli-help.json
+      - run: git diff --exit-code -- site/public/viewer/app.js site/public/viewer/app.css site/lib/viewer-shell.ts
 
   site:
     runs-on: ubuntu-latest

@@ -10,13 +10,13 @@ It's a Next.js app with Firestore for storage. The viewer's graph logic isn't re
 |---|---|
 | `app/page.tsx`, `app/uploader.tsx` | Home page: paste, upload, or instructions for `watch-remote` |
 | `app/l/[id]/page.tsx` | A shared log: the viewer shell, or a password prompt |
-| `app/docs/page.tsx`, `lib/help-render.tsx` | The docs: the CLI's help text, rendered from `lib/cli-help.json` |
+| `app/docs/page.tsx`, `lib/help-render.tsx` | The docs: the CLI's help text, rendered from `lib/cli-help.json`, which `dev`, `build` and `typecheck` copy from `../docs/cli-help.json` (not committed) |
 | `app/api/logs/…` | The API (below) |
 | `lib/store.ts` | Firestore reads and writes |
 | `lib/crypto.ts` | Ids, write keys, viewer cookies, password hashes |
 | `lib/encryption.ts` | Encrypts log chunks before they're stored |
 | `public/viewer/site-source.js` | Feeds the viewer from the API instead of a local server (hand-written) |
-| `public/viewer/app.js`, `app.css`, `agent_graph.wasm`, `lib/viewer-shell.ts`, `lib/cli-help.json` | **Generated** from the Rust crate by `scripts/sync-viewer.mjs`; don't edit |
+| `public/viewer/app.js`, `app.css`, `agent_graph.wasm`, `lib/viewer-shell.ts` | **Generated** from the Rust crate by `scripts/sync-viewer.mjs`; don't edit |
 
 The generated files are committed, so building the site doesn't need Rust. After changing the viewer (`../src/view/assets/`) or the reducer, regenerate them. This needs Rust and `rustup target add wasm32-unknown-unknown`:
 

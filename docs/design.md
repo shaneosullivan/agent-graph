@@ -487,7 +487,7 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 - **Help text: one source.**
   - All of it (the overview, every command, option and example) is in `docs/cli-help.json`, as blocks: text, headings, lists, steps, two-column tables and code.
   - `build.rs` lays it out for an 80-column terminal and writes Rust constants that `cli.rs` hands to clap. There are no doc comments on the CLI types, so there's no second copy to go stale.
-  - The site's `/docs` page renders the same file as HTML (a copy synced into `site/lib/`, which CI checks is identical), and the home page takes its `watch-remote` options from it.
+  - The site's `/docs` page renders the same file as HTML (the site's `dev`, `build` and `typecheck` scripts copy it into `site/lib/`; the copy isn't committed), and the home page takes its `watch-remote` options from it.
   - A missing command in the file fails the build (its constants don't exist). A test fails if an option has no text, or if the file describes a command or option the CLI doesn't have.
 - **Schema:** JSON Schema for the envelope and each event type, in `schema/`. The schema is the real "open standard" part of the project: any provider can emit events without our code.
 - **Tests:**

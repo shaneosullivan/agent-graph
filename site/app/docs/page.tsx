@@ -7,8 +7,9 @@ import { Blocks, Examples, type Help, Inline, Options } from "@/lib/help-render"
 
 import { Brand } from "../brand";
 
-// The same text `agent-graph --help` prints: lib/cli-help.json is a copy of
-// docs/cli-help.json, which build.rs compiles into the binary.
+// The same text `agent-graph --help` prints: lib/cli-help.json is copied from
+// docs/cli-help.json (which build.rs compiles into the binary) by `npm run dev`
+// and `npm run build`.
 const help = cliHelp as unknown as Help;
 
 export const metadata: Metadata = {
