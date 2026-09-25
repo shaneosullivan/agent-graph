@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-graph:event:v1",
+  "title": "Agent Graph event",
+  "description": "One line in an Agent Graph events file (JSON Lines). Consumers must ignore event types and fields they don't recognise.",
+  "type": "object",
+  "required": ["v", "id", "ts", "type", "node", "data"],
+  "properties": {
+    "v": { "const": 1, "description": "Schema version." },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "ULID. Sorts by time; unique across writers."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "UTC time the event was recorded (RFC 3339)."
+    },
+    "type": {
+      "enum": [
+        "session.started", "session.ended",
+        "agent.spawned", "agent.finished",
+        "status",
+        "tasks.updated", "task.upserted", "task.deleted",
+        "spawn.requested", "spawn.returned",
+        "wait.started", "wait.ended",
+        "message.sent",
+        "activity",
+        "unknown"
+      ]
+    },
+    "node": { "$ref": "#/$defs/nodeId", "description": "The session or agent the event is about." },
+    "parent": { "$ref": "#/$defs/nodeId", "description": "Set on events that create a node, when the parent is known." },
+    "source": {
+      "type": "object",
+      "required": ["provider"],
+      "properties": {
+        "provider": { "type": "string" },
+        "provider_version": { "type": "string" },
+        "adapter": { "type": "string" }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "description": "W3C Trace Context.",
+      "properties": { "traceparent": { "type": "string" } }
+    },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "session.started" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/session.started" } } } },
+    { "if": { "properties": { "type": { "const": "session.ended" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/session.ended" } } } },
+    { "if": { "properties": { "type": { "const": "agent.spawned" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/agent.spawned" } } } },
+    { "if": { "properties": { "type": { "const": "agent.finished" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/agent.finished" } } } },
+    { "if": { "properties": { "type": { "const": "status" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/status" } } } },
+    { "if": { "properties": { "type": { "const": "tasks.updated" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/tasks.updated" } } } },
+    { "if": { "properties": { "type": { "const": "task.upserted" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/task.upserted" } } } },
+    { "if": { "properties": { "type": { "const": "task.deleted" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/task.deleted" } } } },
+    { "if": { "properties": { "type": { "const": "spawn.requested" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/spawn.requested" } } } },
+    { "if": { "properties": { "type": { "const": "spawn.returned" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/spawn.returned" } } } },
+    { "if": { "properties": { "type": { "const": "wait.started" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/wait.started" } } } },
+    { "if": { "properties": { "type": { "const": "wait.ended" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/wait.ended" } } } },
+    { "if": { "properties": { "type": { "const": "message.sent" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/message.sent" } } } },
+    { "if": { "properties": { "type": { "const": "activity" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/activity" } } } }
+  ],
+  "$defs": {
+    "nodeId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*:[^/]+(/[^/]+)*$",
+      "description": "<provider>:<session_id> for a session; <provider>:<session_id>/<agent_id> for a subagent."
+    },
+    "state": { "enum": ["working", "input_required", "idle", "completed", "failed", "canceled"] },
+    "taskStatus": { "enum": ["pending", "in_progress", "completed"] },
+    "session.started": {
+      "type": "object",
+      "properties": {
+        "cwd": { "type": "string" },
+        "source": { "type": "string", "description": "How the session started: startup, resume, clear, compact, …" },
+        "title": { "type": "string" },
+        "transcript_path": { "type": "string" }
+      }
+    },
+    "session.ended": {
+      "type": "object",
+      "properties": { "reason": { "type": "string" } }
+    },
+    "agent.spawned": {
+      "type": "object",
+      "properties": {
+        "agent_type": { "type": "string" },
+        "purpose": { "type": "string" },
+        "background": { "type": "boolean" }
+      }
+    },
+    "agent.finished": {
+      "type": "object",
+      "properties": {
+        "status": { "enum": ["completed", "failed", "canceled"] },
+        "summary": { "type": "string" }
+      }
+    },
+    "status": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "$ref": "#/$defs/state" },
+        "summary": { "type": "string", "description": "A status line, or what the human is asked while input_required." }
+      }
+    },
+    "tasks.updated": {
+      "type": "object",
+      "description": "Replaces the node's whole task list.",
+      "required": ["items"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "text", "status"],
+            "properties": {
+              "id": { "type": "string" },
+              "text": { "type": "string" },
+              "active_text": { "type": "string" },
+              "status": { "$ref": "#/$defs/taskStatus" }
+            }
+          }
+        }
+      }
+    },
+    "task.upserted": {
+      "type": "object",
+      "description": "Creates a task, or updates the fields given.",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "text": { "type": "string" },
+        "active_text": { "type": "string" },
+        "status": { "$ref": "#/$defs/taskStatus" }
+      }
+    },
+    "task.deleted": {
+      "type": "object",
+      "required": ["id"],
+      "properties": { "id": { "type": "string" } }
+    },
+    "spawn.requested": {
+      "type": "object",
+      "description": "The node asked for a child to start. Unless background, the node is waiting until the matching spawn.returned.",
+      "required": ["call_id"],
+      "properties": {
+        "call_id": { "type": "string" },
+        "kind": { "enum": ["agent", "session"] },
+        "agent_type": { "type": "string" },
+        "purpose": { "type": "string" },
+        "background": { "type": "boolean" }
+      }
+    },
+    "spawn.returned": {
+      "type": "object",
+      "required": ["call_id"],
+      "properties": {
+        "call_id": { "type": "string" },
+        "child": { "$ref": "#/$defs/nodeId", "description": "The child started, when the provider reports it. Authoritative." },
+        "outcome": { "type": "string" }
+      }
+    },
+    "wait.started": {
+      "type": "object",
+      "required": ["wait_id", "on"],
+      "properties": {
+        "wait_id": { "type": "string" },
+        "on": { "$ref": "#/$defs/nodeId" },
+        "reason": { "type": "string" }
+      }
+    },
+    "wait.ended": {
+      "type": "object",
+      "required": ["wait_id"],
+      "properties": {
+        "wait_id": { "type": "string" },
+        "outcome": { "type": "string" }
+      }
+    },
+    "message.sent": {
+      "type": "object",
+      "required": ["message_id", "to"],
+      "properties": {
+        "message_id": { "type": "string" },
+        "to": { "type": "string", "description": "A node id, or the provider's own name for the recipient." },
+        "reply_to": { "type": "string" },
+        "summary": { "type": "string" },
+        "body": { "type": "string", "description": "Only present when body capture is on." }
+      }
+    },
+    "activity": {
+      "type": "object",
+      "required": ["tool"],
+      "properties": {
+        "tool": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+/target
+.DS_Store
+# Local tooling
+/.claude/
+/.last_modified_timestamp

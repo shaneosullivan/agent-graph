@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// Nothing reads or writes Firestore directly from a browser. All access goes
+// through the site's API routes, which use the Admin SDK (not bound by these
+// rules) and enforce passwords and write tokens themselves.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

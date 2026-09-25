@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The core must build without the CLI's dependencies.
+      - run: cargo build --lib --no-default-features
+      - run: cargo build -p agent-graph-wasm --target wasm32-unknown-unknown --profile wasm
+      # The site's copy of the viewer must match the crate's.
+      - run: node site/scripts/sync-viewer.mjs
+      - run: git diff --exit-code -- site/public/viewer/app.js site/public/viewer/app.css site/lib/viewer-shell.ts
+
+  site:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    env:
+      AGENT_GRAPH_SECRET: ci-only-secret
+      FIREBASE_PROJECT_ID: demo-agent-graph
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm install -g firebase-tools
+      # The API tests, against the built site and the Firestore emulator.
+      - run: >
+          firebase emulators:exec --only firestore --project demo-agent-graph
+          "npx next start -p 3000 & for i in $(seq 60); do curl -sf -o /dev/null http://localhost:3000 && break; sleep 1; done; BASE_URL=http://localhost:3000 npm run test:api"

@@ -1,0 +1,3 @@
+{"v":1,"id":"01M34FSDG00000000000000036","ts":"2026-09-22T12:00:00.000Z","type":"session.started","node":"claude-code:e0000010-7a9e-4c1d-9b2f-000000000010","source":{"provider":"claude-code","adapter":"examples"},"data":{"cwd":"/home/dev/old-experiment","source":"startup"}}
+{"v":1,"id":"01M34FV8300000000000000037","ts":"2026-09-22T12:01:00.000Z","type":"status","node":"claude-code:e0000010-7a9e-4c1d-9b2f-000000000010","source":{"provider":"claude-code","adapter":"examples"},"data":{"state":"working"}}
+{"v":1,"id":"01M34GY1C00000000000000038","ts":"2026-09-22T12:20:00.000Z","type":"status","node":"claude-code:e0000010-7a9e-4c1d-9b2f-000000000010","source":{"provider":"claude-code","adapter":"examples"},"data":{"state":"idle"}}

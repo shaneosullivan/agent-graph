@@ -1,0 +1,429 @@
+/* The site's own pages (home, unlock, not found), scoped under .site so they
+   never clash with the log viewer's styles (public/viewer/app.css), which can
+   be on the same page. The tokens match the viewer's. */
+
+.site {
+  color-scheme: light dark;
+  --bg: #f6f6f3;
+  --panel: #ffffff;
+  --panel-2: #fafaf8;
+  --text: #1c1c1e;
+  --muted: #6b6b72;
+  --faint: #9c9ca3;
+  --line: #e5e4df;
+  --line-strong: #d3d2cc;
+  --accent: #3b5bdb;
+  --accent-strong: #2f4ac0;
+  --accent-soft: #e8ecfd;
+  --agent: #7c4dff;
+  --good: #1f9d55;
+  --warn: #c26a00;
+  --warn-soft: #fff4e2;
+  --bad: #d93025;
+  --radius: 12px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font:
+    15px/1.55 system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .site {
+    --bg: #131315;
+    --panel: #1b1b1e;
+    --panel-2: #202024;
+    --text: #ececef;
+    --muted: #a0a0a8;
+    --faint: #75757d;
+    --line: #2b2b30;
+    --line-strong: #3a3a41;
+    --accent: #7b93ff;
+    --accent-strong: #9aacff;
+    --accent-soft: #232a45;
+    --agent: #a58bff;
+    --good: #45c47c;
+    --warn: #f0a33a;
+    --warn-soft: #33260f;
+    --bad: #ff6b5e;
+  }
+}
+
+.site,
+.site * {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+}
+.site {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+.site a {
+  color: var(--accent);
+}
+.site code,
+.site pre {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.site h1,
+.site h2,
+.site h3 {
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.site .page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0 20px 64px;
+}
+
+.site .top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 0;
+  margin-bottom: 20px;
+}
+.site .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 650;
+  color: var(--text);
+  text-decoration: none;
+}
+.site .brand svg {
+  width: 24px;
+  height: 24px;
+  color: var(--line-strong);
+}
+.site .brand .b1 {
+  fill: var(--accent);
+}
+.site .brand .b2 {
+  fill: var(--agent);
+}
+.site .brand .b3 {
+  fill: var(--good);
+}
+.site .top nav {
+  display: flex;
+  gap: 18px;
+  font-size: 14px;
+}
+.site .top nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.site .top nav a:hover {
+  color: var(--text);
+}
+
+.site .hero {
+  margin: 28px 0 28px;
+}
+.site .hero h1 {
+  font-size: clamp(28px, 5vw, 42px);
+  line-height: 1.12;
+  max-width: 17em;
+}
+.site .hero p {
+  color: var(--muted);
+  font-size: 17px;
+  max-width: 40em;
+  margin: 14px 0 0;
+}
+
+/* The paste / upload card */
+.site .card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.04),
+    0 8px 24px rgb(0 0 0 / 0.04);
+  overflow: hidden;
+}
+.site .tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.site .tab {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: none;
+  margin-bottom: -1px;
+}
+.site .tab[aria-selected="true"] {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--line);
+}
+.site .card-body {
+  padding: 18px;
+}
+
+.site .paste {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  display: block;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text);
+}
+.site .paste:focus,
+.site .field input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.site .drop {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  gap: 6px;
+  min-height: 260px;
+  padding: 24px;
+  border-radius: 10px;
+  cursor: pointer;
+  border: 2px dashed var(--line-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.site .drop.over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.site .drop strong {
+  color: var(--text);
+  font-size: 16px;
+}
+.site .drop input {
+  display: none;
+}
+.site .files {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.site .files li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}
+.site .files li:first-child {
+  border-top: none;
+}
+
+.site .summary {
+  margin: 10px 2px 0;
+  font-size: 13px;
+  color: var(--muted);
+  min-height: 20px;
+}
+.site .summary.bad {
+  color: var(--bad);
+}
+.site .summary .ok {
+  color: var(--good);
+  font-weight: 600;
+}
+
+.site .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 16px;
+}
+.site .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  flex: 1 1 260px;
+  max-width: 360px;
+}
+.site .field span.hint {
+  font-weight: 400;
+  color: var(--faint);
+}
+.site .field input {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+}
+
+.site .button {
+  font: inherit;
+  font-weight: 650;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 11px 20px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  .site .button {
+    color: #0e1224;
+  }
+}
+.site .button:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+.site .button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.site .error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 14px;
+  background: color-mix(in srgb, var(--bad) 10%, var(--panel));
+  color: var(--bad);
+  border: 1px solid color-mix(in srgb, var(--bad) 30%, transparent);
+}
+
+/* Explanations below the card */
+.site .section {
+  margin-top: 44px;
+}
+.site .section h2 {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+.site .section p {
+  color: var(--muted);
+  margin: 8px 0;
+  max-width: 44em;
+}
+.site .command {
+  display: block;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.site .options {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 18px;
+  margin: 14px 0 0;
+  font-size: 14px;
+}
+.site .options dt code {
+  color: var(--text);
+}
+.site .options dd {
+  margin: 0;
+  color: var(--muted);
+}
+.site .grid3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.site .tile {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.site .tile h3 {
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.site .tile p {
+  margin: 0;
+  font-size: 14px;
+}
+.site .tile .dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 8px;
+  vertical-align: 1px;
+}
+
+.site .foot {
+  margin-top: 56px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--faint);
+}
+
+/* Password prompt and not-found pages */
+.site .narrow {
+  max-width: 420px;
+  margin: 12vh auto 0;
+}
+.site .narrow .card-body {
+  padding: 26px;
+}
+.site .narrow h1 {
+  font-size: 22px;
+  margin-bottom: 6px;
+}
+.site .narrow p {
+  color: var(--muted);
+  margin: 0 0 18px;
+}
+.site .narrow .field {
+  max-width: none;
+}
+.site .narrow .button {
+  width: 100%;
+  margin-top: 14px;
+}

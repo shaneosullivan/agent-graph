@@ -1,0 +1,6 @@
+{"v":1,"id":"01M3C6T2Q0000000000000003D","ts":"2026-09-25T11:57:00.000Z","type":"session.started","node":"claude-code:e0000012-7a9e-4c1d-9b2f-000000000012","source":{"provider":"claude-code","adapter":"examples"},"data":{"cwd":"/home/dev/schema-v2","source":"startup"}}
+{"v":1,"id":"01M3C6T8JG000000000000003E","ts":"2026-09-25T11:57:06.000Z","type":"status","node":"claude-code:e0000012-7a9e-4c1d-9b2f-000000000012","source":{"provider":"claude-code","adapter":"examples"},"data":{"state":"working"}}
+{"v":1,"id":"01M3C6TEE0000000000000003F","ts":"2026-09-25T11:57:12.000Z","type":"unknown","node":"claude-code:e0000012-7a9e-4c1d-9b2f-000000000012","source":{"provider":"claude-code","adapter":"examples"},"data":{"hook_event_name":"PreCompact"}}
+{"v":1,"id":"01K600000000000000000000FT","ts":"2026-09-25T11:57:30.000Z","type":"future.thing","node":"claude-code:e0000012-7a9e-4c1d-9b2f-000000000012","data":{"anything":[1,2,3]}}
+{"v":1,"id":"01K600000000000000000000BS","ts":"2026-09-25T11:57:40.000Z","type":"status","node":"claude-code:e0000012-7a9e-4c1d-9b2f-000000000012","data":{"state":"exploded"}}
+{"v":1,"id":"01K600000000000000000000XF","ts":"2026-09-25T11:57:50.000Z","type":"status","node":"claude-code:e0000012-7a9e-4c1d-9b2f-000000000012","data":{"state":"working","summary":"Trying the v2 format","mood":"optimistic"},"future_envelope_field":true}

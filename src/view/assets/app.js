@@ -1,0 +1,804 @@
+'use strict';
+
+// Agent Graph viewer. Event text (task names, summaries, messages) comes from
+// models, so it is only ever inserted as text, never as HTML.
+
+const STATE_LABEL = {
+  working: 'Working',
+  input_required: 'Needs you',
+  idle: 'Idle',
+  completed: 'Completed',
+  failed: 'Failed',
+  canceled: 'Canceled',
+};
+const RECENT_MS = 24 * 60 * 60 * 1000;
+const THUMB = 18; // slider thumb width, px; matches app.css
+
+const S = {
+  live: null, // the graph now
+  shown: null, // the graph being displayed (live, or at a past stop)
+  root: null, // selected session id
+  selected: null, // selected node id (detail panel)
+  stops: [], // timeline for `root`
+  pos: -1, // index into stops
+  following: true, // stay on the newest stop as events arrive
+  showAll: false,
+  connected: false,
+  info: null,
+  cache: new Map(), // event id -> graph at that stop
+  seq: 0, // guards against out-of-order graph fetches
+  lastFlashed: null,
+  error: null,
+  skew: 0, // server clock minus ours; non-zero when AGENT_GRAPH_NOW pins it
+};
+
+// ---------- helpers ----------
+
+const $ = (sel) => document.querySelector(sel);
+
+/**
+ * Makes model-written text safe to show: control characters become spaces,
+ * and bidirectional overrides (which make text display differently from what
+ * it is) are dropped.
+ */
+const clean = (s) =>
+  String(s)
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, '');
+
+/** Builds an element. Strings become text nodes, never markup. */
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : clean(v));
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid instanceof Node ? kid : clean(kid));
+  }
+  return el;
+}
+
+async function getJSON(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+/**
+ * Where the graph comes from. By default, the `agent-graph view` server's
+ * API. A page can set `window.agentGraphSource` first to supply it another
+ * way; the shared site computes it in the browser with the same reducer,
+ * compiled to WebAssembly. Every method but `subscribe` returns a promise.
+ */
+const source = window.agentGraphSource || {
+  /** The graph now, or as of event `until`. */
+  graph: (until) => getJSON(until ? `/api/graph?until=${encodeURIComponent(until)}` : '/api/graph'),
+  /** Every stop in the timeline of the tree under `root`. */
+  timeline: (root) => getJSON(`/api/timeline?root=${encodeURIComponent(root)}`),
+  /** `{ now_ms, where }`: the clock to measure "5m ago" by, and where events come from. */
+  info: () => getJSON('/api/info').then((i) => ({ now_ms: i.now_ms, where: i.events_dir })),
+  /** Calls `onChange()` when new events arrive and `onStatus(connected)` as the connection changes. */
+  subscribe(onChange, onStatus) {
+    const stream = new EventSource('/api/stream');
+    stream.addEventListener('open', () => onStatus(true));
+    stream.addEventListener('changed', onChange);
+    stream.addEventListener('error', () => onStatus(false));
+  },
+  /** A URL for a PNG of `root` (as of `until`), or null if images aren't available. */
+  imageUrl(root, until, dark) {
+    const params = new URLSearchParams({ root });
+    if (until) params.set('until', until);
+    if (dark) params.set('theme', 'dark');
+    return `/api/image.png?${params}`;
+  },
+  /** What to call the newest point in the timeline. */
+  liveLabel: 'Live',
+};
+
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+const nowMs = () => Date.now() + S.skew;
+const localId = (id) => id.split(/[/:]/).pop();
+const short = (id) => localId(id).slice(0, 8);
+const basename = (p) => (p ? p.split(/[\\/]/).filter(Boolean).pop() : null);
+
+function nodeName(node) {
+  if (!node) return 'Unknown';
+  if (node.kind === 'session') return basename(node.cwd) || `Session ${short(node.id)}`;
+  return `${node.agent_type || 'Agent'} ${short(node.id)}`;
+}
+
+function nameOf(graph, id) {
+  const node = graph && graph.nodes[id];
+  return node ? nodeName(node) : short(id);
+}
+
+function clock(ts) {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const today = new Date(nowMs()).toDateString() === d.toDateString();
+  return today ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+function ago(ts) {
+  const s = Math.max(0, (nowMs() - new Date(ts).getTime()) / 1000);
+  if (s < 10) return 'just now';
+  if (s < 60) return `${Math.floor(s)}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function subtree(graph, id) {
+  const out = [];
+  const queue = [id];
+  while (queue.length) {
+    const node = graph.nodes[queue.shift()];
+    if (!node || out.includes(node)) continue;
+    out.push(node);
+    queue.push(...node.children);
+  }
+  return out;
+}
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+// ---------- data flow ----------
+
+let refreshing = null;
+let refreshAgain = false;
+
+function scheduleRefresh() {
+  if (refreshing) {
+    refreshAgain = true;
+    return;
+  }
+  refreshing = refresh()
+    .then(() => setError(null))
+    .catch((e) => setError(`Can't reach the viewer: ${e.message}. Is \`agent-graph view\` still running?`))
+    .finally(() => {
+      refreshing = null;
+      if (refreshAgain) {
+        refreshAgain = false;
+        scheduleRefresh();
+      }
+    });
+}
+
+async function refresh() {
+  const currentId = S.stops[S.pos] && S.stops[S.pos].id;
+  S.cache.clear();
+  S.live = await source.graph(null);
+
+  if (!S.root || !S.live.nodes[S.root]) {
+    S.root = rootFromHash() || visibleRoots()[0] || null;
+    S.selected = S.root;
+    S.following = true;
+  }
+  S.stops = S.root ? (await source.timeline(S.root)).stops : [];
+
+  if (S.following || !currentId) {
+    S.following = true;
+    S.pos = S.stops.length - 1;
+    S.shown = S.live;
+  } else {
+    // Stay on the same event while new ones arrive.
+    const i = S.stops.findIndex((s) => s.id === currentId);
+    S.pos = i >= 0 ? i : clamp(S.pos, 0, S.stops.length - 1);
+  }
+  renderAll();
+}
+
+let fetchTimer = null;
+
+/** Moves the timeline to stop `pos`. The last stop means "live". */
+function goTo(pos) {
+  if (!S.stops.length) return;
+  S.pos = clamp(pos, 0, S.stops.length - 1);
+  S.following = S.pos === S.stops.length - 1;
+  renderTimeline();
+  renderMode();
+  clearTimeout(fetchTimer);
+  if (S.following) {
+    S.shown = S.live;
+    renderView();
+    return;
+  }
+  const id = S.stops[S.pos].id;
+  const cached = S.cache.get(id);
+  if (cached) {
+    S.shown = cached;
+    renderView();
+    return;
+  }
+  // Coalesce requests while the slider is being dragged.
+  const seq = ++S.seq;
+  fetchTimer = setTimeout(async () => {
+    try {
+      const graph = await source.graph(id);
+      S.cache.set(id, graph);
+      if (seq !== S.seq) return;
+      S.shown = graph;
+      renderView();
+    } catch (e) {
+      setError(`Couldn't load that step: ${e.message}`);
+    }
+  }, 40);
+}
+
+function goLive() {
+  goTo(S.stops.length - 1);
+}
+
+function selectRoot(id) {
+  if (id === S.root) return;
+  S.root = id;
+  S.selected = id;
+  S.following = true;
+  S.stops = [];
+  history.replaceState(null, '', `#${encodeURIComponent(id)}`);
+  scheduleRefresh();
+}
+
+function selectNode(id) {
+  S.selected = id;
+  renderView();
+}
+
+function rootFromHash() {
+  const id = decodeURIComponent(location.hash.slice(1));
+  return id && S.live && S.live.nodes[id] ? id : null;
+}
+
+function visibleRoots() {
+  if (!S.live) return [];
+  const cutoff = nowMs() - RECENT_MS;
+  return S.live.roots.filter(
+    (id) => S.showAll || id === S.root || new Date(S.live.nodes[id].last_event_at).getTime() >= cutoff,
+  );
+}
+
+function setError(message) {
+  S.error = message;
+  const banner = $('#banner');
+  banner.hidden = !message;
+  banner.textContent = message || '';
+}
+
+// ---------- rendering ----------
+
+function renderAll() {
+  renderMode();
+  renderSessions();
+  renderView();
+  renderTimeline();
+}
+
+function renderView() {
+  renderMain();
+  renderDetail();
+}
+
+function renderMode() {
+  const mode = $('#mode');
+  let pill;
+  if (!S.connected) pill = h('span', { class: 'pill offline' }, 'Reconnecting…');
+  else if (S.following) pill = h('span', { class: 'pill live' }, source.liveLabel);
+  else {
+    const stop = S.stops[S.pos];
+    pill = h('span', { class: 'pill past' }, `Viewing ${stop ? clock(stop.ts) : 'the past'}`);
+  }
+  mode.replaceChildren(pill);
+}
+
+function renderSessions() {
+  const list = $('#session-list');
+  list.replaceChildren();
+  if (!S.live) return;
+  const roots = visibleRoots();
+  if (!roots.length) {
+    const hidden = S.live.roots.length;
+    list.append(
+      h('li', { class: 'empty-note' }, hidden ? `${plural(hidden, 'older session')} hidden.` : 'No sessions yet.'),
+    );
+    return;
+  }
+  for (const id of roots) {
+    const root = S.live.nodes[id];
+    const nodes = subtree(S.live, id);
+    const agents = nodes.length - 1;
+    const needsYou = nodes.find((n) => n.state === 'input_required');
+    const deadlocked = nodes.some((n) => n.blocked && n.blocked.cycle);
+    const stuck = nodes.find((n) => n.stale);
+    const busy = nodes.some((n) => n.state === 'working');
+    const dotState = needsYou ? 'input_required' : busy && root.state === 'idle' ? 'working' : root.state;
+    const done = root.tasks.length - root.open_tasks;
+    const meta = [root.provider, agents ? plural(agents, 'agent') : null, root.tasks.length ? `tasks ${done}/${root.tasks.length}` : null]
+      .filter(Boolean)
+      .join(' · ');
+    list.append(
+      h(
+        'li',
+        null,
+        h(
+          'button',
+          {
+            class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}`,
+            'aria-current': id === S.root ? 'true' : null,
+            onclick: () => selectRoot(id),
+          },
+          h('span', { class: `dot ${dotState}` }),
+          h('span', { class: 's-title', title: root.cwd || id }, nodeName(root)),
+          h('span', { class: 's-when' }, ago(root.last_event_at)),
+          needsYou
+            ? h('span', { class: 's-sub attention' }, `Needs you: ${needsYou.attention || nodeName(needsYou)}`)
+            : deadlocked
+              ? h('span', { class: 's-sub problem' }, 'Deadlocked: waiting on a session that waits on it')
+              : stuck
+                ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck === root ? 'no activity' : nodeName(stuck)}`)
+                : h('span', { class: 's-sub' }, root.headline || STATE_LABEL[root.state]),
+          h('span', { class: 's-meta' }, meta),
+        ),
+      ),
+    );
+  }
+}
+
+function renderMain() {
+  const view = $('#view');
+  view.replaceChildren();
+  if (!S.live) return;
+
+  if (!S.live.roots.length) {
+    view.append(
+      h(
+        'div',
+        { class: 'empty' },
+        h('h2', null, 'No sessions recorded yet'),
+        h('p', null, 'Install the hooks, then start a new Claude Code session. It will appear here as soon as it starts.'),
+        h('pre', null, h('code', null, 'agent-graph install claude-code')),
+        S.info && S.info.where ? h('p', null, 'Watching ', h('code', null, S.info.where)) : null,
+      ),
+    );
+    return;
+  }
+  if (!S.root) {
+    view.append(
+      h(
+        'div',
+        { class: 'empty' },
+        h('h2', null, 'Nothing in the last 24 hours'),
+        h('p', null, 'Tick “Older” in the sessions list to see earlier sessions.'),
+      ),
+    );
+    return;
+  }
+
+  const graph = S.shown || S.live;
+  const root = graph.nodes[S.root];
+  const liveRoot = S.live.nodes[S.root];
+  const stop = S.stops[S.pos];
+
+  view.append(
+    h(
+      'div',
+      { class: 'view-head' },
+      h(
+        'div',
+        { class: 'title-row' },
+        h('h1', null, nodeName(liveRoot), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
+        root ? saveImageLink(stop) : null,
+      ),
+      h(
+        'div',
+        { class: 'meta' },
+        h('span', null, liveRoot.provider),
+        h('span', { class: 'mono', title: liveRoot.id }, short(liveRoot.id)),
+        liveRoot.cwd ? h('span', { class: 'mono', title: liveRoot.cwd }, liveRoot.cwd) : null,
+        liveRoot.started_at ? h('span', null, `Started ${clock(liveRoot.started_at)}`) : null,
+      ),
+      !S.following && stop
+        ? h('div', { class: 'past-note' }, `As of ${clock(stop.ts)} — step ${S.pos + 1} of ${S.stops.length}`)
+        : null,
+    ),
+  );
+
+  if (!root) {
+    view.append(h('p', { class: 'empty-note' }, 'This session hadn’t started yet at this point.'));
+    return;
+  }
+
+  // Which node to ring: the one the current step touched.
+  let ringed = null;
+  let flash = null;
+  if (!S.following && stop) ringed = stop.node;
+  const last = S.stops[S.stops.length - 1];
+  if (S.following && last && last.id !== S.lastFlashed) {
+    flash = S.lastFlashed ? last.node : null; // don't flash on first load
+    S.lastFlashed = last.id;
+  }
+
+  view.append(h('div', { class: 'tree' }, branch(graph, root, ringed, flash)));
+  const ring = view.querySelector('.node.current');
+  if (ring) ring.scrollIntoView({ block: 'nearest' });
+}
+
+/** A download link for a PNG of this session, at the step being viewed. */
+function saveImageLink(stop) {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const url = source.imageUrl && source.imageUrl(S.root, !S.following && stop ? stop.id : null, dark);
+  if (!url) return null;
+  const when = !S.following && stop ? new Date(stop.ts) : new Date();
+  const time = when.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
+  return h(
+    'a',
+    {
+      class: 'btn',
+      href: url,
+      download: `agent-graph-${short(S.root)}-${time}.png`,
+      title: 'Save a picture of this session as it looks here',
+    },
+    'Save image',
+  );
+}
+
+function branch(graph, node, ringed, flash) {
+  const kids = node.children.map((id) => graph.nodes[id]).filter(Boolean);
+  return h(
+    'div',
+    { class: 'branch' },
+    card(graph, node, ringed, flash),
+    kids.length ? h('div', { class: 'children' }, kids.map((k) => branch(graph, k, ringed, flash))) : null,
+  );
+}
+
+function card(graph, n, ringed, flash) {
+  const classes = ['node', n.state];
+  if (n.id === S.selected) classes.push('selected');
+  if (n.id === ringed) classes.push('current');
+  if (n.id === flash) classes.push('flash');
+  const doneTasks = n.tasks.length - n.open_tasks;
+
+  return h(
+    'button',
+    { class: classes.join(' '), 'data-id': n.id, onclick: () => selectNode(n.id) },
+    h('span', { class: `dot ${n.state}` }),
+    h(
+      'span',
+      { class: 'node-main' },
+      h(
+        'span',
+        { class: 'node-head' },
+        h('span', { class: 'node-name' }, n.kind === 'session' ? 'Session' : nodeName(n)),
+        h('span', { class: `state ${n.state}` }, STATE_LABEL[n.state]),
+        n.background ? h('span', { class: 'chip' }, 'background') : null,
+        n.stale ? h('span', { class: 'chip warn', title: 'No events for a while; it may have crashed' }, 'stale?') : null,
+      ),
+      n.kind === 'agent' && n.purpose ? h('span', { class: 'node-purpose' }, n.purpose) : null,
+      n.state === 'input_required'
+        ? h('span', { class: 'node-attention' }, `Needs you: ${n.attention || 'waiting for input'}`)
+        : n.headline
+          ? h('span', { class: 'node-headline' }, n.headline)
+          : null,
+      n.blocked ? h('span', { class: 'node-blocked' }, blockedText(graph, n.blocked)) : null,
+    ),
+    n.tasks.length
+      ? h(
+          'span',
+          { class: 'progress', title: `${doneTasks} of ${n.tasks.length} tasks done` },
+          `${doneTasks}/${n.tasks.length}`,
+          h('span', { class: 'bar' }, barFill(doneTasks / n.tasks.length)),
+        )
+      : null,
+  );
+}
+
+function barFill(fraction) {
+  const fill = h('span');
+  fill.style.width = `${Math.round(fraction * 100)}%`;
+  return fill;
+}
+
+function blockedText(graph, b) {
+  const parts = [];
+  if (b.cycle) parts.push('Deadlock');
+  if (b.on.length) {
+    const names = b.on
+      .slice(0, 2)
+      .map((id) => nameOf(graph, id) + (graph.nodes[id] && graph.nodes[id].stale ? ' (looks stuck)' : ''));
+    if (b.on.length > 2) names.push(`${b.on.length - 2} more`);
+    parts.push(`Waiting on ${names.join(', ')}`);
+  }
+  if (b.starting) parts.push(`${plural(b.starting, 'agent')} starting`);
+  if (b.open_tasks) parts.push(`${plural(b.open_tasks, 'open task')} ahead`);
+  return parts.join(' · ');
+}
+
+function renderDetail() {
+  const pane = $('#detail');
+  pane.replaceChildren();
+  const graph = S.shown || S.live;
+  const n = graph && S.selected ? graph.nodes[S.selected] : null;
+  if (!n) {
+    pane.append(
+      h(
+        'p',
+        { class: 'placeholder' },
+        S.selected && S.live && S.live.nodes[S.selected]
+          ? 'This hadn’t started yet at this point in the timeline.'
+          : 'Select a session or agent to see its tasks, waits and messages.',
+      ),
+    );
+    return;
+  }
+
+  const link = (id) => (graph.nodes[id] ? h('button', { class: 'linkish', onclick: () => selectNode(id) }, nameOf(graph, id)) : short(id));
+
+  pane.append(
+    h(
+      'div',
+      { class: 'detail-head' },
+      h('h2', null, n.kind === 'session' ? `Session · ${nodeName(n)}` : nodeName(n), h('span', { class: `state ${n.state}` }, STATE_LABEL[n.state])),
+      h(
+        'div',
+        { class: 'idline' },
+        h('span', { class: 'mono', title: n.id }, n.id),
+        h('button', { class: 'copy', onclick: (e) => copy(n.id, e.currentTarget) }, 'Copy'),
+      ),
+    ),
+  );
+
+  if (n.state === 'input_required') {
+    pane.append(h('div', { class: 'attention-box' }, `Needs you: ${n.attention || 'waiting for input'}`));
+  }
+  if (n.purpose || n.headline) {
+    pane.append(h('p', { class: 'lead' }, n.purpose || n.headline));
+    if (n.purpose && n.headline) pane.append(h('p', { class: 'node-headline' }, n.headline));
+  }
+
+  if (n.blocked) {
+    pane.append(
+      section(
+        'Waiting on',
+        h(
+          'ul',
+          { class: 'list' },
+          n.blocked.on.map((id) =>
+            h('li', null, h('span', { class: `dot ${(graph.nodes[id] || {}).state || 'idle'}` }), h('span', { class: 'grow' }, link(id))),
+          ),
+          n.blocked.starting ? h('li', null, h('span', { class: 'grow sub' }, `${plural(n.blocked.starting, 'agent')} starting…`)) : null,
+        ),
+        h('p', { class: 'node-headline' }, `${plural(n.blocked.nodes, 'unfinished node')} and ${plural(n.blocked.open_tasks, 'open task')} before this can continue.`),
+      ),
+    );
+  }
+
+  if (n.tasks.length) {
+    const icon = { completed: '✓', in_progress: '▸', pending: '○' };
+    pane.append(
+      section(
+        `Tasks · ${n.tasks.length - n.open_tasks}/${n.tasks.length} done`,
+        h(
+          'ul',
+          { class: 'list' },
+          n.tasks.map((t) =>
+            h(
+              'li',
+              { class: `task ${t.status}` },
+              h('span', { class: 'task-icon', 'aria-label': t.status.replace('_', ' ') }, icon[t.status] || '○'),
+              h('span', { class: 'grow' }, t.status === 'in_progress' && t.active_text ? t.active_text : t.text),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (n.spawns.length) {
+    pane.append(
+      section(
+        'Agents it started',
+        h(
+          'ul',
+          { class: 'list' },
+          n.spawns.map((s) =>
+            h(
+              'li',
+              null,
+              h('span', { class: `dot ${s.child && graph.nodes[s.child] ? graph.nodes[s.child].state : s.returned ? 'completed' : 'working'}` }),
+              h(
+                'span',
+                { class: 'grow' },
+                s.child ? link(s.child) : `${s.agent_type || 'Agent'} (starting…)`,
+                h('span', { class: 'sub' }, [s.purpose, s.background ? 'background' : 'waited for'].filter(Boolean).join(' · ')),
+              ),
+              h('span', { class: 'time' }, clock(s.requested_at)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (n.messages.length) {
+    pane.append(
+      section(
+        'Messages',
+        h(
+          'ul',
+          { class: 'list' },
+          n.messages.map((m) =>
+            h(
+              'li',
+              null,
+              h('span', { class: 'task-icon', title: m.direction }, m.direction === 'sent' ? '↗' : '↙'),
+              h(
+                'span',
+                { class: 'grow' },
+                m.direction === 'sent' ? 'To ' : 'From ',
+                link(m.peer),
+                m.summary ? h('span', { class: 'sub' }, m.summary) : null,
+                m.body ? h('div', { class: 'body-text' }, m.body) : null,
+              ),
+              h('span', { class: 'time' }, clock(m.ts)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  const facts = [
+    ['Kind', n.kind === 'session' ? 'Session' : `${n.agent_type || 'Agent'}${n.background ? ' (background)' : ''}`],
+    ['Provider', n.provider],
+    ['Parent', n.parent ? link(n.parent) : null],
+    ['Folder', n.cwd],
+    ['Started', n.started_at && clock(n.started_at)],
+    ['Ended', n.ended_at && clock(n.ended_at)],
+    ['Last event', clock(n.last_event_at)],
+  ].filter(([, v]) => v);
+  pane.append(section('Details', h('dl', { class: 'facts' }, facts.map(([k, v]) => [h('dt', null, k), h('dd', null, v)]))));
+}
+
+function section(title, ...body) {
+  return h('section', null, h('h3', null, title), ...body);
+}
+
+async function copy(text, button) {
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = 'Copied';
+    setTimeout(() => (button.textContent = 'Copy'), 1200);
+  } catch {
+    button.textContent = 'Copy failed';
+  }
+}
+
+// ---------- timeline ----------
+
+let tickKey = '';
+
+function renderTimeline() {
+  const slider = $('#slider');
+  const n = S.stops.length;
+  slider.disabled = n < 2;
+  slider.max = String(Math.max(0, n - 1));
+  if (document.activeElement !== slider || slider.value !== String(S.pos)) slider.value = String(Math.max(0, S.pos));
+  const pct = n > 1 ? (S.pos / (n - 1)) * 100 : 100;
+  slider.style.setProperty('--pct', `${pct}%`);
+  const stop = S.stops[S.pos];
+  slider.setAttribute('aria-valuetext', stop ? `Step ${S.pos + 1} of ${n}: ${stop.label}` : 'No events');
+
+  // Ticks only change when the stops do.
+  const key = `${S.root}|${n}|${n ? S.stops[n - 1].id : ''}`;
+  const ticks = $('#ticks');
+  if (key !== tickKey) {
+    tickKey = key;
+    ticks.replaceChildren(
+      ...S.stops.map((s, i) => {
+        const t = h('span', { class: `tick ${s.category}` });
+        t.style.left = `${n > 1 ? (i / (n - 1)) * 100 : 100}%`;
+        return t;
+      }),
+    );
+  }
+  ticks.childNodes.forEach((t, i) => {
+    t.classList.toggle('ahead', i > S.pos);
+  });
+
+  $('#prev').disabled = S.pos <= 0;
+  $('#next').disabled = S.pos >= n - 1;
+  const live = $('#live');
+  live.classList.toggle('on', S.following && S.connected);
+  $('#live-text').textContent = S.following ? source.liveLabel : `Go to ${source.liveLabel.toLowerCase()}`;
+
+  $('#step-count').textContent = n ? `Step ${S.pos + 1} of ${n}` : 'No events yet';
+  $('#step-time').textContent = stop ? clock(stop.ts) : '';
+  $('#step-label').replaceChildren(...(stop ? [h('span', { class: `swatch ${stop.category}` }), h('span', null, stop.label)] : []));
+}
+
+function stopAt(clientX) {
+  const rect = $('#slider').getBoundingClientRect();
+  const n = S.stops.length;
+  if (n < 2) return 0;
+  const x = clamp((clientX - rect.left - THUMB / 2) / (rect.width - THUMB), 0, 1);
+  return Math.round(x * (n - 1));
+}
+
+function showTip(e) {
+  const tip = $('#hover-tip');
+  if (S.stops.length < 2) return;
+  const i = stopAt(e.clientX);
+  const stop = S.stops[i];
+  const rect = $('#track').getBoundingClientRect();
+  tip.replaceChildren(h('span', { class: 't' }, `${i + 1} · ${clock(stop.ts)}`), stop.label);
+  tip.hidden = false;
+  const x = THUMB / 2 + (i / (S.stops.length - 1)) * (rect.width - THUMB);
+  tip.style.left = `${clamp(x, 120, rect.width - 120)}px`;
+}
+
+// ---------- wiring ----------
+
+function connect() {
+  source.subscribe(scheduleRefresh, (connected) => {
+    const reconnected = connected && !S.connected;
+    S.connected = connected;
+    renderMode();
+    renderTimeline();
+    if (reconnected) scheduleRefresh(); // catch up on anything missed while disconnected
+  });
+}
+
+function wire() {
+  const slider = $('#slider');
+  slider.addEventListener('input', () => goTo(Number(slider.value)));
+  slider.addEventListener('mousemove', showTip);
+  slider.addEventListener('mouseleave', () => ($('#hover-tip').hidden = true));
+  $('#prev').addEventListener('click', () => goTo(S.pos - 1));
+  $('#next').addEventListener('click', () => goTo(S.pos + 1));
+  $('#live').addEventListener('click', goLive);
+  $('#show-all').addEventListener('change', (e) => {
+    S.showAll = e.target.checked;
+    renderSessions();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    if (t === slider || (t instanceof HTMLElement && t.matches('input, textarea, select'))) return;
+    if (e.key === 'ArrowLeft') goTo(S.pos - 1);
+    else if (e.key === 'ArrowRight') goTo(S.pos + 1);
+    else if (e.key === 'Home') goTo(0);
+    else if (e.key === 'End' || e.key === 'l' || e.key === 'L') goLive();
+    else return;
+    e.preventDefault();
+  });
+
+  window.addEventListener('hashchange', () => {
+    const id = rootFromHash();
+    if (id) selectRoot(id);
+  });
+
+  // Keep "2m ago" fresh.
+  setInterval(renderSessions, 30_000);
+}
+
+async function main() {
+  wire();
+  renderAll();
+  try {
+    S.info = await source.info();
+    if (S.info.now_ms) S.skew = S.info.now_ms - Date.now();
+  } catch {
+    /* shown by the first refresh instead */
+  }
+  connect();
+  scheduleRefresh();
+}
+
+main();

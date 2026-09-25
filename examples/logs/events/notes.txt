@@ -1,0 +1,1 @@
+Not an events file; the loader ignores anything that isn't .jsonl.
