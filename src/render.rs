@@ -114,11 +114,13 @@ fn node_line(graph: &Graph, node: &Node) -> Line {
 
     parts.push(match node.kind {
         NodeKind::Session => {
-            let dir = node
-                .cwd
-                .as_deref()
-                .and_then(|c| Path::new(c).file_name())
-                .map(|f| f.to_string_lossy());
+            // Named by its title (e.g. `agent-graph run --name`), else its folder.
+            let dir = node.title.as_deref().map(Into::into).or_else(|| {
+                node.cwd
+                    .as_deref()
+                    .and_then(|c| Path::new(c).file_name())
+                    .map(|f| f.to_string_lossy())
+            });
             let id = span(format!("{}:{}", node.provider, short(local_id)), Tone::Dim);
             match dir {
                 Some(dir) => vec![id, span("  ", Tone::Plain), span(dir, Tone::Strong)],
@@ -227,16 +229,46 @@ pub fn name(node: &Node) -> String {
     let local = node.id.rsplit(['/', ':']).next().unwrap_or(&node.id);
     match node.kind {
         NodeKind::Session => node
-            .cwd
-            .as_deref()
-            .and_then(|c| Path::new(c).file_name())
-            .map(|f| f.to_string_lossy().into_owned())
+            .title
+            .clone()
+            .or_else(|| {
+                node.cwd
+                    .as_deref()
+                    .and_then(|c| Path::new(c).file_name())
+                    .map(|f| f.to_string_lossy().into_owned())
+            })
             .unwrap_or_else(|| format!("session {}", short(local))),
         NodeKind::Agent => format!(
             "{} {}",
             node.agent_type.as_deref().unwrap_or("agent"),
             short(local)
         ),
+    }
+}
+
+/// What a card calls its node: an agent's type and id; a session's title
+/// (`agent-graph run --name`); a session started by another, its agent and
+/// id (its folder is often its parent's); otherwise just "Session".
+pub fn card_name(node: &Node) -> String {
+    match (node.kind, &node.title, &node.parent) {
+        (NodeKind::Agent, _, _) => name(node),
+        (NodeKind::Session, Some(title), _) => title.clone(),
+        (NodeKind::Session, None, Some(_)) => {
+            let local = node.id.rsplit(['/', ':']).next().unwrap_or(&node.id);
+            format!("{} session {}", provider_name(&node.provider), short(local))
+        }
+        (NodeKind::Session, None, None) => "Session".to_string(),
+    }
+}
+
+/// A provider's name as people know it.
+pub fn provider_name(provider: &str) -> &str {
+    match provider {
+        "claude-code" => "Claude Code",
+        "codex" => "Codex",
+        "gemini" => "Gemini CLI",
+        "cursor" => "Cursor",
+        other => other,
     }
 }
 

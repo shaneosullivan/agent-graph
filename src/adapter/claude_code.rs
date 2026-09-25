@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 
-use super::{Adapter, Capture, Draft, Translation, bool_at, str_at};
+use super::{Adapter, Capture, Draft, Translation, bool_at, shell, str_at};
 use crate::event::{
     AgentFinished, AgentSpawned, FinishStatus, MessageSent, Payload, SessionEnded, SessionStarted,
     SpawnKind, SpawnRequested, SpawnReturned, State, Status, TaskDeleted, TaskItem, TaskStatus,
@@ -40,6 +40,11 @@ impl Adapter for ClaudeCode {
         "claude-code@1"
     }
 
+    fn env_file_var(&self) -> Option<&'static str> {
+        // Given to SessionStart hooks; its exports apply to later Bash calls.
+        Some("CLAUDE_ENV_FILE")
+    }
+
     fn translate(&self, input: &Value, capture: Capture) -> Result<Translation, String> {
         let session = str_at(input, &["session_id"]).ok_or("payload has no session_id")?;
         let session_node = node_id(session, None);
@@ -58,6 +63,7 @@ impl Adapter for ClaudeCode {
                     source: str_at(input, &["source"]).map(String::from),
                     title: None,
                     transcript_path: str_at(input, &["transcript_path"]).map(String::from),
+                    ..Default::default()
                 }),
             )),
             "SessionEnd" => drafts.push(Draft::new(
@@ -127,6 +133,26 @@ impl Adapter for ClaudeCode {
                     State::InputRequired,
                     Some("Plan ready for your review".to_string()),
                 )),
+                // Starting another agent from the shell: a separate session
+                // this one waits for, unless it's in the background.
+                "Bash" => {
+                    if let (Some(call_id), Some(launch)) = (tool_use_id(input), agent_launch(input))
+                    {
+                        let background = launch.background
+                            || bool_at(input, &["tool_input", "run_in_background"])
+                                .unwrap_or(false);
+                        drafts.push(Draft::new(
+                            &node,
+                            Payload::SpawnRequested(SpawnRequested {
+                                call_id: call_id.to_string(),
+                                kind: SpawnKind::Session,
+                                agent_type: Some(launch.program),
+                                purpose: label(&["tool_input", "description"]),
+                                background,
+                            }),
+                        ));
+                    }
+                }
                 "Agent" | "Task" if tool_use_id(input).is_some() => {
                     let call_id = tool_use_id(input).unwrap_or_default();
                     drafts.push(Draft::new(
@@ -176,6 +202,20 @@ fn post_tool_use(
         // Answered: back to work.
         "AskUserQuestion" | "ExitPlanMode" => {
             drafts.push(status(node, State::Working, None));
+        }
+        "Bash" => {
+            if let (Some(call_id), Some(_)) = (tool_use_id(input), agent_launch(input)) {
+                // The child isn't named here; the reducer pairs it with the
+                // session that linked itself to this one.
+                drafts.push(Draft::new(
+                    node,
+                    Payload::SpawnReturned(SpawnReturned {
+                        call_id: call_id.to_string(),
+                        child: None,
+                        outcome: None,
+                    }),
+                ));
+            }
         }
         "Agent" | "Task" => {
             let Some(call_id) = tool_use_id(input) else {
@@ -284,6 +324,13 @@ fn post_tool_use(
 
 fn status(node: &str, state: State, summary: Option<String>) -> Draft {
     Draft::new(node, Payload::Status(Status { state, summary }))
+}
+
+/// The agent a Bash call starts, if it starts one.
+fn agent_launch(input: &Value) -> Option<shell::Launch> {
+    let command = str_at(input, &["tool_input", "command"])?;
+    let extra = shell::extra_commands(std::env::var("AGENT_GRAPH_AGENT_COMMANDS").ok().as_deref());
+    shell::agent_launch(command, &extra)
 }
 
 fn tool_name(input: &Value) -> &str {

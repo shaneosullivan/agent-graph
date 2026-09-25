@@ -58,7 +58,7 @@ All of this ships as one binary, `agent-graph`, with these subcommands:
   - All of them share one set of instructions: run `tree` and `snapshot`, send the image if the app can show files, and summarise what needs the user, what's stuck and what's in progress. `share` runs `watch-remote --session current` instead.
 - **Permissions:** Claude Code's skill pre-approves only the local, read-only `tree` and `snapshot`. Sharing sends data to a website, so it keeps its permission prompt.
 - **Safety:** each file carries an "Installed by agent-graph" marker. Reinstalling updates only a file with the marker, and uninstalling removes only those files. A command the user wrote themselves is left alone.
-- `run -- <command>` launches any agent CLI with its parent link set (§6, phase 4).
+- `run -- <command>` runs any command as a node in the graph, linked to whatever started it, with anything it starts linked to it (§6).
 
 ## 3. Data model: an append-only event log
 
@@ -100,7 +100,7 @@ Many sessions write at the same time. If they all rewrite one `state.json`, two 
 
 | Type | `data` fields | Emitted when |
 |---|---|---|
-| `session.started` | `cwd?`, `source?` (startup/resume/…), `title?`, `transcript_path?` | A provider session begins or resumes |
+| `session.started` | `cwd?`, `source?` (startup/resume/…), `title?`, `transcript_path?`, `link_method?`, `process?`, `ancestors?` | A provider session begins or resumes. The last three link it to the session that started it (§6) |
 | `session.ended` | `reason?` | A session exits |
 | `agent.spawned` | `agent_type?`, `purpose?`, `background?` | A subagent starts |
 | `agent.finished` | `status` (completed/failed/canceled), `summary?` | A subagent stops |
@@ -203,11 +203,11 @@ What hooks are *not*: a standard. Event names, field names (snake_case vs camelC
     "SubagentStart":    [{ "hooks": [{ "type": "command", "command": "agent-graph emit --provider claude-code", "async": true }] }],
     "SubagentStop":     [{ "hooks": [{ "type": "command", "command": "agent-graph emit --provider claude-code", "async": true }] }],
     "PreToolUse": [{
-      "matcher": "Agent|Task|AskUserQuestion|ExitPlanMode",
+      "matcher": "Agent|Task|AskUserQuestion|ExitPlanMode|Bash",
       "hooks": [{ "type": "command", "command": "agent-graph emit --provider claude-code", "async": true }]
     }],
     "PostToolUse": [{
-      "matcher": "Agent|Task|TaskCreate|TaskUpdate|TodoWrite|SendMessage|AskUserQuestion|ExitPlanMode",
+      "matcher": "Agent|Task|TaskCreate|TaskUpdate|TodoWrite|SendMessage|AskUserQuestion|ExitPlanMode|Bash",
       "hooks": [{ "type": "command", "command": "agent-graph emit --provider claude-code", "async": true }]
     }]
   }
@@ -216,9 +216,9 @@ What hooks are *not*: a standard. Event names, field names (snake_case vs camelC
 
 - `matcher` filters by tool name for tool events, or by a sub-type for others; for example, `SessionStart` can match `startup|resume|clear|compact`. A plain `A|B` is an exact list. Anything with regex characters is treated as an unanchored regex.
 - We match only the tools that matter to the graph, because **every match starts a process**. A heartbeat mode (`--activity`) can match `*` for users who want it.
-- Phase 4 adds `Bash` to both tool matchers, so we can see when a session launches another agent from its shell (see below). For ordinary shell commands `emit` will exit straight away without writing anything. Claude Code's per-handler `if` filter (permission-rule syntax, e.g. `Bash(codex *)`) may let us skip those processes entirely; to verify.
+- `Bash` is in both tool matchers, so we can see when a session launches another agent from its shell (see below). For any other shell command `emit` writes nothing, but it still costs a background process per call. Claude Code's per-handler `if` filter (permission-rule syntax, e.g. `Bash(codex *)`) may let us skip those processes entirely; to verify.
 - `"async": true` runs the hook in the background, so the agent never waits for us.
-- `SessionStart` stays synchronous, so it's recorded before anything else in the session, and because in phase 4 it must finish before the first shell command runs (see §6). It's also a hook whose stdout Claude Code **adds to the model's context**, which is one more reason `emit` must never print anything.
+- `SessionStart` stays synchronous, so it's recorded before anything else in the session, and because it must write the session's identity for its shell before the first shell command runs (see §6). It's also a hook whose stdout Claude Code **adds to the model's context**, which is one more reason `emit` must never print anything.
 - `install` keeps everything else in the file, backs the old file up to `settings.json.agent-graph.bak`, asks before writing (or takes `--yes`), and offers `--dry-run`. Installing twice changes nothing; `uninstall` removes only our handlers.
 
 **The payload.** Every event includes common fields: `session_id`, `transcript_path`, `cwd`, `hook_event_name` and `permission_mode`. When the hook fires *inside a subagent*, it also gets `agent_id` and `agent_type`, and `session_id` stays the parent session's ID. Here's an illustrative `SubagentStart` payload on stdin:
@@ -253,6 +253,9 @@ The adapter turns that into:
 | `PostToolUse` on `TaskCreate` / `TaskUpdate` | `task.upserted` (the new id comes from `tool_response.task.id`), or `task.deleted` |
 | `PostToolUse` on `TodoWrite` | `tasks.updated` with the full list |
 | `PostToolUse` on `SendMessage` | `message.sent` with `to`, `summary` and `msg_id`. The body only with body capture on |
+| `PreToolUse` on `Bash`, when the command starts another agent | `spawn.requested` with `kind: session`, the program as `agent_type`, the call's `description` as the purpose, and `background` for `&` or `run_in_background` |
+| `PostToolUse` on `Bash`, for the same command | `spawn.returned`, without a `child`: the reducer pairs it (below) |
+| `PreToolUse`/`PostToolUse` on any other `Bash` command | Nothing |
 | `Notification`: `permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog` | `status: input_required`, with the notification's message |
 | `Notification`: `idle_prompt` | `status: idle` |
 | `PreToolUse` on `AskUserQuestion` | `status: input_required`, e.g. "Asks: Which database should the cache use?" |
@@ -266,13 +269,19 @@ Hooks that fire inside a subagent carry its `agent_id`, so their events land on 
 
 Claude Code migrated from `TodoWrite` to `TaskCreate`/`TaskUpdate`, but headless `claude -p` sessions still only offer `TodoWrite`, so the adapter handles both. That's the general lesson: **adapters must tolerate payloads changing between provider versions and modes.**
 
-**Waiting on a separate session (phase 4).** When session A runs another agent CLI from its shell *in the foreground*, hooks alone show the whole exchange:
+**Waiting on a separate session.** When session A runs another agent CLI from its shell *in the foreground*, hooks alone show the whole exchange (checked with Claude Code running `claude -p` from its shell):
 
-1. A's `PreToolUse(Bash)` fires. The command matches a known agent CLI, so we emit `spawn.requested` with `kind: session`, and record the prompt as a message to it.
-2. The child starts. Its own `SessionStart` hook links it to A (§6), and the reducer pairs it with A's open request, exactly as it does for subagents.
-3. A's `PostToolUse(Bash)` fires when the child exits. That's the `spawn.returned`, and the command's output is recorded as the child's reply.
+1. A's `PreToolUse(Bash)` fires. The command starts a known agent CLI, so we emit `spawn.requested` with `kind: session`. A is now waiting on a session that's "starting".
+2. The child starts. Its own `SessionStart` hook links it to A (§6), and the reducer pairs it with A's oldest unpaired session request made before it started, preferring one for the same program (`claude` for a `claude-code` session). A is now waiting on it.
+3. A's `PostToolUse(Bash)` fires when the child exits. That's the `spawn.returned`, and the wait ends.
 
-A background launch (`&`, `run_in_background`) is a background spawn, so A isn't blocked. The list of known agent CLI patterns will live in config, so users can add their own.
+How commands are recognised (`adapter/shell.rs`):
+- The command is split into simple commands at `;`, `&&`, `||`, `|`, `&`, newlines, parentheses and command substitutions (even inside double quotes), but not inside quotes. Each one's program is found past `NAME=value` assignments, shell keywords, and wrappers like `env`, `nohup`, `timeout 600` or `npx`.
+- Known agents: `claude`, `codex`, `gemini`, `cursor-agent`, `copilot`, `opencode`, `amp`, `aider`, `goose` and `qwen`, plus any in `AGENT_GRAPH_AGENT_COMMANDS`. `agent-graph run -- X` counts as starting X.
+- Not counted: `--version` or `--help`, and subcommands that manage an agent (`claude mcp …`, `codex login`, …).
+- A trailing `&` (or the tool's `run_in_background`) makes it a background spawn, so A isn't blocked. A background launch returns before its child starts, so the reducer still pairs those after they've returned.
+
+We don't record the prompt or the output: with body capture off, prompts are never kept (§5.3 rule 5), and the Bash tool's `description` is a better label anyway. A script that starts an agent inside itself isn't seen as a launch, but the agent still links itself under the session.
 
 ### 5.3 Rules for `agent-graph emit`
 
@@ -318,16 +327,23 @@ An MCP server that lets agents report these things themselves could be added lat
 
 ## 6. Correlation: linking sessions across processes
 
-Subagents are easy because the provider tells us the parent (§5.2). **Separate sessions** are harder. Examples: Claude running `codex exec …` from its shell tool, or a script launching three `claude -p` workers. We use these methods in order, and each event records which one it used (`data.link_method`) so the UI can show how sure the link is:
+Subagents are easy because the provider tells us the parent (§5.2). **Separate sessions** are harder. Examples: Claude running `codex exec …` from its shell tool, or a script launching three `claude -p` workers. We use these methods in order. The reducer records which one linked each session (`node.link`: `env`, `run` or `process`), and the viewer shows it as "Linked by".
 
-1. **Environment propagation (preferred).** On `SessionStart`, the hook exports this session's identity into the agent's shell environment. Any child process started from that shell inherits it, and the child's own `SessionStart` hook reads it back.
-   - Variables: `AGENT_GRAPH_PARENT=<node id>`, plus a W3C `TRACEPARENT` following OpenTelemetry's environment-variable spec for passing trace context to child processes.
-   - Claude Code: a `SessionStart` hook can write `export …` lines to the file named by `$CLAUDE_ENV_FILE`, and they're applied to the session's later shell commands (verify on current versions).
-   - Other providers need the equivalent. Where none exists, use method 2.
-2. **Wrapper.** `agent-graph run -- <any command>` sets the variables explicitly. This works for any tool, including ones with no hooks at all.
-3. **Process tree (fallback).** `session.started` records the agent's PID. A new session walks up its parent PIDs, and if it reaches a PID that belongs to a known session, that session is its parent. This needs no provider support. It fails for detached processes.
+1. **Environment propagation (preferred).** When a session starts, `emit` passes its identity to the agent's shell, so any process started from that shell inherits it. The child's own `SessionStart` hook reads it back, and its `session.started` gets that `parent` (`data.link_method: env`).
+   - Variables: `AGENT_GRAPH_PARENT=<node id>`, plus a W3C `TRACEPARENT` following OpenTelemetry's environment-variable spec for passing trace context to child processes. The child continues the parent's trace, and its own `traceparent` goes in its envelope's `trace`.
+   - Claude Code: the `SessionStart` hook appends `export …` lines to the file named by `$CLAUDE_ENV_FILE`, and Claude Code applies them to the session's later shell commands. Checked with Claude Code in September 2026: a `claude -p` started from a session's shell linked itself to it and continued its trace.
+   - Adapters say which variable names such a file (`Adapter::env_file_var`). Other providers need the equivalent; where none exists, use method 2 or 3.
+   - A value that isn't a well-formed node id, or is the session's own id (its own later hooks may see it), is ignored.
+2. **Wrapper.** `agent-graph run -- <any command>` (`run.rs`) is a node of its own (`run:<ulid>`, named after the program or `--name`), linked to whatever started it, and it sets the variables for the command. It's working until the command exits, then completed, or failed with the exit code, which it passes on. This works for any tool, including ones with no hooks at all, and groups the sessions a script starts. It waits out Ctrl+C (which the command gets too) so its end is always recorded, and passes on a `kill` or hang-up sent to it alone.
+3. **Process tree (fallback).** `session.started` records the agent's process and the processes above it (`process.rs`), each as `<pid>@<start time>`, so a reused pid never matches.
+   - The agent is the nearest process above the hook that isn't a shell. The walk stops at the top, at a process it can't read, or at a "parent" that started after its child (its pid was reused).
+   - Linux reads `/proc`, macOS `proc_pidinfo`, and Windows a Toolhelp snapshot with `GetProcessTimes`. Elsewhere nothing is recorded.
+   - The reducer links a session with no `parent` to the session whose agent process is its nearest ancestor (`link: process`), which catches a child that didn't inherit the environment. It needs no provider support, and fails for detached processes.
+   - A `/clear` starts a new session in the same process. The newer session owns the process from then on, and neither is the other's parent.
 
 We use the standard W3C `TRACEPARENT` format rather than inventing our own, so the IDs stay compatible with OpenTelemetry tooling.
+
+A session a session started is a process of its own: it reports its own end, so it isn't canceled when its parent ends (a subagent is).
 
 ## 7. Storage
 
@@ -484,11 +500,12 @@ Viewers can step through the log exactly as they can locally. Each log can have 
   - Native binaries for Windows, macOS and Linux from one codebase. CI runs the tests on all three.
   - Starts fast enough for a hook: about 3.6 ms per `emit`, including process start-up. The release binary is about 1.1 MB.
   - Platform differences are small and kept in `paths.rs` and `store.rs`: the home directory (`USERPROFILE` vs `HOME`), Unix-only file permissions, and file names safe on Windows.
-  - Dependencies: `serde`/`serde_json`, `clap` (not used by `emit`), `ulid`, `humantime`, `resvg` (images), `crossterm` (`tail`), `ureq` with rustls (`watch-remote`). The release binary is about 3.6 MB; `emit` still runs in about 3.6 ms because none of the image or terminal code loads on that path.
+  - Dependencies: `serde`/`serde_json`, `clap` (not used by `emit`), `ulid`, `humantime`, `resvg` (images), `crossterm` (`tail`), `ureq` with rustls (`watch-remote`), and `libc` (Unix) or `windows-sys` (Windows) for the process tree. The release binary is about 3.6 MB; `emit` still runs in about 3.6 ms because none of the image or terminal code loads on that path.
 - **Code layout:**
   - `event.rs`: envelope and payload types.
   - `adapter/`: one module per provider.
   - `emit.rs`, `store.rs`, `reducer.rs`, `clock.rs`.
+  - `link.rs` (parent and trace variables), `process.rs` (the process tree), `run.rs` (`agent-graph run`), `adapter/shell.rs` (spotting agent launches in shell commands).
   - `timeline.rs`: the graph at any moment, and timeline stops. Shared by the local viewer and the site.
   - `resume.rs`: the command that reopens a session in its agent.
   - `render.rs` (text), `live.rs` (`tail`), `image.rs` (`snapshot`), `remote.rs` (`watch-remote`).
@@ -509,7 +526,8 @@ Viewers can step through the log exactly as they can locally. Each log can have 
   - reducer tests;
   - a schema test that validates everything we emit;
   - tests that run the real binary, the way hooks do, and that talk to the viewer over real sockets;
-  - the example logs (`examples/`): 17 sessions of normal work and edge cases, with a test per scenario.
+  - linked sessions (`tests/sessions.rs`), and `emit` and `run` through the real binary;
+  - the example logs (`examples/`): 23 sessions of normal work and edge cases, with a test per scenario.
 - **Distribution:**
   - For now, `cargo install --path .`. Prebuilt binaries per platform and package managers (Homebrew, winget/Scoop) come later.
   - `agent-graph install claude-code` safely merges hook config into the provider's settings (§5.2). Other providers' installers come with their adapters.
@@ -525,7 +543,7 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 | **2b** | Sharing site (paste, upload, `watch-remote`, passwords), viewer via WebAssembly | Share a live graph by link; view it on a phone | Done; tested against the Firestore emulator |
 | **2c** | An `/agent-graph` command installed with the hooks (a skill in Claude Code, Codex and Cursor; a TOML command in Gemini CLI): a snapshot plus a summary, or a live link | Check on agents from any session, or a phone | Done; tested with a live Claude Code session |
 | **3** | Codex adapter, then Gemini | Proves the design works across providers | |
-| **4** | Correlation methods 1–3, `agent-graph run`, shell-launched session waits | Cross-session links and waits | |
+| **4** | Correlation methods 1–3, `agent-graph run`, shell-launched session waits | Cross-session links and waits | Done; checked with Claude Code starting `claude -p` from its shell |
 | **5** | Cursor/Copilot/OpenCode adapters, optional LLM summaries, `gc` | Wider coverage | |
 
 ## 12. Open questions and risks
@@ -533,8 +551,8 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 - **Payload drift.** Providers change hook payloads between versions. Mitigations: tolerant adapters, `source.adapter` on every event, and raw-capture fixtures in the tests. The first real one is `tests/fixtures/claude-code/live-2.1.118-todowrite.jsonl`. Claude Code's hook payloads don't include its version, so `source.provider_version` is empty for now.
 - **Hook overhead.** Measured in phase 1 at about 3.6 ms per hook. If that ever matters, a Unix-socket fast path to a resident `view` process is the fallback.
 - **Pairing a spawn with its child.** *Resolved for Claude Code:* `PostToolUse(Agent)` reports `agentId`, which matches `SubagentStart`'s `agent_id` (checked in a live session). The reducer's guess only matters while a foreground agent is still running, and can briefly pair parallel agents of the same type the wrong way round until they return.
-- **Pairing shell-launched sessions (phase 4).** If a session starts several agent CLIs from parallel shell calls, their requests can't be told apart by timing alone. The process tree (the child's ancestor is that specific shell process) should settle it.
-- **Crashed sessions** never emit `session.ended`. The staleness rule covers this for now; a PID liveness check can follow once `session.started` records a PID (phase 4).
+- **Pairing shell-launched sessions.** Nothing names the child when a shell command returns, so the reducer guesses: the oldest unpaired request, preferring the same program. Two parallel launches of the same program can be paired the wrong way round. The child's ancestors include the shell each call ran in, but the `PreToolUse` hook runs in a different process and can't see that shell's pid, so this can't be settled yet.
+- **Crashed sessions** never emit `session.ended`. The staleness rule covers this for now. `session.started` now records the agent's process, but a liveness check also needs to know the log came from this machine (a shared or copied log's processes would all look dead), so it waits for a host id in `source`.
 - **False "stale?" during long, quiet work.** We only hook the tools that matter to the graph, so an agent that spends 30+ minutes in `Bash`, `Edit` and `Read` calls produces no events and gets flagged, even though it's healthy. Likewise, one long-running command (a 40-minute build) is silent however we hook it. A fix: a lightweight `activity` event on `PreToolUse`/`PostToolUse` for every tool. The node could then show "running `npm test` for 12m", and a node inside a tool call wouldn't be flagged. That's one extra background process per tool call (about 4 ms, never blocking), plus some log growth. Until then, `--stale-minutes` is the knob.
 - **Clock skew between hooks.** Events are ordered by the time each hook process started. Background hooks that start within a millisecond of each other could be recorded out of order. The reducer tolerates the likely cases (e.g. a child starting before its request is seen), but a per-session sequence number may be needed if this shows up in practice.
 - **Privacy.** Redaction defaults must be conservative. Task text and subagent descriptions can still contain sensitive details, so `~/.agent-graph/` is created readable only by the current user.
@@ -543,7 +561,6 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 - **The public site.** Nothing limits how many logs one client creates, and there's no way yet to delete a shared log. Both are needed before the site is widely used. Rotating `AGENT_GRAPH_SECRET` invalidates every write key and viewer cookie. Losing `AGENT_GRAPH_ENCRYPTION_KEY` makes every stored log unreadable, and there's no key rotation yet (the format has a version byte for it).
 - **Items still to verify:**
   - Hooks on real Windows: the quoted, forward-slash hook command under Claude Code's Windows shell (CI covers our code on Windows, but not Claude Code itself)
-  - `CLAUDE_ENV_FILE` behaviour on current Claude Code
   - Claude Code's hook `if` filter for narrowing `Bash` matches
   - Codex and Gemini todo/plan tool names
   - Cursor CLI hook support

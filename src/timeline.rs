@@ -209,11 +209,14 @@ fn stop(e: &Envelope, graph: &Graph) -> Stop {
 /// A name for a node referred to from somewhere else: sessions by folder.
 fn other_name(graph: &Graph, id: &str) -> String {
     match graph.nodes.get(id) {
-        Some(node) if node.kind == NodeKind::Session => node
-            .cwd
-            .as_deref()
-            .and_then(|c| c.rsplit(['/', '\\']).find(|s| !s.is_empty()))
-            .map_or_else(|| name(graph, id), |dir| format!("session {dir}")),
+        Some(node) if node.kind == NodeKind::Session => match &node.title {
+            Some(title) => title.clone(),
+            None => node
+                .cwd
+                .as_deref()
+                .and_then(|c| c.rsplit(['/', '\\']).find(|s| !s.is_empty()))
+                .map_or_else(|| name(graph, id), |dir| format!("session {dir}")),
+        },
         _ => name(graph, id),
     }
 }
@@ -260,12 +263,15 @@ pub fn describe(e: &Envelope, graph: &Graph) -> (&'static str, String) {
     match e.payload() {
         Payload::SessionStarted(d) => (
             "lifecycle",
-            match d.source.as_deref() {
-                None | Some("startup") => "Session started".to_string(),
-                Some("resume") => "Session resumed".to_string(),
-                Some("clear") => "Conversation cleared".to_string(),
-                Some("compact") => "Context compacted".to_string(),
-                Some(other) => format!("Session started ({other})"),
+            match (d.source.as_deref(), &e.parent) {
+                (None | Some("startup" | "run"), Some(parent)) => {
+                    format!("Session started by {}", other_name(graph, parent))
+                }
+                (None | Some("startup" | "run"), None) => "Session started".to_string(),
+                (Some("resume"), _) => "Session resumed".to_string(),
+                (Some("clear"), _) => "Conversation cleared".to_string(),
+                (Some("compact"), _) => "Context compacted".to_string(),
+                (Some(other), _) => format!("Session started ({other})"),
             },
         ),
         Payload::SessionEnded(_) => ("lifecycle", "Session ended".to_string()),
@@ -320,7 +326,9 @@ pub fn describe(e: &Envelope, graph: &Graph) -> (&'static str, String) {
                 SpawnKind::Agent => d
                     .agent_type
                     .map_or("an agent".to_string(), |t| format!("{t} agent")),
-                SpawnKind::Session => "a session".to_string(),
+                SpawnKind::Session => d
+                    .agent_type
+                    .map_or("a session".to_string(), |t| format!("a {t} session")),
             };
             let mut label = with_detail(format!("Asked for {what}"), d.purpose.as_deref());
             if d.background {
@@ -329,11 +337,29 @@ pub fn describe(e: &Envelope, graph: &Graph) -> (&'static str, String) {
             ("agent", label)
         }
         Payload::SpawnReturned(d) => {
-            let child = d.child.as_deref().map(|c| name(graph, c));
-            let label = match (child, d.outcome.as_deref()) {
-                (Some(c), Some("async_launched")) => format!("{c} launched in the background"),
-                (Some(c), _) => format!("{c} returned its result"),
-                (None, _) => "Agent call returned".to_string(),
+            let spawn = node.and_then(|n| n.spawns.iter().find(|s| s.call_id == d.call_id));
+            let session = spawn.is_some_and(|s| s.kind == SpawnKind::Session);
+            // A session started from the shell is paired by the reducer.
+            let child = d
+                .child
+                .as_deref()
+                .or_else(|| spawn.and_then(|s| s.child.as_deref()))
+                .map(|c| {
+                    if session {
+                        other_name(graph, c)
+                    } else {
+                        name(graph, c)
+                    }
+                });
+            let label = match (child, d.outcome.as_deref(), session) {
+                (Some(c), Some("async_launched"), _) => format!("{c} launched in the background"),
+                (Some(c), _, true) if spawn.is_some_and(|s| s.background) => {
+                    format!("{c} launched in the background")
+                }
+                (Some(c), _, true) => format!("{c} finished, and the command returned"),
+                (Some(c), _, false) => format!("{c} returned its result"),
+                (None, _, true) => "The command returned".to_string(),
+                (None, _, false) => "Agent call returned".to_string(),
             };
             ("agent", label)
         }

@@ -122,6 +122,19 @@ pub struct SessionStarted {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
+    /// How the envelope's `parent` was found: `env` (inherited from the
+    /// parent's shell) or `run` (set by `agent-graph run`). Without a
+    /// `parent`, the reducer may still link the session through `ancestors`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_method: Option<String>,
+    /// The agent's process, as `<pid>@<start time>`: the start time makes it
+    /// unique even after the pid is reused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process: Option<String>,
+    /// The processes above it, nearest first, in the same form. A session
+    /// whose `process` appears here started this one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

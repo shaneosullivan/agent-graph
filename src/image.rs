@@ -200,9 +200,13 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
     // Header.
     let title = match root.kind {
         NodeKind::Session => root
-            .cwd
+            .title
             .as_deref()
-            .and_then(|cwd| cwd.rsplit(['/', '\\']).find(|s| !s.is_empty()))
+            .or_else(|| {
+                root.cwd
+                    .as_deref()
+                    .and_then(|cwd| cwd.rsplit(['/', '\\']).find(|s| !s.is_empty()))
+            })
             .unwrap_or("Session")
             .to_string(),
         NodeKind::Agent => name(root),
@@ -238,7 +242,7 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
     // Anything that needs the user, first.
     for node in nodes.iter().filter(|n| n.state == State::InputRequired) {
         let who = if node.kind == NodeKind::Session {
-            "Session".to_string()
+            crate::render::card_name(node)
         } else {
             name(node)
         };
@@ -347,13 +351,14 @@ fn card(c: &mut Canvas, graph: &Graph, n: &Node, x: f32, y: f32, p: &Palette) ->
 
     // Lay out the text first so we know the height.
     let name = if n.kind == NodeKind::Session {
-        "Session".to_string()
+        crate::render::card_name(n)
     } else {
         name(n)
     };
     let name = fit(&name, inner - progress_w - 90.0, 14.0, true);
     let mut body: Vec<(String, f32, u16, &str)> = Vec::new(); // text, size, weight, colour
-    if n.kind == NodeKind::Agent {
+    // Why it was started: for agents, and sessions another started.
+    if n.kind == NodeKind::Agent || n.parent.is_some() {
         if let Some(purpose) = &n.purpose {
             for line in wrap(purpose, inner, 13.0, false, 2) {
                 body.push((line, 13.0, 400, p.text));

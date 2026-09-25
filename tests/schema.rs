@@ -53,3 +53,71 @@ fn schema_rejects_malformed_events() {
     });
     assert!(!validator.is_valid(&bad));
 }
+
+/// What `emit` adds when a session starts (its parent, processes and trace),
+/// and what `agent-graph run` records, as the real binary writes them.
+#[test]
+fn linked_sessions_and_runs_validate() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let home = tempfile::tempdir().unwrap();
+    let bin = || {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_agent-graph"));
+        c.env("AGENT_GRAPH_HOME", home.path())
+            .env("AGENT_GRAPH_PARENT", "claude-code:parent")
+            .env(
+                "TRACEPARENT",
+                "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            )
+            .env_remove("CLAUDE_ENV_FILE");
+        c
+    };
+    let mut emit = bin()
+        .args(["emit", "--provider", "claude-code"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let payload = fixture("claude-code/session.jsonl")[0].to_string();
+    emit.stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    assert!(emit.wait().unwrap().success());
+    let exit = if cfg!(windows) {
+        ["cmd", "/C", "exit 0"]
+    } else {
+        ["sh", "-c", "exit 0"]
+    };
+    assert!(
+        bin()
+            .args(["run", "--"])
+            .args(exit)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let validator = validator();
+    let mut checked = 0;
+    for file in std::fs::read_dir(home.path().join("events")).unwrap() {
+        for line in std::fs::read_to_string(file.unwrap().path())
+            .unwrap()
+            .lines()
+        {
+            let line: Value = serde_json::from_str(line).unwrap();
+            let errors: Vec<String> = validator
+                .iter_errors(&line)
+                .map(|e| e.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{line}\n{errors:#?}");
+            checked += 1;
+        }
+    }
+    assert_eq!(
+        checked,
+        1 + 3,
+        "the session start, and the run's three events"
+    );
+}

@@ -117,9 +117,16 @@ const localId = (id) => id.split(/[/:]/).pop();
 const short = (id) => localId(id).slice(0, 8);
 const basename = (p) => (p ? p.split(/[\\/]/).filter(Boolean).pop() : null);
 
+const PROVIDER_NAME = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor' };
+
 function nodeName(node) {
   if (!node) return 'Unknown';
-  if (node.kind === 'session') return basename(node.cwd) || `Session ${short(node.id)}`;
+  if (node.kind === 'session') {
+    if (node.title) return node.title;
+    // One session started by another often shares its folder, so say which.
+    if (node.parent) return `${PROVIDER_NAME[node.provider] || node.provider} session ${short(node.id)}`;
+    return basename(node.cwd) || `Session ${short(node.id)}`;
+  }
   return `${node.agent_type || 'Agent'} ${short(node.id)}`;
 }
 
@@ -486,12 +493,12 @@ function card(graph, n, ringed, flash) {
       h(
         'span',
         { class: 'node-head' },
-        h('span', { class: 'node-name' }, n.kind === 'session' ? 'Session' : nodeName(n)),
+        h('span', { class: 'node-name' }, n.kind === 'session' && !n.parent && !n.title ? 'Session' : nodeName(n)),
         h('span', { class: `state ${n.state}` }, STATE_LABEL[n.state]),
         n.background ? h('span', { class: 'chip' }, 'background') : null,
         n.stale ? h('span', { class: 'chip warn', title: 'No events for a while; it may have crashed' }, 'stale?') : null,
       ),
-      n.kind === 'agent' && n.purpose ? h('span', { class: 'node-purpose' }, n.purpose) : null,
+      n.purpose && (n.kind === 'agent' || n.parent) ? h('span', { class: 'node-purpose' }, n.purpose) : null,
       n.state === 'input_required'
         ? h('span', { class: 'node-attention' }, `Needs you: ${n.attention || 'waiting for input'}`)
         : n.headline
@@ -555,7 +562,7 @@ function renderDetail() {
     h(
       'div',
       { class: 'detail-head' },
-      h('h2', null, n.kind === 'session' ? `Session · ${nodeName(n)}` : nodeName(n), h('span', { class: `state ${n.state}` }, STATE_LABEL[n.state])),
+      h('h2', null, n.kind === 'session' && !n.parent ? `Session · ${nodeName(n)}` : nodeName(n), h('span', { class: `state ${n.state}` }, STATE_LABEL[n.state])),
       h(
         'div',
         { class: 'idline' },
@@ -617,7 +624,7 @@ function renderDetail() {
   if (n.spawns.length) {
     pane.append(
       section(
-        'Agents it started',
+        n.spawns.some((s) => s.kind === 'session') ? 'Agents and sessions it started' : 'Agents it started',
         h(
           'ul',
           { class: 'list' },
@@ -669,9 +676,17 @@ function renderDetail() {
   }
 
   const facts = [
-    ['Kind', n.kind === 'session' ? 'Session' : `${n.agent_type || 'Agent'}${n.background ? ' (background)' : ''}`],
+    [
+      'Kind',
+      n.provider === 'run'
+        ? 'A command, run by agent-graph run'
+        : n.kind === 'session'
+          ? 'Session'
+          : `${n.agent_type || 'Agent'}${n.background ? ' (background)' : ''}`,
+    ],
     ['Provider', n.provider],
     ['Parent', n.parent ? link(n.parent) : null],
+    ['Linked by', LINK_LABEL[n.link]],
     ['Folder', n.cwd],
     ['Started', n.started_at && clock(n.started_at)],
     ['Ended', n.ended_at && clock(n.ended_at)],
@@ -737,6 +752,13 @@ async function openSession(id) {
   }
   renderDetail();
 }
+
+/** How a session found the session that started it (`node.link`). */
+const LINK_LABEL = {
+  env: 'Inherited from its parent’s shell',
+  run: 'agent-graph run',
+  process: 'Its processes (the parent’s agent started it)',
+};
 
 function section(title, ...body) {
   return h('section', null, h('h3', null, title), ...body);

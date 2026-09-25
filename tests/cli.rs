@@ -8,8 +8,13 @@ use std::process::{Command, Output, Stdio};
 
 use common::fixture;
 
+/// The binary, without any link to a session this test run is inside.
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_agent-graph"));
+    for var in ["AGENT_GRAPH_PARENT", "TRACEPARENT", "CLAUDE_ENV_FILE"] {
+        command.env_remove(var);
+    }
+    command
 }
 
 fn emit(home: &Path, args: &[&str], stdin: &str, extra_env: &[(&str, &str)]) -> Output {
@@ -365,4 +370,171 @@ fn help_explains_the_program() {
     let install =
         String::from_utf8(bin().args(["install", "--help"]).output().unwrap().stdout).unwrap();
     assert!(install.contains("Examples:") && install.contains("install codex"));
+}
+
+// ---------- linking sessions (design §6) ----------
+
+fn events_in(home: &Path) -> Vec<serde_json::Value> {
+    let mut files: Vec<_> = std::fs::read_dir(home.join("events"))
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    files.sort();
+    files
+        .iter()
+        .flat_map(|f| {
+            read(f)
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn a_starting_session_links_to_its_parent_and_passes_itself_on() {
+    let home = tempfile::tempdir().unwrap();
+    let env_file = home.path().join("claude-env.sh");
+    let inherited = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    let payload = fixture("claude-code/session.jsonl")[0].to_string();
+    let out = emit(
+        home.path(),
+        &["--provider", "claude-code"],
+        &payload,
+        &[
+            ("AGENT_GRAPH_PARENT", "claude-code:the-parent"),
+            ("TRACEPARENT", inherited),
+            ("CLAUDE_ENV_FILE", env_file.to_str().unwrap()),
+        ],
+    );
+    assert!(out.status.success() && out.stdout.is_empty());
+
+    let events = events_in(home.path());
+    let started = &events[0];
+    assert_eq!(started["parent"], "claude-code:the-parent");
+    assert_eq!(started["data"]["link_method"], "env");
+    let traceparent = started["trace"]["traceparent"].as_str().unwrap();
+    assert!(
+        traceparent.starts_with("00-0af7651916cd43dd8448eb211c80319c-"),
+        "continues the trace: {traceparent}"
+    );
+    if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
+        let process = started["data"]["process"]
+            .as_str()
+            .expect("its agent's process");
+        assert!(process.contains('@'));
+        // The "agent" here is this test, which ran the hook.
+        assert!(process.starts_with(&format!("{}@", std::process::id())));
+    }
+
+    let node = "claude-code:5f2c1e8a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+    assert_eq!(
+        read(&env_file),
+        format!("export AGENT_GRAPH_PARENT='{node}'\nexport TRACEPARENT='{traceparent}'\n"),
+        "sessions it starts will link back to it"
+    );
+}
+
+#[test]
+fn a_session_is_not_its_own_parent() {
+    let home = tempfile::tempdir().unwrap();
+    let payload = fixture("claude-code/session.jsonl")[0].to_string();
+    let own = "claude-code:5f2c1e8a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+    emit(
+        home.path(),
+        &["--provider", "claude-code"],
+        &payload,
+        &[("AGENT_GRAPH_PARENT", own)],
+    );
+    let events = events_in(home.path());
+    assert!(events[0].get("parent").is_none());
+    assert!(events[0]["data"].get("link_method").is_none());
+}
+
+/// A command that prints `AGENT_GRAPH_PARENT` and exits with `code`.
+fn print_parent_and_exit(code: u8) -> Vec<String> {
+    if cfg!(windows) {
+        vec![
+            "cmd".into(),
+            "/C".into(),
+            format!("echo %AGENT_GRAPH_PARENT%& exit {code}"),
+        ]
+    } else {
+        vec![
+            "sh".into(),
+            "-c".into(),
+            format!("echo \"$AGENT_GRAPH_PARENT\"; exit {code}"),
+        ]
+    }
+}
+
+#[test]
+fn run_puts_a_command_in_the_graph_and_passes_on_its_exit_code() {
+    let home = tempfile::tempdir().unwrap();
+    let out = bin()
+        .args(["run", "--name", "worker", "--"])
+        .args(print_parent_and_exit(3))
+        .env("AGENT_GRAPH_HOME", home.path())
+        .env("AGENT_GRAPH_PARENT", "claude-code:outer")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+
+    let events = events_in(home.path());
+    let node = events[0]["node"].as_str().unwrap();
+    assert!(node.starts_with("run:"));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        node,
+        "the command can link what it starts to the run"
+    );
+    let kinds: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        ["session.started", "status", "status", "session.ended"]
+    );
+    assert_eq!(events[0]["parent"], "claude-code:outer");
+    assert_eq!(events[0]["data"]["title"], "worker");
+    assert_eq!(events[2]["data"]["state"], "failed");
+    assert_eq!(events[2]["data"]["summary"], "Exited with code 3");
+
+    let tree = bin()
+        .args(["tree", "--all"])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .output()
+        .unwrap();
+    let tree = String::from_utf8_lossy(&tree.stdout);
+    assert!(tree.contains("worker"), "{tree}");
+}
+
+#[test]
+fn run_succeeds_quietly_and_reports_a_missing_program() {
+    let home = tempfile::tempdir().unwrap();
+    let ok = bin()
+        .args(["run", "--"])
+        .args(print_parent_and_exit(0))
+        .env("AGENT_GRAPH_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(ok.status.success());
+    assert!(
+        ok.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let events = events_in(home.path());
+    assert_eq!(events.len(), 3, "started, working, ended");
+    assert!(events[0].get("parent").is_none());
+
+    let home = tempfile::tempdir().unwrap();
+    let missing = bin()
+        .args(["run", "--", "agent-graph-no-such-program"])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(127));
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("can't run agent-graph-no-such-program")
+    );
+    let events = events_in(home.path());
+    assert_eq!(events[2]["data"]["state"], "failed");
 }

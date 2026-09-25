@@ -1,6 +1,6 @@
 # Example logs
 
-`logs/events/` holds made-up event logs for 17 sessions. They cover normal work and the edge cases Agent Graph has to handle. Every event is timestamped relative to **2026-09-25 12:00:00 UTC**. Set `AGENT_GRAPH_NOW` to that time when you open them, so "hung" and "5 minutes ago" mean the same thing whenever you look.
+`logs/events/` holds made-up event logs for 23 sessions. They cover normal work and the edge cases Agent Graph has to handle. Every event is timestamped relative to **2026-09-25 12:00:00 UTC**. Set `AGENT_GRAPH_NOW` to that time when you open them, so "hung" and "5 minutes ago" mean the same thing whenever you look.
 
 ## Look at them
 
@@ -43,7 +43,7 @@ Each session's folder name, shown as its title in the viewer, says what it's abo
 | `e0000003` | mobile-app | **Crashed session:** working, then silence for 2½ hours, with no Stop or SessionEnd | `stale?` |
 | `e0000004` | infra-terraform | **Unanswered permission prompt** for 3 hours | **Needs you**, and *not* stale: waiting on you isn't a hang |
 | `e0000005`, `e0000006` | api-gateway, auth-service | **Deadlock:** each session waits on the other | Both marked `DEADLOCK` |
-| `e0000007` + `e0000008` | web-frontend | A Claude Code session waiting on a Codex session it launched | The Codex session nested under it; the wait counts Codex's 2 open tasks. Illustrative only: the Codex adapter isn't built yet |
+| `e0000007` + `e0000008` | web-frontend | A Claude Code session waiting on a Codex session it **launched from its shell**, which linked itself through the environment | The Codex session nested under it; the wait counts Codex's 2 open tasks. Illustrative only: the Codex adapter isn't built yet |
 | `e0000009` | docs-site | **Three parallel agents** start in a different order than requested; one fails, one is still running | Each agent matched to its own request and purpose, and the session waiting only on the running one |
 | `e000000a` | ml-pipeline | **Agents three levels deep** (Plan → Explore → worker) | Each agent under the one that asked for it, not flat under the session |
 | `e000000b` | data-migration | **Session ended with a background agent still running** | The agent is `canceled` |
@@ -54,6 +54,8 @@ Each session's folder name, shown as its title in the viewer, says what it's abo
 | `e0000010` | old-experiment | **Idle for three days** | Hidden from "last 24 hours" views (`--all`, or "Older" in the viewer); never stale |
 | `e0000011` | crash-test | **Damaged file:** a garbage line, a blank line, and a last line cut off mid-write | The good lines still count; 2 lines skipped |
 | `e0000012` | schema-v2 | **Events from a newer writer:** an unknown type, a known type with unreadable data, unknown fields | Ignored without errors |
+| `e0000013` + `e0000014`, `e0000015` | nightly-docs | **`agent-graph run`** of a script that started two headless Claude Code sessions | Both under the run node ("Linked by: agent-graph run"); one finished, one working |
+| `e0000016` + `e0000017` | billing | A session started from another's shell **without inheriting its identity** | Linked anyway, because the parent's agent process is among the child's ancestors ("Linked by: its processes"); the parent is waiting on it |
 
 The directory also has an empty `empty.jsonl` and a `notes.txt`, which the loader has to skip.
 

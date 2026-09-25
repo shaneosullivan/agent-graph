@@ -60,7 +60,8 @@
             ["AGENT_GRAPH_HOME=<dir>", "Keep data somewhere else"],
             ["AGENT_GRAPH_CAPTURE_BODIES=1", "Also record message bodies and final agent messages"],
             ["AGENT_GRAPH_RAW=1", "Also keep raw hook payloads, for building adapters"],
-            ["AGENT_GRAPH_NOW=<RFC 3339 time>", "Read logs as if it were this time"]
+            ["AGENT_GRAPH_NOW=<RFC 3339 time>", "Read logs as if it were this time"],
+            ["AGENT_GRAPH_AGENT_COMMANDS=a,b", "More programs that start an agent session when run from an agent's shell (claude, codex, gemini and other common ones are known)"]
           ]
         }
       ]
@@ -75,7 +76,7 @@
         { "text": "Set up a coding agent to work with Agent Graph. For Claude Code this does two things:" },
         {
           "steps": [
-            { "text": "Adds hooks to Claude Code's settings, so every new session is recorded. Each hook runs `agent-graph emit` in the background: it takes a few milliseconds, never blocks the agent, and never sends anything anywhere. Everything else in the settings file is kept, and the old file is backed up beside it (settings.json.agent-graph.bak). Sessions that were already running aren't recorded; start a new one." },
+            { "text": "Adds hooks to Claude Code's settings, so every new session is recorded, including sessions one starts from its shell (`claude -p`, `codex exec`, `agent-graph run`), which appear under it. Each hook runs `agent-graph emit` in the background: it takes a few milliseconds, never blocks the agent, and never sends anything anywhere. Everything else in the settings file is kept, and the old file is backed up beside it (settings.json.agent-graph.bak). Sessions that were already running aren't recorded; start a new one. Installing again brings older hooks up to date." },
             { "text": "Adds an /agent-graph command (a skill). Run it in any session for a picture of the session and a short summary of what needs you, what looks stuck and what's in progress. `/agent-graph all` covers every session from the last day, and `/agent-graph share` gives you a live link. Claude can also use it by itself when you ask how your agents are doing." }
           ]
         },
@@ -294,6 +295,32 @@
         { "command": "agent-graph watch-remote --password=s3cret --save-default-password", "text": "Require a password, and use it from now on." },
         { "command": "agent-graph watch-remote --password= --save-default-password", "text": "Forget the saved password (and share this time without one)." },
         { "command": "agent-graph watch-remote --url=http://localhost:3000", "text": "Share to a copy of the site you're running yourself." }
+      ]
+    },
+    {
+      "name": "run",
+      "summary": "Run any command as part of the graph, linked to whatever started it",
+      "description": [
+        { "text": "Runs a command and puts it in the graph as a node of its own: working while it runs, then completed, or failed with its exit code. Its input and output pass straight through, and `run` exits with its exit code." },
+        { "text": "Use it for agents without hooks (`agent-graph run -- aider`), or for a script that starts several agents, which then appear under it." },
+        { "heading": "How it links" },
+        {
+          "list": [
+            "Started from an agent's shell (or anywhere `AGENT_GRAPH_PARENT` is set), it goes under that session.",
+            "The command gets `AGENT_GRAPH_PARENT` and `TRACEPARENT` for the new node, so agents it starts that have Agent Graph's hooks go under it.",
+            "When a Claude Code session runs it in its shell, the session waits on it, as on any agent it starts."
+          ]
+        },
+        { "text": "Put the command after `--`, so its own options aren't read as `run`'s." }
+      ],
+      "options": [
+        { "id": "name", "flag": "--name <NAME>", "text": "What to call it in the graph. Defaults to the program's name." },
+        { "id": "command", "flag": "<COMMAND>...", "text": "The command to run, and its arguments." }
+      ],
+      "examples": [
+        { "command": "agent-graph run -- aider --yes", "text": "Aider has no hooks: this shows it in the graph while it runs." },
+        { "command": "agent-graph run --name nightly -- ./start-workers.sh", "text": "Group the sessions a script starts under one node called nightly." },
+        { "command": "agent-graph run -- claude -p \"update the changelog\"", "text": "A headless Claude Code session, under a node that records how it exited." }
       ]
     }
   ]

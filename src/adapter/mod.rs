@@ -5,6 +5,7 @@
 //! merging incremental task updates) is left to the reducer.
 
 pub mod claude_code;
+pub mod shell;
 
 use serde_json::Value;
 
@@ -23,6 +24,8 @@ pub struct Capture {
 pub struct Draft {
     pub node: String,
     pub parent: Option<String>,
+    /// W3C Trace Context, e.g. `{"traceparent": "00-…"}`.
+    pub trace: Option<Value>,
     pub payload: Payload,
 }
 
@@ -31,6 +34,7 @@ impl Draft {
         Draft {
             node: node.into(),
             parent: None,
+            trace: None,
             payload,
         }
     }
@@ -54,6 +58,12 @@ pub trait Adapter {
     /// Adapter name and version, recorded in each event's `source`.
     fn adapter_id(&self) -> &'static str;
     fn translate(&self, input: &Value, capture: Capture) -> Result<Translation, String>;
+    /// The environment variable naming a file of `export` lines that the
+    /// provider applies to its shell commands, if it has one. That's how a
+    /// session passes its identity to sessions it starts (see `link`).
+    fn env_file_var(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 pub fn by_name(name: &str) -> Option<Box<dyn Adapter>> {

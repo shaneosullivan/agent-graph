@@ -72,6 +72,14 @@ pub struct Node {
     /// The spawn request (`call_id`) this node was bound to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spawned_by: Option<String>,
+    /// For a session started by another: how the link was found. `env` (it
+    /// inherited its parent's identity), `run` (`agent-graph run` started
+    /// it) or `process` (its parent's agent is among its processes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    /// The session's agent process, `<pid>@<start>`, when recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process: Option<String>,
     pub tasks: Vec<Task>,
     pub spawns: Vec<Spawn>,
     pub waits: Vec<Wait>,
@@ -193,6 +201,9 @@ pub fn reduce(mut events: Vec<Envelope>, opts: &Options) -> Graph {
 #[derive(Default)]
 struct Reducer {
     nodes: BTreeMap<String, Node>,
+    /// Which session each agent process (`<pid>@<start>`) belongs to: the
+    /// latest one started in it.
+    processes: BTreeMap<String, String>,
 }
 
 impl Reducer {
@@ -225,9 +236,30 @@ impl Reducer {
                     node.state = State::Idle;
                     node.ended_at = None;
                 }
+                if e.parent.is_some() {
+                    node.link = d.link_method.clone().or(Some("env".to_string()));
+                }
+                let id = e.node.clone();
+                if let Some(process) = d.process {
+                    node.process = Some(process.clone());
+                    // Found by process, a parent must have started first.
+                    if e.parent.is_none() && node.parent.is_none() {
+                        self.link_by_process(&id, &d.ancestors, &e.ts);
+                    }
+                    self.processes.insert(process, id.clone());
+                } else if e.parent.is_none() && node.parent.is_none() {
+                    self.link_by_process(&id, &d.ancestors, &e.ts);
+                }
+                if self.nodes[&id].parent.is_some() && self.nodes[&id].spawned_by.is_none() {
+                    self.bind_session_by_guess(&id);
+                }
             }
             Payload::SessionEnded(_) => {
-                node.state = State::Completed;
+                // A session that already said how it ended (`agent-graph run`
+                // reports a failure first) keeps that.
+                if !node.state.is_terminal() {
+                    node.state = State::Completed;
+                }
                 node.ended_at = Some(e.ts.clone());
                 let id = e.node.clone();
                 self.close_waits_on(&id, &e.ts, true);
@@ -397,9 +429,12 @@ impl Reducer {
             Some((parent, _)) => (NodeKind::Agent, Some(parent.to_string())),
             None => (NodeKind::Session, None),
         };
-        let provider = provider
-            .map(String::from)
-            .or_else(|| id.split_once(':').map(|(p, _)| p.to_string()))
+        // Node ids start with their provider, which is right even for a
+        // placeholder made from another provider's event.
+        let provider = id
+            .split_once(':')
+            .map(|(p, _)| p.to_string())
+            .or_else(|| provider.map(String::from))
             .unwrap_or_default();
         self.nodes.insert(
             id.to_string(),
@@ -422,6 +457,8 @@ impl Reducer {
                 purpose: None,
                 background: None,
                 spawned_by: None,
+                link: None,
+                process: None,
                 tasks: Vec::new(),
                 spawns: Vec::new(),
                 waits: Vec::new(),
@@ -568,6 +605,84 @@ impl Reducer {
         }
     }
 
+    /// Links session `id` to the session whose agent process is the nearest
+    /// of `ancestors` (the processes above its own agent's).
+    fn link_by_process(&mut self, id: &str, ancestors: &[String], ts: &str) {
+        let parent = ancestors
+            .iter()
+            .find_map(|p| self.processes.get(p))
+            .filter(|p| *p != id && !self.is_under(p, id))
+            .cloned();
+        if let Some(parent) = parent {
+            self.reparent(id, &parent, None, ts);
+            self.nodes.get_mut(id).expect("exists").link = Some("process".to_string());
+        }
+    }
+
+    /// Whether `node` is `ancestor` or somewhere below it.
+    fn is_under(&self, node: &str, ancestor: &str) -> bool {
+        let mut next = Some(node.to_string());
+        let mut steps = 0;
+        while let Some(id) = next {
+            if id == ancestor {
+                return true;
+            }
+            steps += 1;
+            if steps > self.nodes.len() {
+                return false;
+            }
+            next = self.nodes.get(&id).and_then(|n| n.parent.clone());
+        }
+        false
+    }
+
+    /// Pairs a session that has just linked itself to a parent with the
+    /// request that started it: the oldest unpaired `kind: session` request
+    /// in the parent's session (or its agents) made before it started,
+    /// preferring one for the same program. Nothing names the child when the
+    /// shell command returns, so this guess is final.
+    fn bind_session_by_guess(&mut self, child: &str) {
+        let Some(parent) = self.nodes[child].parent.clone() else {
+            return;
+        };
+        let family = parent.split('/').next().unwrap_or(&parent).to_string();
+        let started = self.nodes[child].started_at.clone().unwrap_or_default();
+        let mut candidates: Vec<(String, String, String, Option<String>)> = self
+            .nodes
+            .iter()
+            .filter(|(id, _)| **id == family || id.starts_with(&format!("{family}/")))
+            .flat_map(|(id, n)| {
+                n.spawns
+                    .iter()
+                    .filter(|s| {
+                        // A background launch returns before its child
+                        // starts; a foreground one only once it's done.
+                        s.kind == SpawnKind::Session
+                            && s.child.is_none()
+                            && (s.background || !s.returned)
+                            && s.requested_at <= started
+                    })
+                    .map(move |s| {
+                        (
+                            s.requested_at.clone(),
+                            id.clone(),
+                            s.call_id.clone(),
+                            s.agent_type.clone(),
+                        )
+                    })
+            })
+            .collect();
+        candidates.sort();
+        let child_node = &self.nodes[child];
+        let pick = candidates
+            .iter()
+            .find(|c| c.3.as_deref().is_some_and(|p| runs(child_node, p)))
+            .or_else(|| candidates.first());
+        if let Some((_, requester, call_id, _)) = pick.cloned() {
+            self.bind(&requester, &call_id, child);
+        }
+    }
+
     fn close_waits_on(&mut self, target: &str, ts: &str, spawn_waits_too: bool) {
         for node in self.nodes.values_mut() {
             for wait in node.waits.iter_mut().filter(|w| {
@@ -579,12 +694,18 @@ impl Reducer {
         }
     }
 
+    /// A session's agents stop with it. Sessions it started are processes of
+    /// their own, which report their own ends, so they (and what's under
+    /// them) are left alone.
     fn cancel_unfinished_descendants(&mut self, id: &str, ts: &str) {
         let mut queue: VecDeque<String> = self.nodes[id].children.iter().cloned().collect();
         while let Some(child) = queue.pop_front() {
             let Some(node) = self.nodes.get_mut(&child) else {
                 continue;
             };
+            if node.kind == NodeKind::Session {
+                continue;
+            }
             if !node.state.is_terminal() {
                 node.state = State::Canceled;
                 node.ended_at = Some(ts.to_string());
@@ -701,6 +822,15 @@ impl Reducer {
             cycle,
         }
     }
+}
+
+/// Whether session `node` is (probably) running `program`, the command a
+/// spawn request named: `claude` for a `claude-code` session, or the program
+/// `agent-graph run` was given.
+fn runs(node: &Node, program: &str) -> bool {
+    node.provider == program
+        || node.provider.starts_with(&format!("{program}-"))
+        || (node.provider == "run" && node.title.as_deref() == Some(program))
 }
 
 fn end_wait(node: &mut Node, wait_id: &str, ts: &str) {

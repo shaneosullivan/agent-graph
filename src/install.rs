@@ -66,15 +66,17 @@ const CLAUDE_CODE_HOOKS: &[HookSpec] = &[
         matcher: None,
         background: true,
     },
+    // Bash: to see a session start another agent from its shell. For any
+    // other command, `emit` records nothing.
     HookSpec {
         event: "PreToolUse",
-        matcher: Some("Agent|Task|AskUserQuestion|ExitPlanMode"),
+        matcher: Some("Agent|Task|AskUserQuestion|ExitPlanMode|Bash"),
         background: true,
     },
     HookSpec {
         event: "PostToolUse",
         matcher: Some(
-            "Agent|Task|TaskCreate|TaskUpdate|TodoWrite|SendMessage|AskUserQuestion|ExitPlanMode",
+            "Agent|Task|TaskCreate|TaskUpdate|TodoWrite|SendMessage|AskUserQuestion|ExitPlanMode|Bash",
         ),
         background: true,
     },
@@ -243,7 +245,7 @@ mod tests {
         );
         assert_eq!(
             settings["hooks"]["PreToolUse"][0]["matcher"],
-            "Agent|Task|AskUserQuestion|ExitPlanMode"
+            "Agent|Task|AskUserQuestion|ExitPlanMode|Bash"
         );
         assert_eq!(our_events(&settings).len(), CLAUDE_CODE_HOOKS.len());
     }

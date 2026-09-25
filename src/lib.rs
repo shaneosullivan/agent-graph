@@ -7,6 +7,7 @@
 pub mod adapter;
 pub mod clock;
 pub mod event;
+pub mod link;
 pub mod paths;
 pub mod reducer;
 pub mod render;
@@ -27,7 +28,11 @@ pub mod install;
 #[cfg(feature = "cli")]
 pub mod live;
 #[cfg(feature = "cli")]
+pub mod process;
+#[cfg(feature = "cli")]
 pub mod remote;
+#[cfg(feature = "cli")]
+pub mod run;
 #[cfg(feature = "cli")]
 pub mod slash;
 #[cfg(feature = "cli")]

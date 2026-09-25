@@ -45,7 +45,9 @@
     "trace": {
       "type": "object",
       "description": "W3C Trace Context.",
-      "properties": { "traceparent": { "type": "string" } }
+      "properties": {
+        "traceparent": { "type": "string", "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$" }
+      }
     },
     "data": { "type": "object" }
   },
@@ -79,8 +81,26 @@
         "cwd": { "type": "string" },
         "source": { "type": "string", "description": "How the session started: startup, resume, clear, compact, …" },
         "title": { "type": "string" },
-        "transcript_path": { "type": "string" }
+        "transcript_path": { "type": "string" },
+        "link_method": {
+          "type": "string",
+          "description": "How the envelope's parent was found: env (inherited from the parent's shell) or run (set by agent-graph run)."
+        },
+        "process": {
+          "$ref": "#/$defs/process",
+          "description": "The agent's process. A later session that has it among its ancestors was started by this one."
+        },
+        "ancestors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/process" },
+          "description": "The processes above the agent's, nearest first."
+        }
       }
+    },
+    "process": {
+      "type": "string",
+      "pattern": "^[0-9]+@[0-9]+$",
+      "description": "<pid>@<start time>. The start time, in whatever form the OS gives it, keeps the id unique after the pid is reused."
     },
     "session.ended": {
       "type": "object",

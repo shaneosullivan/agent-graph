@@ -19,7 +19,7 @@ agent-graph install claude-code
 ```
 
 This does two things:
-- **Recording:** adds hooks to `~/.claude/settings.json`. It keeps everything else in the file and backs it up first. New Claude Code sessions are recorded from then on.
+- **Recording:** adds hooks to `~/.claude/settings.json`. It keeps everything else in the file and backs it up first. New Claude Code sessions are recorded from then on, including sessions one starts from its shell (`claude -p`, `codex exec`, …), which appear under it. Installed before that was added? Run `install` again to update the hooks.
 - **The `/agent-graph` command:** adds a skill you can run in any session. It gives you a picture of the session and a short summary of what needs you, what's stuck and what's in progress, sent to you when the app can show files. `/agent-graph all` covers every recent session, and `/agent-graph share` gives you a live link.
 
 Options:
@@ -50,6 +50,7 @@ Their own sessions aren't recorded yet; only Claude Code has hooks so far.
 | `agent-graph snapshot` | Saves a phone-sized PNG of the current session and prints its path, ready for an agent to send you. `--out x.svg` for SVG, `--json` for the raw graph. |
 | `agent-graph tree` | One-off text tree (`--all` includes older sessions). |
 | `agent-graph watch-remote` | Shares the graph live at [agentgraph.chofter.com](https://agentgraph.chofter.com) and prints the link straight away. See below. |
+| `agent-graph run -- <command>` | Runs any command as a node in the graph, e.g. an agent without hooks (`agent-graph run -- aider`) or a script that starts several agents, which then appear under it. Exits with the command's exit code. |
 
 ```
 claude-code:e0000002  search-indexer  [working]  Rebuilding the index schema (+1 pending)  tasks 0/2  waiting on 1 node (0 open tasks), Explore a91d0160 looks stuck
@@ -88,6 +89,9 @@ Events live in `~/.agent-graph/events/`, one JSON Lines file per session. The fo
 | `AGENT_GRAPH_RAW=1` | Also save raw hook payloads to `raw/`, for building adapters |
 | `AGENT_GRAPH_CAPTURE_BODIES=1` | Keep message bodies and final agent messages (off by default) |
 | `AGENT_GRAPH_NOW` | Pretend it's this time (RFC 3339) when reading logs; used to view the examples |
+| `AGENT_GRAPH_AGENT_COMMANDS` | More programs (comma separated) that start an agent session when an agent runs them from its shell |
+
+A session passes its identity to anything it starts through `AGENT_GRAPH_PARENT` and a W3C `TRACEPARENT` in its shell's environment, so a session started from another links itself under it. When those are missing, it's matched by process instead.
 
 ## Develop
 

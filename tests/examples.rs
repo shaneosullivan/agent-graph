@@ -191,6 +191,35 @@ fn spawn(call: &str, agent_type: &str, purpose: &str, background: bool) -> Paylo
         background,
     })
 }
+/// Another agent started from the session's shell (design §5.2).
+fn shell_spawn(call: &str, program: &str, purpose: &str, background: bool) -> Payload {
+    Payload::SpawnRequested(SpawnRequested {
+        call_id: call.into(),
+        kind: SpawnKind::Session,
+        agent_type: Some(program.into()),
+        purpose: Some(purpose.into()),
+        background,
+    })
+}
+/// A session started by another, which it found through `link`.
+fn started_by(cwd: &str, link: &str) -> Payload {
+    Payload::SessionStarted(SessionStarted {
+        cwd: Some(cwd.into()),
+        source: Some("startup".into()),
+        link_method: Some(link.into()),
+        ..Default::default()
+    })
+}
+/// A session that recorded its agent's process and the ones above it.
+fn started_in(cwd: &str, process: &str, ancestors: &[&str]) -> Payload {
+    Payload::SessionStarted(SessionStarted {
+        cwd: Some(cwd.into()),
+        source: Some("startup".into()),
+        process: Some(process.into()),
+        ancestors: ancestors.iter().map(|a| a.to_string()).collect(),
+        ..Default::default()
+    })
+}
 fn returned(call: &str, child: &str, outcome: &str) -> Payload {
     Payload::SpawnReturned(SpawnReturned {
         call_id: call.into(),
@@ -488,7 +517,8 @@ fn scenarios() -> BTreeMap<&'static str, Log> {
     out.insert("deadlock-b", b);
 
     // A Claude Code session waiting on a Codex session it launched from its
-    // shell. (Illustrative: the Codex adapter doesn't exist yet.)
+    // shell; Codex linked itself through the environment. (Illustrative: the
+    // Codex adapter doesn't exist yet.)
     let mut c = Log::new("claude-code", 7);
     let mut x = Log::new("codex", 8);
     let (sc, sx) = (c.node(), x.node());
@@ -499,14 +529,19 @@ fn scenarios() -> BTreeMap<&'static str, Log> {
             15.0,
             &sc,
             None,
-            wait("w_codex", &sx, "codex exec \"migrate the design tokens\""),
+            shell_spawn(
+                "toolu_codex",
+                "codex",
+                "Migrate the design tokens with Codex",
+                false,
+            ),
         );
     x.at(
         &mut ids,
         14.9,
         &sx,
         Some(&sc),
-        started("/home/dev/web-frontend"),
+        started_by("/home/dev/web-frontend", "env"),
     )
     .at(&mut ids, 14.8, &sx, None, working())
     .at(
@@ -880,6 +915,119 @@ fn scenarios() -> BTreeMap<&'static str, Log> {
     l.raw(&format!("{unknown_type}\n{bad_state}\n{extra_fields}\n"));
     out.insert("future-proof", l);
 
+    // `agent-graph run --name nightly-docs -- ./update-docs.sh`: a script
+    // that starts two headless Claude Code sessions, grouped under the run.
+    // One has finished; the other is still going.
+    let mut r = Log::new("run", 0x13);
+    let mut w1 = Log::new("claude-code", 0x14);
+    let mut w2 = Log::new("claude-code", 0x15);
+    let (sr, s1, s2) = (r.node(), w1.node(), w2.node());
+    r.at(
+        &mut ids,
+        25.0,
+        &sr,
+        None,
+        Payload::SessionStarted(SessionStarted {
+            cwd: Some("/home/dev/docs".into()),
+            source: Some("run".into()),
+            title: Some("nightly-docs".into()),
+            ..Default::default()
+        }),
+    )
+    .at(&mut ids, 25.0, &sr, None, working());
+    w1.at(
+        &mut ids,
+        24.9,
+        &s1,
+        Some(&sr),
+        started_by("/home/dev/docs/api", "run"),
+    )
+    .at(&mut ids, 24.8, &s1, None, working())
+    .at(
+        &mut ids,
+        24.0,
+        &s1,
+        None,
+        todos(&[
+            ("Regenerate the API reference", Completed),
+            ("Check the examples compile", Completed),
+        ]),
+    )
+    .at(&mut ids, 11.0, &s1, None, ended("other"));
+    w2.at(
+        &mut ids,
+        24.9,
+        &s2,
+        Some(&sr),
+        started_by("/home/dev/docs/guides", "run"),
+    )
+    .at(&mut ids, 24.8, &s2, None, working())
+    .at(
+        &mut ids,
+        23.0,
+        &s2,
+        None,
+        todos(&[
+            ("Update the install guide", Completed),
+            ("Rewrite the quick start", InProgress),
+            ("Fix broken links", Pending),
+        ]),
+    )
+    .at(&mut ids, 1.0, &s2, None, working());
+    out.insert("run-workers", r);
+    out.insert("run-workers-api", w1);
+    out.insert("run-workers-guides", w2);
+
+    // A session started from another's shell that didn't inherit its
+    // identity (say, hooks were installed after the parent started): linked
+    // because the parent's agent process is among its own ancestors.
+    let mut p = Log::new("claude-code", 0x16);
+    let mut k = Log::new("claude-code", 0x17);
+    let (sp, sk) = (p.node(), k.node());
+    p.at(
+        &mut ids,
+        40.0,
+        &sp,
+        None,
+        started_in(
+            "/home/dev/billing",
+            "41000@1790380000000000",
+            &["40990@1790370000000000"],
+        ),
+    )
+    .at(&mut ids, 39.9, &sp, None, working())
+    .at(
+        &mut ids,
+        31.0,
+        &sp,
+        None,
+        shell_spawn(
+            "toolu_review",
+            "claude",
+            "Get a second opinion on the refund logic",
+            false,
+        ),
+    );
+    k.at(
+        &mut ids,
+        30.9,
+        &sk,
+        None,
+        started_in(
+            "/home/dev/billing",
+            "41500@1790381000000000",
+            &[
+                "41490@1790380900000000",
+                "41000@1790380000000000",
+                "40990@1790370000000000",
+            ],
+        ),
+    )
+    .at(&mut ids, 30.8, &sk, None, working())
+    .at(&mut ids, 3.0, &sk, None, working());
+    out.insert("process-link", p);
+    out.insert("process-link-review", k);
+
     out
 }
 
@@ -971,9 +1119,9 @@ fn every_session_is_a_root_and_corrupt_lines_are_skipped() {
     let (g, skipped) = graph();
     // A garbage line and a cut-off line (the blank line isn't counted).
     assert_eq!(skipped, 2);
-    // Every scenario is its own session, except the Codex one, which hangs
-    // under the session that launched it.
-    assert_eq!(g.roots.len(), scenarios().len() - 1);
+    // Every scenario is its own session, except the ones started by another:
+    // the Codex session, the two run workers, and the process-linked review.
+    assert_eq!(g.roots.len(), scenarios().len() - 4);
 }
 
 #[test]
@@ -1036,11 +1184,35 @@ fn deadlock_is_detected_on_both_sides() {
 }
 
 #[test]
+fn a_run_groups_the_sessions_its_script_started() {
+    let (g, _) = graph();
+    let run = session("run-workers");
+    let (api, guides) = (session("run-workers-api"), session("run-workers-guides"));
+    assert_eq!(g.nodes[&run].children, [api.clone(), guides.clone()]);
+    assert_eq!(g.nodes[&run].title.as_deref(), Some("nightly-docs"));
+    assert_eq!(g.nodes[&api].link.as_deref(), Some("run"));
+    assert_eq!(g.nodes[&api].state, State::Completed);
+    assert_eq!(g.nodes[&guides].state, State::Working);
+    assert!(g.roots.contains(&run));
+}
+
+#[test]
+fn a_session_is_linked_by_process_and_waited_on() {
+    let (g, _) = graph();
+    let (parent, review) = (session("process-link"), session("process-link-review"));
+    assert_eq!(g.nodes[&review].parent.as_deref(), Some(parent.as_str()));
+    assert_eq!(g.nodes[&review].link.as_deref(), Some("process"));
+    assert_eq!(g.nodes[&review].spawned_by.as_deref(), Some("toolu_review"));
+    assert_eq!(g.nodes[&parent].blocked.as_ref().unwrap().on, [review]);
+}
+
+#[test]
 fn cross_provider_wait_counts_the_other_sessions_work() {
     let (g, _) = graph();
     let (claude, codex) = (session("cross-provider"), session("cross-provider-codex"));
     assert_eq!(g.nodes[&codex].parent.as_deref(), Some(claude.as_str()));
     assert_eq!(g.nodes[&codex].provider, "codex");
+    assert_eq!(g.nodes[&codex].spawned_by.as_deref(), Some("toolu_codex"));
     let blocked = g.nodes[&claude].blocked.as_ref().unwrap();
     assert_eq!(blocked.on, vec![codex.clone()]);
     assert_eq!((blocked.nodes, blocked.open_tasks), (1, 2));

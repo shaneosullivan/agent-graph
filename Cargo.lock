@@ -16,12 +16,14 @@ dependencies = [
  "crossterm",
  "humantime",
  "jsonschema",
+ "libc",
  "resvg",
  "serde",
  "serde_json",
  "tempfile",
  "ulid",
  "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

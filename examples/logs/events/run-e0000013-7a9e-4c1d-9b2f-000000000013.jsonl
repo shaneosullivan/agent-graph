@@ -1,0 +1,2 @@
+{"v":1,"id":"01M3C5HSN0000000000000003G","ts":"2026-09-25T11:35:00.000Z","type":"session.started","node":"run:e0000013-7a9e-4c1d-9b2f-000000000013","source":{"provider":"run","adapter":"examples"},"data":{"cwd":"/home/dev/docs","source":"run","title":"nightly-docs"}}
+{"v":1,"id":"01M3C5HSN0000000000000003H","ts":"2026-09-25T11:35:00.000Z","type":"status","node":"run:e0000013-7a9e-4c1d-9b2f-000000000013","source":{"provider":"run","adapter":"examples"},"data":{"state":"working"}}

@@ -155,6 +155,24 @@ enum Command {
         #[arg(long, default_value_t = 30, help = help::view::opt::STALE_MINUTES)]
         stale_minutes: u64,
     },
+    #[command(
+        display_order = 8,
+        about = help::run::SUMMARY,
+        long_about = help::run::DESCRIPTION,
+        after_help = help::run::EXAMPLES
+    )]
+    Run {
+        #[arg(long, help = help::run::opt::NAME)]
+        name: Option<String>,
+        #[arg(
+            required = true,
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "COMMAND",
+            help = help::run::opt::COMMAND
+        )]
+        command: Vec<std::ffi::OsString>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -303,6 +321,9 @@ pub fn run() -> ExitCode {
             open,
             stale_minutes,
         } => view_cmd(port, open, stale_minutes),
+        Command::Run { name, command } => {
+            return crate::run::run(crate::run::Options { name, command });
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

@@ -6,6 +6,9 @@
 //!   Errors go to `emit.log` instead.
 //! - Stay fast: parse stdin, translate, one append, exit. No network.
 //! - Never trust the input: unknown events are recorded, bad input is logged.
+//!
+//! When a session starts, it's also linked to whatever started it, and passes
+//! its own identity on to anything it starts (see `link_session`).
 
 use std::ffi::OsString;
 use std::io::{self, Read};
@@ -15,8 +18,8 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::adapter::{self, Capture, Draft};
-use crate::event::{Envelope, SCHEMA_VERSION, Source, truncate_strings};
-use crate::{paths, store};
+use crate::event::{Envelope, Payload, SCHEMA_VERSION, Source, truncate_strings};
+use crate::{link, paths, process, store};
 
 /// Longest line we write. Small appends stay atomic, and one huge label
 /// shouldn't bloat the log.
@@ -65,9 +68,16 @@ fn run(args: &[OsString]) -> Result<(), String> {
         write_raw(&root, &key, &input)?;
     }
 
-    let translation = translation?;
+    let mut translation = translation?;
     if translation.drafts.is_empty() {
         return Ok(());
+    }
+    let env_file = adapter
+        .env_file_var()
+        .and_then(std::env::var_os)
+        .filter(|f| !f.is_empty());
+    for draft in &mut translation.drafts {
+        link_session(draft, env_file.as_deref().map(Path::new));
     }
     let source = Source {
         provider: adapter.provider().to_string(),
@@ -85,6 +95,48 @@ fn run(args: &[OsString]) -> Result<(), String> {
     let file = dir.join(format!("{}.jsonl", translation.file_key));
     store::append(&file, out.as_bytes())
         .map_err(|e| format!("emit: writing {}: {e}", file.display()))
+}
+
+/// For a session that's starting: links it to the session (or `agent-graph
+/// run`) that started it, from `AGENT_GRAPH_PARENT`, and records its agent's
+/// process and the ones above it, so the reducer can link it by process when
+/// the environment didn't carry a parent. Then it passes the session's own
+/// identity on through `env_file` (the provider's file of `export` lines for
+/// its shell commands), so sessions it starts can link back to it.
+fn link_session(draft: &mut Draft, env_file: Option<&Path>) {
+    let Payload::SessionStarted(started) = &mut draft.payload else {
+        return;
+    };
+    let var = |name: &str| std::env::var(name).ok();
+    if draft.parent.is_none() {
+        if let Some(parent) = link::parent_from(var(link::PARENT_VAR).as_deref(), &draft.node) {
+            started.link_method = Some(link::method_for(&parent).to_string());
+            draft.parent = Some(parent);
+        }
+    }
+    if let Some((agent, above)) = process::agent_of_this_hook() {
+        started.process = Some(agent.id());
+        started.ancestors = above.iter().map(process::Process::id).collect();
+    }
+    let traceparent = link::traceparent(&draft.node, var(link::TRACEPARENT_VAR).as_deref());
+    draft.trace = Some(serde_json::json!({ "traceparent": traceparent }));
+    if let Some(file) = env_file {
+        let exports = format!(
+            "export {}={}\nexport {}={}\n",
+            link::PARENT_VAR,
+            sh_quote(&draft.node),
+            link::TRACEPARENT_VAR,
+            sh_quote(&traceparent),
+        );
+        if let Err(e) = store::append(file, exports.as_bytes()) {
+            log_error(&format!("emit: writing {}: {e}", file.display()));
+        }
+    }
+}
+
+/// Quotes `s` as one word for a POSIX shell.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// Gives each draft an id, timestamp and source. Ids from one call are
@@ -105,7 +157,7 @@ pub fn stamp(drafts: Vec<Draft>, source: &Source, now: SystemTime) -> Vec<Envelo
             node: draft.node,
             parent: draft.parent,
             source: Some(source.clone()),
-            trace: None,
+            trace: draft.trace,
             data: draft.payload.to_data(),
         })
         .collect()
@@ -217,6 +269,12 @@ mod tests {
         let events = stamp(vec![draft(), draft(), draft()], &source, SystemTime::now());
         assert!(events.windows(2).all(|w| w[0].id < w[1].id));
         assert!(events.iter().all(|e| e.ts == events[0].ts));
+    }
+
+    #[test]
+    fn exports_are_quoted_for_the_shell() {
+        assert_eq!(sh_quote("claude-code:abc"), "'claude-code:abc'");
+        assert_eq!(sh_quote("a'b; rm -rf ~"), r"'a'\''b; rm -rf ~'");
     }
 
     #[test]
