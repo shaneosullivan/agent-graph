@@ -18,11 +18,28 @@ cargo install --path .
 agent-graph install claude-code
 ```
 
-This adds hooks to `~/.claude/settings.json`. It keeps everything else in the file and backs it up first. Options:
-- `--scope project` or `--scope local` to install for just this project
-- `--dry-run` to preview the change
+This does two things:
+- **Recording:** adds hooks to `~/.claude/settings.json`. It keeps everything else in the file and backs it up first. New Claude Code sessions are recorded from then on.
+- **The `/agent-graph` command:** adds a skill you can run in any session. It gives you a picture of the session and a short summary of what needs you, what's stuck and what's in progress, sent to you when the app can show files. `/agent-graph all` covers every recent session, and `/agent-graph share` gives you a live link.
 
-`agent-graph uninstall claude-code` removes the hooks. New Claude Code sessions are recorded from then on.
+Options:
+- `--scope project` or `--scope local` to install for just this project
+- `--dry-run` to preview the changes
+- `--no-slash-command` for the hooks alone
+
+`agent-graph uninstall claude-code` removes both.
+
+For other coding agents, `install` adds the same command:
+
+| Agent | Command | Written to |
+|---|---|---|
+| Codex | `agent-graph install codex` | `~/.agents/skills/agent-graph/` (run it as `$agent-graph`) |
+| Gemini CLI | `agent-graph install gemini` | `~/.gemini/commands/agent-graph.toml` |
+| Cursor | `agent-graph install cursor` | `~/.cursor/skills/agent-graph/` |
+
+Their own sessions aren't recorded yet; only Claude Code has hooks so far.
+
+`agent-graph --help` explains every command, with examples.
 
 ## Look at your agents
 

@@ -26,4 +26,6 @@ pub mod live;
 #[cfg(feature = "cli")]
 pub mod remote;
 #[cfg(feature = "cli")]
+pub mod slash;
+#[cfg(feature = "cli")]
 pub mod view;

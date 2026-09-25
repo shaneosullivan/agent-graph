@@ -210,7 +210,7 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
     let title = fit(&title, WIDTH - 2.0 * PAD - 110.0, 20.0, true);
     c.text(PAD, y + 20.0, 20.0, 700, p.text, "start", &title);
     let pill_x = PAD + text_width(&title, 20.0, true) + 10.0;
-    c.pill(pill_x, y + 5.0, root.state, p);
+    c.pill(pill_x, y + 5.0, root.state, root.stale, p);
     y += 32.0;
 
     let mut meta = vec![root.provider.clone(), short(local(&root.id)).to_string()];
@@ -407,6 +407,7 @@ fn card(c: &mut Canvas, graph: &Graph, n: &Node, x: f32, y: f32, p: &Palette) ->
         x + 28.0 + text_width(&name, 14.0, true) + 8.0,
         y + 11.0,
         n.state,
+        n.stale,
         p,
     );
     if n.background == Some(true) {
@@ -470,12 +471,11 @@ fn blocked_text(graph: &Graph, b: &Blocked) -> String {
         let mut names: Vec<String> =
             b.on.iter()
                 .take(2)
-                .map(|id| {
-                    graph
-                        .nodes
-                        .get(id)
-                        .map(name)
-                        .unwrap_or_else(|| short(local(id)).into())
+                .map(|id| match graph.nodes.get(id) {
+                    // A stale target is usually why the wait is long.
+                    Some(n) if n.stale => format!("{} (looks stuck)", name(n)),
+                    Some(n) => name(n),
+                    None => short(local(id)).into(),
                 })
                 .collect();
         if b.on.len() > 2 {
@@ -698,15 +698,33 @@ impl Canvas {
         );
     }
 
-    fn pill(&mut self, x: f32, y: f32, state: State, p: &Palette) {
+    /// Draws the state pill (plus a "stale?" flag when `stale`) and returns
+    /// how wide it all is.
+    fn pill(&mut self, x: f32, y: f32, state: State, stale: bool, p: &Palette) -> f32 {
         let label = state_label(state);
         let color = state_color(state, p);
         let w = text_width(label, 11.0, true) + 16.0;
+        if stale {
+            self.text(
+                x + w + 8.0,
+                y + 13.5,
+                11.5,
+                650,
+                p.failed,
+                "start",
+                "stale?",
+            );
+        }
         let _ = write!(
             self.out,
             "<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"19\" rx=\"9.5\" fill=\"{color}\" fill-opacity=\"0.14\"/>"
         );
         self.text(x + w / 2.0, y + 13.5, 11.0, 650, color, "middle", label);
+        if stale {
+            w + 8.0 + text_width("stale?", 11.5, true)
+        } else {
+            w
+        }
     }
 
     fn task_icon(&mut self, cx: f32, cy: f32, status: TaskStatus, p: &Palette) {

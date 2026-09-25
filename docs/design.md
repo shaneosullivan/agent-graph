@@ -50,6 +50,14 @@ All of this ships as one binary, `agent-graph`, with these subcommands:
 - `view` serves the live local web UI, with a timeline you can step through.
 - `snapshot` saves a phone-sized PNG (or SVG) of a session for an agent to send you; `--json` gives the raw graph.
 - `watch-remote` shares the log live on the Agent Graph site and prints its link (§9).
+
+`install` also adds an `/agent-graph` command (`src/slash.rs`), so you can ask any session for the graph:
+- **Where it goes:**
+  - Claude Code, Codex and Cursor get a skill (`skills/agent-graph/SKILL.md` in each client's folder).
+  - Gemini CLI gets a TOML custom command.
+  - All of them share one set of instructions: run `tree` and `snapshot`, send the image if the app can show files, and summarise what needs the user, what's stuck and what's in progress. `share` runs `watch-remote --session current` instead.
+- **Permissions:** Claude Code's skill pre-approves only the local, read-only `tree` and `snapshot`. Sharing sends data to a website, so it keeps its permission prompt.
+- **Safety:** each file carries an "Installed by agent-graph" marker. Reinstalling updates only a file with the marker, and uninstalling removes only those files. A command the user wrote themselves is left alone.
 - `run -- <command>` launches any agent CLI with its parent link set (§6, phase 4).
 
 ## 3. Data model: an append-only event log
@@ -496,7 +504,7 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 | **1** | `emit` + Claude Code adapter + `install claude-code` + raw capture, plus `tree` | Real events flowing | Done; verified with a live Claude Code 2.1.118 session |
 | **2** | `view` (live web UI with timeline), `tail`, `snapshot` images, example logs | Most of the idea doc's questions answered for Claude Code | Done |
 | **2b** | Sharing site (paste, upload, `watch-remote`, passwords), viewer via WebAssembly | Share a live graph by link; view it on a phone | Done; tested against the Firestore emulator |
-| **2c** | An `/agent-graph` slash command / skill installed with the hooks, so agents can send you a snapshot on request | Check on agents from a phone via the Claude or Codex apps | Next |
+| **2c** | An `/agent-graph` command installed with the hooks (a skill in Claude Code, Codex and Cursor; a TOML command in Gemini CLI): a snapshot plus a summary, or a live link | Check on agents from any session, or a phone | Done; tested with a live Claude Code session |
 | **3** | Codex adapter, then Gemini | Proves the design works across providers | |
 | **4** | Correlation methods 1–3, `agent-graph run`, shell-launched session waits | Cross-session links and waits | |
 | **5** | Cursor/Copilot/OpenCode adapters, optional LLM summaries, `gc` | Wider coverage | |

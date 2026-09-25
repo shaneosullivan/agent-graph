@@ -256,4 +256,113 @@ fn install_and_uninstall_project_settings() {
     assert!(out.status.success());
     let restored: serde_json::Value = serde_json::from_str(&read(&settings)).unwrap();
     assert_eq!(restored, serde_json::json!({"model": "opus"}));
+    assert!(
+        !project.path().join(".claude/skills").exists(),
+        "the /agent-graph skill and its folders are gone"
+    );
+}
+
+#[test]
+fn install_adds_the_agent_graph_command() {
+    let project = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        bin()
+            .args(args)
+            .current_dir(project.path())
+            .output()
+            .unwrap()
+    };
+    let skill = project.path().join(".claude/skills/agent-graph/SKILL.md");
+
+    assert!(
+        run(&["install", "claude-code", "--scope", "project", "--yes"])
+            .status
+            .success()
+    );
+    let text = read(&skill);
+    assert!(text.starts_with("---\nname: agent-graph\n"));
+    assert!(text.contains("agent-graph snapshot --session current"));
+
+    // Without it, only the hooks.
+    let other = tempfile::tempdir().unwrap();
+    let out = bin()
+        .args([
+            "install",
+            "claude-code",
+            "--scope",
+            "project",
+            "--yes",
+            "--no-slash-command",
+        ])
+        .current_dir(other.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(!other.path().join(".claude/skills").exists());
+
+    // Other agents get just the command, in their own format.
+    assert!(
+        run(&["install", "gemini", "--scope", "project", "--yes"])
+            .status
+            .success()
+    );
+    assert!(read(project.path().join(".gemini/commands/agent-graph.toml")).contains("{{args}}"));
+    assert!(
+        run(&["install", "codex", "--scope", "project", "--yes"])
+            .status
+            .success()
+    );
+    assert!(
+        project
+            .path()
+            .join(".agents/skills/agent-graph/SKILL.md")
+            .exists()
+    );
+
+    // A command the user wrote themselves is never touched.
+    std::fs::write(&skill, "my own skill").unwrap();
+    let out = run(&["install", "claude-code", "--scope", "project", "--yes"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("alone"));
+    assert!(
+        run(&["uninstall", "claude-code", "--scope", "project", "--yes"])
+            .status
+            .success()
+    );
+    assert_eq!(read(&skill), "my own skill");
+}
+
+#[test]
+fn help_explains_the_program() {
+    let long = bin().arg("--help").output().unwrap();
+    assert!(long.status.success());
+    let text = String::from_utf8(long.stdout).unwrap();
+    for part in [
+        "Getting started:",
+        "Examples:",
+        "Where things live:",
+        "AGENT_GRAPH_HOME",
+        "watch-remote",
+    ] {
+        assert!(text.contains(part), "--help is missing {part:?}");
+    }
+    assert!(
+        !text.contains("emit"),
+        "the hooks' own command stays hidden"
+    );
+
+    let short = String::from_utf8(bin().arg("-h").output().unwrap().stdout).unwrap();
+    assert!(short.contains("Get started") && !short.contains("Where things live:"));
+
+    // No arguments: the short help, and success.
+    let bare = bin().output().unwrap();
+    assert!(bare.status.success());
+    assert!(
+        String::from_utf8(bare.stdout)
+            .unwrap()
+            .contains("Commands:")
+    );
+
+    let install =
+        String::from_utf8(bin().args(["install", "--help"]).output().unwrap().stdout).unwrap();
+    assert!(install.contains("Examples:") && install.contains("install codex"));
 }

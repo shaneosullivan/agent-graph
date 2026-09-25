@@ -209,7 +209,11 @@ pub fn chunk_len(buf: &[u8], max: usize) -> usize {
 fn session_file(events: &Path, want: &str) -> Result<PathBuf, String> {
     let loaded = crate::store::load_events(events).map_err(|e| e.to_string())?;
     let graph = crate::reducer::reduce(loaded.events, &crate::reducer::Options::default());
-    let node = crate::cli::find_node(&graph, want)?;
+    let cwd = std::env::current_dir().ok();
+    let node = crate::cli::pick_roots(&graph, Some(want), false, cwd.as_deref())?
+        .into_iter()
+        .next()
+        .ok_or("no sessions recorded yet")?;
     let session = node.split('/').next().unwrap_or(&node);
     let (provider, id) = session.split_once(':').ok_or("unexpected node id")?;
     Ok(events.join(format!("{}.jsonl", crate::paths::file_key(provider, id))))

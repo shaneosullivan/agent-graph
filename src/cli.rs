@@ -10,13 +10,95 @@ use serde_json::Value;
 
 use crate::install::{self, Scope};
 use crate::reducer::{self, Graph};
+use crate::slash::{self, Client};
 use crate::{paths, render, store};
+
+const ABOUT: &str = "Record, watch and share a live graph of your AI coding agents.";
+
+const LONG_ABOUT: &str = "\
+Record, watch and share a live graph of your AI coding agents.
+
+Agent Graph records what your coding agents do, from their own hooks, and
+shows how the sessions relate:
+
+  - which session started which agents, and who is waiting on whom
+  - what needs you: permission prompts, questions, plans to approve
+  - what looks stuck or deadlocked, and how much work is left
+  - what the sessions sent each other
+
+Everything is recorded on this machine. Nothing leaves it unless you share it,
+with `watch-remote` or at https://agentgraph.chofter.com.";
+
+const AFTER_HELP: &str = "\
+Get started: `agent-graph install claude-code`, then start a new Claude Code session.
+Run `agent-graph --help` for examples, where data lives, and settings.";
+
+const AFTER_LONG_HELP: &str = "\
+Getting started:
+  1. agent-graph install claude-code   Add the recording hooks and the /agent-graph command
+  2. Start a new Claude Code session    (sessions already running aren't recorded)
+  3. agent-graph tail                  Watch it live in this terminal,
+     agent-graph view --open           or in your browser
+
+Examples:
+  agent-graph tree --all                         Every session, once, as text
+  agent-graph snapshot                           A PNG of this session, sized for a phone
+  agent-graph watch-remote --password=hunter2    Share it live; prints a link
+  agent-graph install codex                      Add the command to Codex as well
+
+Where things live:
+  ~/.agent-graph/events/   One JSON Lines file per session
+  ~/.agent-graph/images/   Pictures from `snapshot`
+  (%USERPROFILE%\\.agent-graph on Windows)
+
+Settings (environment variables):
+  AGENT_GRAPH_HOME=<dir>          Keep data somewhere else
+  AGENT_GRAPH_CAPTURE_BODIES=1    Also record message bodies and final agent messages
+  AGENT_GRAPH_RAW=1               Also keep raw hook payloads, for building adapters
+  AGENT_GRAPH_NOW=<RFC 3339>      Read logs as if it were this time
+
+Run `agent-graph <command> --help` for more on a command.";
+
+const INSTALL_EXAMPLES: &str = "\
+Examples:
+  agent-graph install claude-code                   Hooks and /agent-graph, for every project
+  agent-graph install claude-code --scope project   Just this project (in .claude/, committed)
+  agent-graph install claude-code --dry-run         Show what would change
+  agent-graph install codex                         $agent-graph in Codex (its sessions aren't recorded yet)
+  agent-graph install gemini                        /agent-graph in Gemini CLI
+  agent-graph install cursor                        /agent-graph in Cursor";
+
+const SNAPSHOT_EXAMPLES: &str = "\
+Examples:
+  agent-graph snapshot                       This session (or the latest one here), as a PNG
+  agent-graph snapshot --all --theme dark    Every session from the last day
+  agent-graph snapshot --out graph.svg       As SVG
+  agent-graph snapshot --json                The whole graph, as JSON";
+
+const TAIL_EXAMPLES: &str = "\
+Keys: q quits, a shows or hides sessions older than a day.
+
+Examples:
+  agent-graph tail                     Every session from the last day
+  agent-graph tail --session current   Just the session this runs in
+  agent-graph tail | tee graph.log     Not a terminal: prints a new frame on each change";
+
+const WATCH_REMOTE_EXAMPLES: &str = "\
+Examples:
+  agent-graph watch-remote                                          Share every session, live
+  agent-graph watch-remote --session current                        Just the session this runs in
+  agent-graph watch-remote --password=s3cret --save-default-password   And use it from now on
+  agent-graph watch-remote --password= --save-default-password         Forget the saved password
+  agent-graph watch-remote --url=http://localhost:3000              Share to a local copy of the site";
 
 #[derive(Parser)]
 #[command(
     name = "agent-graph",
     version,
-    about = "Records a live graph of AI coding agent sessions"
+    about = ABOUT,
+    long_about = LONG_ABOUT,
+    after_help = AFTER_HELP,
+    after_long_help = AFTER_LONG_HELP
 )]
 struct Cli {
     #[command(subcommand)]
@@ -27,16 +109,25 @@ struct Cli {
 enum Command {
     /// Record one hook event read from stdin. Provider hooks run this; it
     /// always exits 0 and never prints.
+    #[command(hide = true)]
     Emit {
         #[arg(long)]
         provider: String,
     },
-    /// Add Agent Graph's hooks to a provider's settings.
+    /// Set up a coding agent: hooks that record its sessions, and an
+    /// /agent-graph command
+    ///
+    /// For Claude Code this adds the hooks that record its sessions, and an
+    /// /agent-graph command (a skill) you can run in any session to see the
+    /// graph. For Codex, Gemini CLI and Cursor it adds just the command for
+    /// now. Everything else in their settings is kept, and settings files are
+    /// backed up first.
+    #[command(display_order = 1, after_help = INSTALL_EXAMPLES)]
     Install {
         provider: Provider,
         #[arg(long, value_enum, default_value_t = ScopeArg::User)]
         scope: ScopeArg,
-        /// Show the resulting settings file without writing it.
+        /// Show what would change without writing anything.
         #[arg(long)]
         dry_run: bool,
         /// Don't ask for confirmation.
@@ -45,8 +136,12 @@ enum Command {
         /// The hook command to register. Defaults to this executable.
         #[arg(long)]
         command: Option<String>,
+        /// Don't add the `/agent-graph` command.
+        #[arg(long)]
+        no_slash_command: bool,
     },
-    /// Remove Agent Graph's hooks from a provider's settings.
+    /// Remove what `install` added
+    #[command(display_order = 2)]
     Uninstall {
         provider: Provider,
         #[arg(long, value_enum, default_value_t = ScopeArg::User)]
@@ -56,7 +151,8 @@ enum Command {
         #[arg(long, short)]
         yes: bool,
     },
-    /// Print the current graph as a tree.
+    /// Print the graph once, as a text tree
+    #[command(display_order = 5)]
     Tree {
         /// Include sessions with no activity in the last 24 hours.
         #[arg(long)]
@@ -64,15 +160,17 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         stale_minutes: u64,
     },
-    /// Save a picture of a session's graph and print where it went.
+    /// Save a picture of a session, sized for a phone, and print its path
     ///
     /// Made for sharing: an agent can run this and send you the image, so
     /// you can check on your agents from your phone. With --json it gives
     /// the whole graph as data instead.
+    #[command(display_order = 6, after_help = SNAPSHOT_EXAMPLES)]
     Snapshot {
-        /// The session to draw: its id, or the first few characters of it.
-        /// Defaults to the Claude Code session this runs inside, then the
-        /// most recent session in this folder, then the most recent overall.
+        /// The session to draw: its id, the first few characters of it, or
+        /// `current`. Defaults to (and `current` means) the Claude Code session
+        /// this runs inside, then the most recent session in this folder, then
+        /// the most recent overall.
         #[arg(long)]
         session: Option<String>,
         /// Draw every session active in the last 24 hours instead.
@@ -92,7 +190,11 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         stale_minutes: u64,
     },
-    /// Watch the graph live in this terminal, redrawn as events arrive.
+    /// Watch the graph live in this terminal
+    ///
+    /// Takes over the terminal like `top` and redraws as events arrive, with
+    /// a summary of what needs you, what looks stuck and any deadlocks.
+    #[command(display_order = 3, after_help = TAIL_EXAMPLES)]
     Tail {
         /// Follow one session: its id, or the first few characters of it.
         #[arg(long)]
@@ -106,10 +208,13 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         stale_minutes: u64,
     },
-    /// Share the graph live on the Agent Graph site, and print its link.
+    /// Share the graph live on the web, and print its link
     ///
-    /// Sends the event log, then each new event as it's recorded, until you
-    /// stop it. Anyone with the link can view it unless you set a password.
+    /// Sends the event log to the Agent Graph site, then each new event as
+    /// it's recorded, until you stop it (Ctrl+C). The link is printed first,
+    /// straight away. Anyone with it can view the graph unless you set a
+    /// password. Only this run can add to the shared log.
+    #[command(display_order = 7, after_help = WATCH_REMOTE_EXAMPLES)]
     WatchRemote {
         /// The site to share on.
         #[arg(long, default_value = crate::remote::DEFAULT_URL)]
@@ -122,11 +227,17 @@ enum Command {
         /// --password= clears the saved default).
         #[arg(long)]
         save_default_password: bool,
-        /// Share just this session (its id or the first few characters).
+        /// Share just this session: its id, the first few characters of it, or
+        /// `current` (the one this runs inside, as for `snapshot`).
         #[arg(long)]
         session: Option<String>,
     },
-    /// Serve a live web view of the graph on this machine.
+    /// Watch the graph live in your browser, with a timeline to step through
+    ///
+    /// Serves http://localhost:7777 on this machine only. The page updates as
+    /// events arrive, and its timeline steps back through every event in a
+    /// session.
+    #[command(display_order = 4)]
     View {
         #[arg(long, default_value_t = 7777)]
         port: u16,
@@ -141,6 +252,20 @@ enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 enum Provider {
     ClaudeCode,
+    Codex,
+    Gemini,
+    Cursor,
+}
+
+impl From<Provider> for Client {
+    fn from(p: Provider) -> Client {
+        match p {
+            Provider::ClaudeCode => Client::ClaudeCode,
+            Provider::Codex => Client::Codex,
+            Provider::Gemini => Client::Gemini,
+            Provider::Cursor => Client::Cursor,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -167,22 +292,48 @@ impl From<ScopeArg> for Scope {
 }
 
 pub fn run() -> ExitCode {
+    if std::env::args_os().len() <= 1 {
+        use clap::CommandFactory;
+        let _ = Cli::command().print_help();
+        return ExitCode::SUCCESS;
+    }
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Emit { .. } => unreachable!("main handles emit before parsing"),
         Command::Install {
-            provider: Provider::ClaudeCode,
+            provider,
             scope,
             dry_run,
             yes,
             command,
-        } => install_cmd(scope.into(), dry_run, yes, command, true),
+            no_slash_command,
+        } => install_cmd(
+            provider.into(),
+            scope.into(),
+            InstallOptions {
+                dry_run,
+                yes,
+                hook_command: command,
+                slash_command: !no_slash_command,
+                add: true,
+            },
+        ),
         Command::Uninstall {
-            provider: Provider::ClaudeCode,
+            provider,
             scope,
             dry_run,
             yes,
-        } => install_cmd(scope.into(), dry_run, yes, None, false),
+        } => install_cmd(
+            provider.into(),
+            scope.into(),
+            InstallOptions {
+                dry_run,
+                yes,
+                hook_command: None,
+                slash_command: true,
+                add: false,
+            },
+        ),
         Command::Snapshot {
             session,
             all,
@@ -244,17 +395,131 @@ pub fn run() -> ExitCode {
     }
 }
 
-fn install_cmd(
-    scope: Scope,
+struct InstallOptions {
     dry_run: bool,
     yes: bool,
-    command: Option<String>,
+    hook_command: Option<String>,
+    slash_command: bool,
+    /// Install, or (false) uninstall.
     add: bool,
-) -> Result<(), String> {
+}
+
+/// One file `install` or `uninstall` would write or remove.
+struct Change {
+    path: PathBuf,
+    /// The new contents, or None to remove the file.
+    contents: Option<String>,
+    /// Lines describing the change, shown before asking.
+    summary: Vec<String>,
+    /// Keep a copy of the old file first (settings files).
+    backup: bool,
+}
+
+fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(), String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("can't read the current directory: {e}"))?;
-    let path =
-        install::claude_settings_path(scope, &cwd).ok_or("can't find your home directory")?;
+    let mut changes = Vec::new();
+    let mut notes = Vec::new();
+
+    if client == Client::ClaudeCode {
+        if let Some(change) = hooks_change(scope, &cwd, &opts)? {
+            changes.push(change);
+        }
+    } else if opts.add {
+        notes.push(format!(
+            "{} sessions aren't recorded yet: only Claude Code has hooks so far. \
+             The command shows the sessions that are.",
+            slash::client_name(client)
+        ));
+    }
+
+    if opts.slash_command {
+        let file = slash::command_file(client, scope, &cwd)?;
+        let existing = std::fs::read_to_string(&file.path).ok();
+        let ours = existing.as_deref().is_some_and(slash::is_ours);
+        match (opts.add, existing.as_deref()) {
+            (true, Some(_)) if !ours => notes.push(format!(
+                "Left {} alone: it isn't one Agent Graph wrote.",
+                file.path.display()
+            )),
+            (true, Some(text)) if text == file.contents => {}
+            (true, _) => changes.push(Change {
+                summary: vec![
+                    format!("Command file: {}", file.path.display()),
+                    format!("Adds the {} command.", file.invoke),
+                ],
+                path: file.path,
+                contents: Some(file.contents),
+                backup: false,
+            }),
+            (false, Some(_)) if ours => changes.push(Change {
+                summary: vec![format!(
+                    "Removes the {} command: {}",
+                    file.invoke,
+                    file.path.display()
+                )],
+                path: file.path,
+                contents: None,
+                backup: false,
+            }),
+            (false, _) => {}
+        }
+    }
+
+    for note in &notes {
+        println!("{note}");
+    }
+    if changes.is_empty() {
+        println!(
+            "Nothing to do: {}.",
+            if opts.add {
+                "Agent Graph is already set up"
+            } else {
+                "nothing of Agent Graph's is installed"
+            }
+        );
+        return Ok(());
+    }
+    for change in &changes {
+        for line in &change.summary {
+            println!("{line}");
+        }
+    }
+    if opts.dry_run {
+        for change in &changes {
+            match &change.contents {
+                Some(text) => println!("\n--- {} (not written) ---\n{text}", change.path.display()),
+                None => println!("\n--- {} (not removed) ---", change.path.display()),
+            }
+        }
+        return Ok(());
+    }
+    if !opts.yes && !confirm("Make these changes?")? {
+        println!("Nothing changed.");
+        return Ok(());
+    }
+
+    for change in &changes {
+        apply(change)?;
+    }
+    if opts.add {
+        if client == Client::ClaudeCode {
+            let data = paths::data_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default();
+            println!("Installed. New Claude Code sessions will be recorded in {data}.");
+        } else {
+            println!("Installed.");
+        }
+    } else {
+        println!("Uninstalled.");
+    }
+    Ok(())
+}
+
+/// The change to Claude Code's settings for the hooks, if any.
+fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Option<Change>, String> {
+    let path = install::claude_settings_path(scope, cwd).ok_or("can't find your home directory")?;
     let existed = path.exists();
     let before: Value = if existed {
         let text = std::fs::read_to_string(&path)
@@ -270,71 +535,74 @@ fn install_cmd(
     };
 
     let mut after = before.clone();
-    let command = match command {
-        Some(c) => c,
+    let command = match &opts.hook_command {
+        Some(c) => c.clone(),
         None => install::default_command("claude-code")?,
     };
-    if add {
+    if opts.add {
         install::install_claude_code(&mut after, &command)?;
     } else {
         install::uninstall_claude_code(&mut after)?;
     }
     if after == before {
-        println!(
-            "{} already {}; nothing to do.",
-            path.display(),
-            if add {
-                "has Agent Graph's hooks"
-            } else {
-                "has no Agent Graph hooks"
-            }
-        );
-        return Ok(());
+        return Ok(None);
     }
 
-    println!("Settings file: {}", path.display());
-    if add {
-        println!("Hook command:  {command}");
-        println!("Adds hooks for: {}", install::our_events(&after).join(", "));
+    let mut summary = vec![format!("Settings file: {}", path.display())];
+    if opts.add {
+        summary.push(format!("Hook command:  {command}"));
+        summary.push(format!(
+            "Adds hooks for: {}",
+            install::our_events(&after).join(", ")
+        ));
         if !install::our_events(&before).is_empty() {
-            println!("(Replaces the Agent Graph hooks already there.)");
+            summary.push("(Replaces the Agent Graph hooks already there.)".into());
         }
     } else {
-        println!(
+        summary.push(format!(
             "Removes hooks for: {}",
             install::our_events(&before).join(", ")
-        );
+        ));
     }
-    let text = serde_json::to_string_pretty(&after).expect("serializable") + "\n";
-    if dry_run {
-        println!("\n--- {} (not written) ---\n{text}", path.display());
-        return Ok(());
-    }
-    if !yes && !confirm("Write these changes?")? {
-        println!("Nothing written.");
-        return Ok(());
-    }
+    Ok(Some(Change {
+        path,
+        contents: Some(serde_json::to_string_pretty(&after).expect("serializable") + "\n"),
+        summary,
+        backup: existed,
+    }))
+}
 
-    if existed {
+fn apply(change: &Change) -> Result<(), String> {
+    let path = &change.path;
+    let Some(text) = &change.contents else {
+        std::fs::remove_file(path).map_err(|e| format!("removing {}: {e}", path.display()))?;
+        // Don't leave empty folders behind: a skill's own folder, then the
+        // skills/commands folder if nothing else is in it (remove_dir only
+        // removes empty folders).
+        let mut dir = path.parent();
+        if let Some(d) = dir.filter(|d| slash::is_own_folder(d)) {
+            let _ = std::fs::remove_dir(d);
+            dir = d.parent();
+        }
+        if let Some(d) = dir.filter(|d| {
+            d.file_name()
+                .is_some_and(|n| n == "skills" || n == "commands")
+        }) {
+            let _ = std::fs::remove_dir(d);
+        }
+        return Ok(());
+    };
+    if change.backup {
         let backup = path.with_extension("json.agent-graph.bak");
-        std::fs::copy(&path, &backup)
+        std::fs::copy(path, &backup)
             .map_err(|e| format!("backing up to {}: {e}", backup.display()))?;
         println!("Backed up the old file to {}", backup.display());
     }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     }
-    store::write_atomic(&path, text.as_bytes())
-        .map_err(|e| format!("writing {}: {e}", path.display()))?;
-    if add {
-        let data = paths::data_dir()
-            .map(|d| d.display().to_string())
-            .unwrap_or_default();
-        println!("Installed. New Claude Code sessions will be recorded in {data}.");
-    } else {
-        println!("Uninstalled.");
-    }
-    Ok(())
+    store::write_atomic(path, text.as_bytes())
+        .map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
 fn confirm(question: &str) -> Result<bool, String> {
@@ -496,7 +764,8 @@ pub fn pick_roots(
             recent
         });
     }
-    if let Some(want) = session {
+    // "current" means the default below: the session this runs in.
+    if let Some(want) = session.filter(|s| *s != "current") {
         return find_node(graph, want).map(|id| vec![id]);
     }
     // Inside Claude Code, commands can see the session they run in.
