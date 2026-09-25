@@ -216,9 +216,15 @@ fn header(
 
 fn subtree<'a>(graph: &'a Graph, root: &str) -> Vec<&'a crate::reducer::Node> {
     let mut out: Vec<&crate::reducer::Node> = graph.nodes.get(root).into_iter().collect();
+    let mut seen: std::collections::BTreeSet<&str> = out.iter().map(|n| n.id.as_str()).collect();
     let mut i = 0;
     while i < out.len() {
-        let kids = out[i].children.iter().filter_map(|c| graph.nodes.get(c));
+        let kids: Vec<_> = out[i]
+            .children
+            .iter()
+            .filter_map(|c| graph.nodes.get(c))
+            .filter(|n| seen.insert(n.id.as_str()))
+            .collect();
         out.extend(kids);
         i += 1;
     }

@@ -3,6 +3,7 @@
 //!
 //! Event text comes from models, so everything written into the SVG is escaped.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
@@ -323,10 +324,28 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
 /// Draws `node`'s card at (x, y) and its children below, indented and joined
 /// by connector lines. Returns the next free y.
 fn card_tree(c: &mut Canvas, graph: &Graph, node: &Node, x: f32, y: f32, p: &Palette) -> f32 {
+    card_tree_from(c, graph, node, x, y, p, &mut BTreeSet::new())
+}
+
+/// `card_tree`, skipping nodes already drawn (the reducer never makes a
+/// cycle, but a drawing must end whatever it's given).
+fn card_tree_from<'a>(
+    c: &mut Canvas,
+    graph: &'a Graph,
+    node: &'a Node,
+    x: f32,
+    y: f32,
+    p: &Palette,
+    drawn: &mut BTreeSet<&'a str>,
+) -> f32 {
+    drawn.insert(&node.id);
     let height = card(c, graph, node, x, y, p);
     let mut next = y + height + 8.0;
     let spine = x + 11.0;
     for child in node.children.iter().filter_map(|id| graph.nodes.get(id)) {
+        if drawn.contains(child.id.as_str()) {
+            continue;
+        }
         let child_y = next;
         c.path(
             &format!(
@@ -337,7 +356,7 @@ fn card_tree(c: &mut Canvas, graph: &Graph, node: &Node, x: f32, y: f32, p: &Pal
             ),
             p.line,
         );
-        next = card_tree(c, graph, child, x + INDENT, child_y, p);
+        next = card_tree_from(c, graph, child, x + INDENT, child_y, p, drawn);
     }
     next
 }
@@ -521,9 +540,15 @@ fn state_label(state: State) -> &'static str {
 
 fn subtree<'a>(graph: &'a Graph, root: &'a Node) -> Vec<&'a Node> {
     let mut out = vec![root];
+    let mut seen = BTreeSet::from([root.id.as_str()]);
     let mut i = 0;
     while i < out.len() {
-        let kids = out[i].children.iter().filter_map(|id| graph.nodes.get(id));
+        let kids: Vec<&Node> = out[i]
+            .children
+            .iter()
+            .filter_map(|id| graph.nodes.get(id))
+            .filter(|n| seen.insert(n.id.as_str()))
+            .collect();
         out.extend(kids);
         i += 1;
     }

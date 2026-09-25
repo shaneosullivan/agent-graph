@@ -17,7 +17,7 @@
     "emulators": "firebase emulators:start --only firestore --project demo-agent-graph",
     "test:api": "node --test tests/api.test.mjs",
     "test:ci": "firebase emulators:exec --only firestore --project demo-agent-graph 'sh scripts/ci-api-test.sh'",
-    "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts"
+    "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/viewer.test.mjs"
   },
   "dependencies": {
     "firebase-admin": "^14.5.0",
@@ -29,6 +29,7 @@
     "@types/node": "^22.20.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "jsdom": "^27.4.0",
     "typescript": "^5.9.3"
   },
   "overrides": {

@@ -27,8 +27,8 @@ Status is updated as each is done.
 ### R3. A parent cycle hides sessions and makes the reducer, `snapshot`, Save image, `tail` and the viewer loop forever
 - **Where:** `src/reducer.rs` (explicit parents, `bind`, inferred agent parents, `cancel_unfinished_descendants`), `src/image.rs`, `src/live.rs`, `src/view/assets/app.js`
 - **Problem:** An explicit parent (from `AGENT_GRAPH_PARENT`, e.g. `claude --resume A` run from A's child's shell), a spawn binding, or a crafted log can make a node its own ancestor. Nodes in the loop are never roots, so they vanish from every list, and anything that walks the tree from them never ends (memory grows until the process dies; a two-line pasted log hangs a site visitor's tab).
-- **Fix:** never reparent a node under its own descendant; walk trees with a visited set everywhere.
-- **Status:** open
+- **Fix:** `reparent`, the one place parents change, refuses a parent that's the node itself or below it (a resumed session stays on top, and its link isn't recorded); `bind` won't bind a child that's above its requester; and every tree walker (image, text tree, `tail`, the viewer, cancelling descendants) skips nodes it has already visited. Added a jsdom harness for testing the viewer (site/tests/viewer-harness.mjs).
+- **Status:** fixed. Tests: four in tests/sessions.rs (`a_session_resumed_from_its_childs_shell_stays_on_top`, `a_session_cant_be_under_its_own_agent`, `a_crafted_parent_loop_doesnt_hang_the_reducer`, `drawing_a_graph_with_a_loop_finishes`) and "R3: …" in site/tests/viewer.test.mjs. Reviewed.
 
 ### R4. A foreground spawn whose tool call fails stays "waiting" forever
 - **Where:** `src/reducer.rs`

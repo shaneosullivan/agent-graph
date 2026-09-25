@@ -336,3 +336,108 @@ fn ending_a_session_cancels_its_agents_but_not_sessions_it_started() {
     assert_eq!(g.nodes[&format!("{A}/ag1")].state, State::Canceled);
     assert_eq!(g.nodes[B].state, State::Working, "a process of its own");
 }
+
+/// Runs `f` on another thread, failing if it doesn't finish in time rather
+/// than hanging the test run.
+fn within_seconds<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(Duration::from_secs(secs))
+        .expect("didn't finish: it's looping")
+}
+
+/// No node may end up as its own ancestor.
+fn assert_no_cycles(g: &Graph) {
+    for id in g.nodes.keys() {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut at = Some(id.clone());
+        while let Some(node) = at {
+            assert!(seen.insert(node.clone()), "{id} is its own ancestor");
+            at = g.nodes.get(&node).and_then(|n| n.parent.clone());
+        }
+    }
+}
+
+/// R3: A starts B; later A is resumed from B's shell, so it inherits B as
+/// its parent. That would make each the other's parent.
+#[test]
+fn a_session_resumed_from_its_childs_shell_stays_on_top() {
+    let events = vec![
+        vec![started(0, A, None, None, &[])],
+        vec![started(5, B, Some(A), None, &[])],
+        vec![started(9, A, Some(B), None, &[])],
+    ];
+    let g = within_seconds(5, move || graph(events));
+    assert_no_cycles(&g);
+    assert_eq!(g.roots, [A]);
+    assert_eq!(g.nodes[B].parent.as_deref(), Some(A));
+    assert_eq!(g.nodes[A].link, None, "the refused parent isn't its link");
+    let svg = within_seconds(5, move || {
+        agent_graph::image::svg(
+            &g,
+            &[A.to_string()],
+            &agent_graph::image::Options {
+                theme: agent_graph::image::Theme::Light,
+                as_of: t0(),
+            },
+        )
+    });
+    assert_eq!(svg.matches(">Claude Code session bbbb<").count(), 1);
+}
+
+/// R3: a session claiming one of its own agents as its parent.
+#[test]
+fn a_session_cant_be_under_its_own_agent() {
+    let events = vec![
+        vec![started(0, A, None, None, &[])],
+        vec![started(5, A, Some(&format!("{A}/x")), None, &[])],
+    ];
+    let g = within_seconds(5, move || graph(events));
+    assert_no_cycles(&g);
+    assert_eq!(g.roots, [A]);
+}
+
+/// R3: a pasted two-line log (from the review) that used to hang the
+/// reducer, and with it the site's viewer.
+#[test]
+fn a_crafted_parent_loop_doesnt_hang_the_reducer() {
+    let lines = [
+        r#"{"v":1,"id":"E0001","ts":"2026-09-25T10:00:01.000Z","type":"session.ended","node":"p:a/x/w","data":{}}"#,
+        r#"{"v":1,"id":"E0010","ts":"1970-01-01T00:00:00Z","type":"task.upserted","node":"p:a/x","data":{"id":"t1","status":"pending"},"parent":"p:a/x/w"}"#,
+    ];
+    let events: Vec<Envelope> = lines
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let g = within_seconds(5, move || reduce(events));
+    assert_no_cycles(&g);
+    assert!(!g.roots.is_empty());
+}
+
+/// R3: drawing ends even for a graph with a loop in it (the reducer never
+/// makes one, but the views mustn't depend on that to finish).
+#[test]
+fn drawing_a_graph_with_a_loop_finishes() {
+    let mut g = graph(vec![
+        vec![started(0, A, None, None, &[])],
+        vec![started(5, B, Some(A), None, &[])],
+    ]);
+    g.nodes.get_mut(B).unwrap().children.push(A.to_string());
+    let text = within_seconds(5, {
+        let g = g.clone();
+        move || agent_graph::render::tree(&g, &[A.to_string()])
+    });
+    assert_eq!(text.lines().count(), 2, "{text}");
+    within_seconds(5, move || {
+        agent_graph::image::svg(
+            &g,
+            &[A.to_string()],
+            &agent_graph::image::Options {
+                theme: agent_graph::image::Theme::Light,
+                as_of: t0(),
+            },
+        )
+    });
+}

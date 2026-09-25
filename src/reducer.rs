@@ -236,7 +236,9 @@ impl Reducer {
                     node.state = State::Idle;
                     node.ended_at = None;
                 }
-                if e.parent.is_some() {
+                // Only if the parent was taken (it's refused if it would
+                // put the session under itself).
+                if e.parent.is_some() && node.parent == e.parent {
                     node.link = d.link_method.clone().or(Some("env".to_string()));
                 }
                 let id = e.node.clone();
@@ -477,11 +479,18 @@ impl Reducer {
         }
     }
 
+    /// Moves `child` under `parent`, unless that would put it under itself.
+    /// Every change of parent comes through here (explicit parents, spawn
+    /// bindings, a subagent's inferred session), so the graph never has a
+    /// cycle: a session resumed from its own child's shell, say, stays on top.
     fn reparent(&mut self, child: &str, parent: &str, provider: Option<&str>, ts: &str) {
         if child == parent || self.nodes[child].parent.as_deref() == Some(parent) {
             return;
         }
         self.ensure(parent, provider, ts);
+        if self.is_under(parent, child) {
+            return;
+        }
         if let Some(old) = self.nodes[child].parent.clone() {
             if let Some(old) = self.nodes.get_mut(&old) {
                 old.children.retain(|c| c != child);
@@ -496,6 +505,10 @@ impl Reducer {
 
     /// Binds spawn `call_id` on `requester` to `child`, undoing any earlier guess.
     fn bind(&mut self, requester: &str, call_id: &str, child: &str) {
+        // A child that's above its requester can't have been started by it.
+        if self.is_under(requester, child) {
+            return;
+        }
         // Undo a guess that bound this spawn to a different child.
         let previous = self.nodes[requester]
             .spawns
@@ -699,7 +712,11 @@ impl Reducer {
     /// them) are left alone.
     fn cancel_unfinished_descendants(&mut self, id: &str, ts: &str) {
         let mut queue: VecDeque<String> = self.nodes[id].children.iter().cloned().collect();
+        let mut seen = BTreeSet::new();
         while let Some(child) = queue.pop_front() {
+            if !seen.insert(child.clone()) {
+                continue;
+            }
             let Some(node) = self.nodes.get_mut(&child) else {
                 continue;
             };

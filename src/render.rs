@@ -83,17 +83,28 @@ pub fn lines(graph: &Graph, roots: &[String], branches: Branches) -> Vec<Line> {
     for root in roots {
         if let Some(node) = graph.nodes.get(root) {
             out.push(node_line(graph, node));
-            children(graph, node, "", branches, &mut out);
+            let mut seen = std::collections::BTreeSet::from([node.id.as_str()]);
+            children(graph, node, "", branches, &mut out, &mut seen);
         }
     }
     out
 }
 
-fn children(graph: &Graph, node: &Node, prefix: &str, b: Branches, out: &mut Vec<Line>) {
+/// Adds `node`'s children below it, skipping any already shown (the reducer
+/// never makes a cycle, but drawing must end whatever it's given).
+fn children<'a>(
+    graph: &'a Graph,
+    node: &Node,
+    prefix: &str,
+    b: Branches,
+    out: &mut Vec<Line>,
+    seen: &mut std::collections::BTreeSet<&'a str>,
+) {
     let kids: Vec<&Node> = node
         .children
         .iter()
         .filter_map(|c| graph.nodes.get(c))
+        .filter(|n| seen.insert(n.id.as_str()))
         .collect();
     for (i, child) in kids.iter().enumerate() {
         let last = i + 1 == kids.len();
@@ -104,7 +115,7 @@ fn children(graph: &Graph, node: &Node, prefix: &str, b: Branches, out: &mut Vec
         line.extend(node_line(graph, child));
         out.push(line);
         let next = format!("{prefix}{}", if last { b.gap } else { b.pipe });
-        children(graph, child, &next, b, out);
+        children(graph, child, &next, b, out, seen);
     }
 }
 

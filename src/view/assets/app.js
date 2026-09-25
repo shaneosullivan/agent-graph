@@ -466,13 +466,16 @@ function saveImageLink(stop) {
   );
 }
 
-function branch(graph, node, ringed, flash) {
-  const kids = node.children.map((id) => graph.nodes[id]).filter(Boolean);
+/** A card and its children's cards. `drawn` skips any node already drawn. */
+function branch(graph, node, ringed, flash, drawn = new Set()) {
+  drawn.add(node.id);
+  const kids = node.children.map((id) => graph.nodes[id]).filter((k) => k && !drawn.has(k.id));
+  kids.forEach((k) => drawn.add(k.id));
   return h(
     'div',
     { class: 'branch' },
     card(graph, node, ringed, flash),
-    kids.length ? h('div', { class: 'children' }, kids.map((k) => branch(graph, k, ringed, flash))) : null,
+    kids.length ? h('div', { class: 'children' }, kids.map((k) => branch(graph, k, ringed, flash, drawn))) : null,
   );
 }
 
