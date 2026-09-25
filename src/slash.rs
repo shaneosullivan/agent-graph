@@ -134,13 +134,14 @@ fn marker_comment() -> String {
 }
 
 /// Claude Code: `$ARGUMENTS` carries what was typed after the command, and
-/// the local, read-only commands are pre-approved. Sharing isn't: it sends
-/// data to a website, so it keeps its permission prompt.
+/// the exact local, read-only commands the instructions use are pre-approved.
+/// No wildcards: `snapshot --out` writes a file, so any other form (and
+/// sharing, which sends data to a website) keeps its permission prompt.
 fn claude_skill() -> String {
     format!(
         "---\nname: {NAME}\ndescription: {}\nargument-hint: \"[all | share | <session id>]\"\n\
-         allowed-tools: Bash(agent-graph tree) Bash(agent-graph tree *) Bash(agent-graph snapshot) \
-         Bash(agent-graph snapshot *)\n---\n\n{}\n\n{}",
+         allowed-tools: Bash(agent-graph tree) Bash(agent-graph tree --all) \
+         Bash(agent-graph snapshot --session current) Bash(agent-graph snapshot --all)\n---\n\n{}\n\n{}",
         yaml_description(),
         marker_comment(),
         instructions("The user asked for: \"$ARGUMENTS\" (it may be empty).")
@@ -287,7 +288,23 @@ mod tests {
             .lines()
             .find(|l| l.starts_with("allowed-tools:"))
             .unwrap();
-        assert!(tools.contains("Bash(agent-graph snapshot *)"));
+        // Only the exact commands the instructions use. A wildcard would also
+        // approve `snapshot --out <any file>` (R2).
+        let allowed: Vec<&str> = tools
+            .trim_start_matches("allowed-tools:")
+            .split(") ")
+            .map(|t| t.trim().trim_end_matches(')'))
+            .collect();
+        assert_eq!(
+            allowed,
+            [
+                "Bash(agent-graph tree",
+                "Bash(agent-graph tree --all",
+                "Bash(agent-graph snapshot --session current",
+                "Bash(agent-graph snapshot --all",
+            ]
+        );
+        assert!(!tools.contains('*'), "no wildcards");
         assert!(
             !tools.contains("watch-remote"),
             "sharing keeps its permission prompt"

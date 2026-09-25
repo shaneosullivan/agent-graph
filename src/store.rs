@@ -81,6 +81,18 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     written
 }
 
+/// Writes `bytes` to a new file at `path`, failing with `AlreadyExists` if
+/// there's anything there already (a file, or a link, which isn't followed).
+pub fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let written = file.write_all(bytes);
+    if written.is_err() {
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+    written
+}
+
 /// Errors if `path`, or a folder between `root` and it, is a symbolic link.
 /// For files a project ships, so one can't lead a write out of the project.
 pub fn refuse_links(root: &Path, path: &Path) -> io::Result<()> {

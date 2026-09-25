@@ -21,8 +21,8 @@ Status is updated as each is done.
 ### R2. The `/agent-graph` skill pre-approves `agent-graph snapshot *`, whose `--out` overwrites any file
 - **Where:** `src/slash.rs` (`allowed-tools`), `src/cli.rs` (`snapshot --out`)
 - **Problem:** The wildcard lets a prompt-injected model run `agent-graph snapshot --json --out ~/.bashrc` with no permission prompt, writing task text it controls into any file.
-- **Fix:** pre-approve only the exact forms the skill uses, without `--out`; make `--out` refuse to replace an existing file.
-- **Status:** open
+- **Fix:** the skill pre-approves only the exact commands its instructions run (`tree`, `tree --all`, `snapshot --session current`, `snapshot --all`); `--out` only writes .png, .svg or .json, and never replaces an existing file (or a link) unless given the new `--force`. A skill installed before this keeps the old rules until `agent-graph install` is run again.
+- **Status:** fixed. Tests: `claude_pre_approves_only_local_commands` (src/slash.rs), `snapshot_out_never_replaces_a_file_unless_forced` (tests/cli.rs). Reviewed.
 
 ### R3. A parent cycle hides sessions and makes the reducer, `snapshot`, Save image, `tail` and the viewer loop forever
 - **Where:** `src/reducer.rs` (explicit parents, `bind`, inferred agent parents, `cancel_unfinished_descendants`), `src/image.rs`, `src/live.rs`, `src/view/assets/app.js`

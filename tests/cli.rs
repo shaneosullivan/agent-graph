@@ -616,3 +616,61 @@ fn install_never_writes_through_links_a_project_plants() {
         "nothing written outside the project"
     );
 }
+
+/// R2: `--out` names a file to create. It never replaces one (unless
+/// `--force`), and only writes the formats it knows.
+#[test]
+fn snapshot_out_never_replaces_a_file_unless_forced() {
+    let home = tempfile::tempdir().unwrap();
+    for payload in fixture("claude-code/session.jsonl").iter().take(5) {
+        emit(
+            home.path(),
+            &["--provider", "claude-code"],
+            &payload.to_string(),
+            &[],
+        );
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let snapshot = |args: &[&str]| {
+        bin()
+            .arg("snapshot")
+            .args(args)
+            .env("AGENT_GRAPH_HOME", home.path())
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+    };
+    for name in ["mine.json", "mine.png", "mine.svg"] {
+        std::fs::write(dir.path().join(name), "precious").unwrap();
+        let out = snapshot(&["--session", "5f2c", "--out", name]);
+        assert!(!out.status.success(), "{name} was replaced");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("--force"));
+        assert_eq!(read(dir.path().join(name)), "precious");
+    }
+    let out = snapshot(&["--json", "--out", "mine.json"]);
+    assert!(!out.status.success());
+    assert_eq!(read(dir.path().join("mine.json")), "precious");
+
+    let out = snapshot(&["--json", "--out", "mine.json", "--force"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(read(dir.path().join("mine.json")).contains("\"nodes\""));
+
+    for name in [".bashrc", "notes.txt", "graph"] {
+        let out = snapshot(&["--session", "5f2c", "--out", name]);
+        assert!(!out.status.success(), "wrote {name}");
+        assert!(!dir.path().join(name).exists());
+    }
+
+    let out = snapshot(&["--session", "5f2c", "--out", "new.svg"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(read(dir.path().join("new.svg")).starts_with("<svg"));
+}

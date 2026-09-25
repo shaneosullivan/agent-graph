@@ -242,12 +242,13 @@
             ["--session current", "The Claude Code session this runs in, then the latest session in this folder, then the latest anywhere. This is also the default."]
           ]
         },
-        { "text": "Only the file's path is printed, so scripts can use it. By default the picture goes in ~/.agent-graph/images/ with a new name each time. --out chooses the file, and its extension chooses the format: .png, .svg, or .json (the whole graph as data, like --json)." }
+        { "text": "Only the file's path is printed, so scripts can use it. By default the picture goes in ~/.agent-graph/images/ with a new name each time. --out chooses the file, and its extension chooses the format: .png, .svg, or .json (the whole graph as data, like --json). It won't replace a file that's already there unless you add --force." }
       ],
       "options": [
         { "id": "session", "flag": "--session <SESSION>", "text": "The session to draw: its id, the first few characters of it, or `current` (the default)." },
         { "id": "all", "flag": "--all", "text": "Draw every session active in the last day instead." },
-        { "id": "out", "flag": "-o, --out <FILE>", "text": "Where to write it. The extension picks the format: .png, .svg or .json." },
+        { "id": "out", "flag": "-o, --out <FILE>", "text": "Where to write it. The extension picks the format: .png, .svg or .json. An existing file is left alone unless you add --force." },
+        { "id": "force", "flag": "--force", "text": "Replace the file at --out if there is one." },
         { "id": "json", "flag": "--json", "text": "Print the whole graph as JSON instead of drawing it." },
         { "id": "theme", "flag": "--theme <light|dark>", "text": "The picture's colours." },
         { "id": "stale_minutes", "flag": "--stale-minutes <MINUTES>", "text": "Flag working agents with no events for this long as stale." }

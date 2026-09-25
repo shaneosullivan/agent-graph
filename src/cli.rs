@@ -102,6 +102,8 @@ enum Command {
         all: bool,
         #[arg(long, short, help = help::snapshot::opt::OUT)]
         out: Option<PathBuf>,
+        #[arg(long, requires = "out", help = help::snapshot::opt::FORCE)]
+        force: bool,
         #[arg(long, conflicts_with_all = ["session", "all"], help = help::snapshot::opt::JSON)]
         json: bool,
         #[arg(long, value_enum, default_value_t = ThemeArg::Light, help = help::snapshot::opt::THEME)]
@@ -274,10 +276,18 @@ pub fn run() -> ExitCode {
             session,
             all,
             out,
+            force,
             json,
             theme,
             stale_minutes,
-        } => snapshot_cmd(session, all, out, json, theme, stale_minutes),
+        } => snapshot_cmd(
+            session,
+            all,
+            out.map(|path| Out { path, force }),
+            json,
+            theme,
+            stale_minutes,
+        ),
         Command::Tree { all, stale_minutes } => tree_cmd(all, stale_minutes),
         Command::Tail {
             session,
@@ -621,27 +631,60 @@ fn tree_cmd(all: bool, stale_minutes: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Where `snapshot --out` writes, and whether it may replace a file there.
+struct Out {
+    path: PathBuf,
+    force: bool,
+}
+
+impl Out {
+    /// Writes a new file, or with `--force`, replaces one. Refusing by
+    /// default means `--out` can't be used to overwrite someone's files.
+    fn write(&self, bytes: &[u8]) -> Result<(), String> {
+        let path = &self.path;
+        let written = if self.force {
+            store::write_atomic(path, bytes)
+        } else {
+            store::write_new(path, bytes)
+        };
+        written.map_err(|e| match e.kind() {
+            io::ErrorKind::AlreadyExists => format!(
+                "{} already exists; add --force to replace it",
+                path.display()
+            ),
+            _ => format!("writing {}: {e}", path.display()),
+        })
+    }
+}
+
 fn snapshot_cmd(
     session: Option<String>,
     all: bool,
-    out: Option<PathBuf>,
+    out: Option<Out>,
     json: bool,
     theme: ThemeArg,
     stale_minutes: u64,
 ) -> Result<(), String> {
-    let (graph, root) = load_graph(stale_minutes)?;
     let ext = out
         .as_ref()
-        .and_then(|p| p.extension())
+        .and_then(|o| o.path.extension())
         .map(|e| e.to_string_lossy().to_ascii_lowercase());
+    if let Some(o) = &out {
+        if !matches!(ext.as_deref(), Some("png" | "svg" | "json")) {
+            return Err(format!(
+                "{}: --out needs a .png, .svg or .json file",
+                o.path.display()
+            ));
+        }
+    }
+    let (graph, root) = load_graph(stale_minutes)?;
 
     if json || ext.as_deref() == Some("json") {
         let text = serde_json::to_string_pretty(&graph).expect("serializable") + "\n";
         match out {
-            Some(path) => {
-                store::write_atomic(&path, text.as_bytes())
-                    .map_err(|e| format!("writing {}: {e}", path.display()))?;
-                println!("{}", path.display());
+            Some(out) => {
+                out.write(text.as_bytes())?;
+                println!("{}", out.path.display());
             }
             None => print!("{text}"),
         }
@@ -669,9 +712,18 @@ fn snapshot_cmd(
         },
     );
 
-    let path = match out {
-        Some(path) => path,
-        None => {
+    let bytes = if ext.as_deref() == Some("svg") {
+        svg.into_bytes()
+    } else {
+        crate::image::png(&svg)?
+    };
+    if let Some(out) = out {
+        out.write(&bytes)?;
+        println!("{}", out.path.display());
+        return Ok(());
+    }
+    let path = {
+        {
             let dir = root.join("images");
             store::ensure_dir(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
             let stamp = humantime::format_rfc3339_seconds(SystemTime::now())
@@ -682,11 +734,6 @@ fn snapshot_cmd(
                 .to_string();
             dir.join(format!("agent-graph-{stamp}.png"))
         }
-    };
-    let bytes = if ext.as_deref() == Some("svg") {
-        svg.into_bytes()
-    } else {
-        crate::image::png(&svg)?
     };
     std::fs::write(&path, bytes).map_err(|e| format!("writing {}: {e}", path.display()))?;
     // Only the path goes to stdout, so scripts and agents can use it directly.
