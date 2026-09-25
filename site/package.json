@@ -13,7 +13,8 @@
     "predev": "node scripts/sync-viewer.mjs --if-present",
     "prebuild": "node scripts/sync-viewer.mjs --if-present",
     "emulators": "firebase emulators:start --only firestore --project demo-agent-graph",
-    "test:api": "node --test tests/api.test.mjs"
+    "test:api": "node --test tests/api.test.mjs",
+    "test:ci": "firebase emulators:exec --only firestore --project demo-agent-graph 'sh scripts/ci-api-test.sh'"
   },
   "dependencies": {
     "firebase-admin": "^14.5.0",

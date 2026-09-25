@@ -89,6 +89,12 @@ The API tests run against any running copy of the site:
 BASE_URL=http://localhost:3000 npm run test:api
 ```
 
+Or, as CI does, against a production build with its own emulator. Run `npm run build` first, and stop any running emulator:
+
+```bash
+npm run test:ci
+```
+
 ## Deploy (Vercel)
 
 1. **Firebase:** create a project, enable Firestore (Native mode), and deploy the deny-all rules:

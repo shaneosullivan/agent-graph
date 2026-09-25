@@ -61,6 +61,4 @@ jobs:
       - run: npm run build
       - run: npm install -g firebase-tools
       # The API tests, against the built site and the Firestore emulator.
-      - run: >
-          firebase emulators:exec --only firestore --project demo-agent-graph
-          "npx next start -p 3000 & for i in $(seq 60); do curl -sf -o /dev/null http://localhost:3000 && break; sleep 1; done; BASE_URL=http://localhost:3000 npm run test:api"
+      - run: npm run test:ci
