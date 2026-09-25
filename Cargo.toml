@@ -45,3 +45,6 @@ inherits = "release"
 opt-level = "z"
 lto = true
 panic = "abort"
+
+[build-dependencies]
+serde_json = "1"

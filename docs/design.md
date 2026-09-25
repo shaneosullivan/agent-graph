@@ -480,9 +480,15 @@ Viewers can step through the log exactly as they can locally. Each log can have 
   - `timeline.rs`: the graph at any moment, and timeline stops. Shared by the local viewer and the site.
   - `render.rs` (text), `live.rs` (`tail`), `image.rs` (`snapshot`), `remote.rs` (`watch-remote`).
   - `view/`: the local web server, plus the page's HTML/CSS/JS embedded in the binary.
-  - `install.rs`, `cli.rs`.
+  - `install.rs`, `slash.rs` (the `/agent-graph` command), `cli.rs`.
+  - `help.rs`: the help text, generated at compile time (below).
   - Everything except the core (`event`, `reducer`, `timeline` and friends) sits behind the default `cli` feature, so the core also builds for WebAssembly (`wasm/`).
 - **Site:** Next.js on Vercel, with Firestore through the Admin SDK (§9, `site/README.md`).
+- **Help text: one source.**
+  - All of it (the overview, every command, option and example) is in `docs/cli-help.json`, as blocks: text, headings, lists, steps, two-column tables and code.
+  - `build.rs` lays it out for an 80-column terminal and writes Rust constants that `cli.rs` hands to clap. There are no doc comments on the CLI types, so there's no second copy to go stale.
+  - The site's `/docs` page renders the same file as HTML (a copy synced into `site/lib/`, which CI checks is identical), and the home page takes its `watch-remote` options from it.
+  - A missing command in the file fails the build (its constants don't exist). A test fails if an option has no text, or if the file describes a command or option the CLI doesn't have.
 - **Schema:** JSON Schema for the envelope and each event type, in `schema/`. The schema is the real "open standard" part of the project: any provider can emit events without our code.
 - **Tests:**
   - unit tests per module;

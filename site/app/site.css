@@ -427,3 +427,195 @@ body {
   width: 100%;
   margin-top: 14px;
 }
+
+/* Docs page */
+.site .docs {
+  max-width: 1100px;
+}
+.site .docs-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+}
+.site .docs-nav {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 14px;
+  padding-top: 30px;
+}
+.site .docs-nav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.site .docs-nav a:hover {
+  color: var(--text);
+  background: var(--panel);
+}
+.site .docs-nav-label {
+  margin: 14px 8px 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+.site .docs-main {
+  min-width: 0;
+}
+.site .docs-main h1 code {
+  font-size: 0.9em;
+}
+.site .docs-main h2 {
+  font-size: 22px;
+  margin: 44px 0 12px;
+}
+.site .docs-main h3 {
+  font-size: 19px;
+  margin-bottom: 4px;
+}
+.site .docs-main h4 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 22px 0 8px;
+}
+.site .prose p,
+.site .prose li {
+  color: var(--text);
+  max-width: 46em;
+}
+.site .prose p {
+  margin: 10px 0;
+}
+.site .prose ul {
+  padding-left: 22px;
+  margin: 10px 0;
+}
+.site .prose li {
+  margin: 4px 0;
+}
+.site .muted {
+  color: var(--muted);
+}
+.site .docs-main :not(pre) > code {
+  font-size: 0.88em;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.site .steps {
+  padding-left: 22px;
+  margin: 10px 0;
+}
+.site .steps li {
+  margin: 10px 0;
+}
+.site .steps li > .cmd {
+  display: block;
+  margin-bottom: 2px;
+}
+.site .terms {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0 12px;
+  font-size: 14.5px;
+}
+.site .terms th,
+.site .terms td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+.site .terms tr:first-child th,
+.site .terms tr:first-child td {
+  border-top: none;
+}
+.site .terms th {
+  font-weight: 600;
+  white-space: nowrap;
+  width: 1%;
+}
+.site .terms th code {
+  white-space: nowrap;
+}
+.site .block-code,
+.site .example pre {
+  margin: 10px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.site .examples {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.site .example pre {
+  margin: 6px 0 2px;
+}
+.site .example p {
+  margin: 0 0 10px 4px;
+  color: var(--muted);
+}
+.site .prompt {
+  color: var(--faint);
+  user-select: none;
+}
+.site .doc-command {
+  margin-top: 30px;
+  padding-top: 26px;
+  border-top: 1px solid var(--line);
+}
+.site .command-summary {
+  color: var(--muted);
+  margin: 4px 0 10px;
+}
+.site .commands-title {
+  margin-top: 56px;
+}
+@media (max-width: 800px) {
+  .site .docs-layout {
+    grid-template-columns: 1fr;
+  }
+  .site .docs-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-top: 0;
+  }
+  .site .docs-nav-label {
+    display: none;
+  }
+  /* Too narrow for two columns: each term sits above its text. */
+  .site .terms,
+  .site .terms tbody,
+  .site .terms tr,
+  .site .terms th,
+  .site .terms td {
+    display: block;
+    width: auto;
+  }
+  .site .terms th code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .site .terms td {
+    border-top: none;
+    padding-top: 0;
+  }
+}

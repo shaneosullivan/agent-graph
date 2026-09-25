@@ -1,7 +1,14 @@
 import "./site.css";
 
+import { Fragment } from "react";
+
+import cliHelp from "@/lib/cli-help.json";
+import { type Help, Inline } from "@/lib/help-render";
+
 import { Brand } from "./brand";
 import { Uploader } from "./uploader";
+
+const watchRemote = (cliHelp as unknown as Help).commands.find((c) => c.name === "watch-remote")!;
 
 export default function Home() {
   return (
@@ -11,7 +18,7 @@ export default function Home() {
           <Brand />
           <nav>
             <a href="#live">Share live</a>
-            <a href="#logs">Where logs live</a>
+            <a href="/docs">Docs</a>
           </nav>
         </header>
 
@@ -33,26 +40,22 @@ export default function Home() {
             the page up to date as your agents work:
           </p>
           <code className="command">agent-graph watch-remote</code>
+          {/* The same text as `agent-graph watch-remote --help`. */}
           <dl className="options">
-            <dt>
-              <code>--password=…</code>
-            </dt>
-            <dd>
-              Viewers must enter it. <code>--password=</code> shares without one.
-            </dd>
-            <dt>
-              <code>--save-default-password</code>
-            </dt>
-            <dd>Remember the password for next time; with an empty password, forget it.</dd>
-            <dt>
-              <code>--session=…</code>
-            </dt>
-            <dd>Share one session instead of all of them.</dd>
-            <dt>
-              <code>--url=…</code>
-            </dt>
-            <dd>Share to another copy of this site.</dd>
+            {watchRemote.options.map((option) => (
+              <Fragment key={option.id}>
+                <dt>
+                  <code>{option.flag}</code>
+                </dt>
+                <dd>
+                  <Inline text={option.text} />
+                </dd>
+              </Fragment>
+            ))}
           </dl>
+          <p>
+            <a href="/docs#watch-remote">More about sharing</a>, and every other command, in the docs.
+          </p>
         </section>
 
         <section className="section">

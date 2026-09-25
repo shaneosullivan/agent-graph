@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Copies the viewer from the Rust crate into the site, so `agent-graph view`
-// and the site share one implementation:
+// Copies what the site shares with the Rust crate, so neither can drift:
 //
 //   ../src/view/assets/app.js, app.css  ->  public/viewer/
 //   ../src/view/assets/index.html       ->  lib/viewer-shell.ts (its markup)
+//   ../docs/cli-help.json               ->  lib/cli-help.json (the /docs page)
 //
 // With --wasm it also builds the reducer to WebAssembly (needs Rust and the
 // wasm32-unknown-unknown target) into public/viewer/agent_graph.wasm.
@@ -31,6 +31,7 @@ if (!existsSync(assets)) {
 const out = join(site, "public/viewer");
 mkdirSync(out, { recursive: true });
 for (const name of ["app.js", "app.css"]) copyFileSync(join(assets, name), join(out, name));
+copyFileSync(join(crate, "docs/cli-help.json"), join(site, "lib/cli-help.json"));
 
 const html = readFileSync(join(assets, "index.html"), "utf8");
 const body = html.slice(html.indexOf("<body>") + "<body>".length, html.lastIndexOf("</body>")).trim();

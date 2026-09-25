@@ -5,100 +5,27 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 
+use crate::help;
 use crate::install::{self, Scope};
 use crate::reducer::{self, Graph};
 use crate::slash::{self, Client};
 use crate::{paths, render, store};
 
-const ABOUT: &str = "Record, watch and share a live graph of your AI coding agents.";
-
-const LONG_ABOUT: &str = "\
-Record, watch and share a live graph of your AI coding agents.
-
-Agent Graph records what your coding agents do, from their own hooks, and
-shows how the sessions relate:
-
-  - which session started which agents, and who is waiting on whom
-  - what needs you: permission prompts, questions, plans to approve
-  - what looks stuck or deadlocked, and how much work is left
-  - what the sessions sent each other
-
-Everything is recorded on this machine. Nothing leaves it unless you share it,
-with `watch-remote` or at https://agentgraph.chofter.com.";
-
-const AFTER_HELP: &str = "\
-Get started: `agent-graph install claude-code`, then start a new Claude Code session.
-Run `agent-graph --help` for examples, where data lives, and settings.";
-
-const AFTER_LONG_HELP: &str = "\
-Getting started:
-  1. agent-graph install claude-code   Add the recording hooks and the /agent-graph command
-  2. Start a new Claude Code session    (sessions already running aren't recorded)
-  3. agent-graph tail                  Watch it live in this terminal,
-     agent-graph view --open           or in your browser
-
-Examples:
-  agent-graph tree --all                         Every session, once, as text
-  agent-graph snapshot                           A PNG of this session, sized for a phone
-  agent-graph watch-remote --password=hunter2    Share it live; prints a link
-  agent-graph install codex                      Add the command to Codex as well
-
-Where things live:
-  ~/.agent-graph/events/   One JSON Lines file per session
-  ~/.agent-graph/images/   Pictures from `snapshot`
-  (%USERPROFILE%\\.agent-graph on Windows)
-
-Settings (environment variables):
-  AGENT_GRAPH_HOME=<dir>          Keep data somewhere else
-  AGENT_GRAPH_CAPTURE_BODIES=1    Also record message bodies and final agent messages
-  AGENT_GRAPH_RAW=1               Also keep raw hook payloads, for building adapters
-  AGENT_GRAPH_NOW=<RFC 3339>      Read logs as if it were this time
-
-Run `agent-graph <command> --help` for more on a command.";
-
-const INSTALL_EXAMPLES: &str = "\
-Examples:
-  agent-graph install claude-code                   Hooks and /agent-graph, for every project
-  agent-graph install claude-code --scope project   Just this project (in .claude/, committed)
-  agent-graph install claude-code --dry-run         Show what would change
-  agent-graph install codex                         $agent-graph in Codex (its sessions aren't recorded yet)
-  agent-graph install gemini                        /agent-graph in Gemini CLI
-  agent-graph install cursor                        /agent-graph in Cursor";
-
-const SNAPSHOT_EXAMPLES: &str = "\
-Examples:
-  agent-graph snapshot                       This session (or the latest one here), as a PNG
-  agent-graph snapshot --all --theme dark    Every session from the last day
-  agent-graph snapshot --out graph.svg       As SVG
-  agent-graph snapshot --json                The whole graph, as JSON";
-
-const TAIL_EXAMPLES: &str = "\
-Keys: q quits, a shows or hides sessions older than a day.
-
-Examples:
-  agent-graph tail                     Every session from the last day
-  agent-graph tail --session current   Just the session this runs in
-  agent-graph tail | tee graph.log     Not a terminal: prints a new frame on each change";
-
-const WATCH_REMOTE_EXAMPLES: &str = "\
-Examples:
-  agent-graph watch-remote                                          Share every session, live
-  agent-graph watch-remote --session current                        Just the session this runs in
-  agent-graph watch-remote --password=s3cret --save-default-password   And use it from now on
-  agent-graph watch-remote --password= --save-default-password         Forget the saved password
-  agent-graph watch-remote --url=http://localhost:3000              Share to a local copy of the site";
+// All help text comes from docs/cli-help.json (compiled in by build.rs), which
+// the site's /docs page renders too. Don't add doc comments here: they'd
+// override it. The tests check the file covers every command and option.
 
 #[derive(Parser)]
 #[command(
     name = "agent-graph",
     version,
-    about = ABOUT,
-    long_about = LONG_ABOUT,
-    after_help = AFTER_HELP,
-    after_long_help = AFTER_LONG_HELP
+    about = help::SUMMARY,
+    long_about = help::LONG_ABOUT,
+    after_help = help::AFTER_HELP,
+    after_long_help = help::AFTER_LONG_HELP
 )]
 struct Cli {
     #[command(subcommand)]
@@ -107,144 +34,125 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Record one hook event read from stdin. Provider hooks run this; it
-    /// always exits 0 and never prints.
+    // Run by the hooks, with a hook's JSON on stdin; always exits 0 and never
+    // prints. Handled in main before argument parsing.
     #[command(hide = true)]
     Emit {
         #[arg(long)]
         provider: String,
     },
-    /// Set up a coding agent: hooks that record its sessions, and an
-    /// /agent-graph command
-    ///
-    /// For Claude Code this adds the hooks that record its sessions, and an
-    /// /agent-graph command (a skill) you can run in any session to see the
-    /// graph. For Codex, Gemini CLI and Cursor it adds just the command for
-    /// now. Everything else in their settings is kept, and settings files are
-    /// backed up first.
-    #[command(display_order = 1, after_help = INSTALL_EXAMPLES)]
+    #[command(
+        display_order = 1,
+        about = help::install::SUMMARY,
+        long_about = help::install::DESCRIPTION,
+        after_help = help::install::EXAMPLES
+    )]
     Install {
+        #[arg(help = help::install::opt::PROVIDER)]
         provider: Provider,
-        #[arg(long, value_enum, default_value_t = ScopeArg::User)]
+        #[arg(long, value_enum, default_value_t = ScopeArg::User, help = help::install::opt::SCOPE)]
         scope: ScopeArg,
-        /// Show what would change without writing anything.
-        #[arg(long)]
+        #[arg(long, help = help::install::opt::DRY_RUN)]
         dry_run: bool,
-        /// Don't ask for confirmation.
-        #[arg(long, short)]
+        #[arg(long, short, help = help::install::opt::YES)]
         yes: bool,
-        /// The hook command to register. Defaults to this executable.
-        #[arg(long)]
+        #[arg(long, help = help::install::opt::COMMAND)]
         command: Option<String>,
-        /// Don't add the `/agent-graph` command.
-        #[arg(long)]
+        #[arg(long, help = help::install::opt::NO_SLASH_COMMAND)]
         no_slash_command: bool,
     },
-    /// Remove what `install` added
-    #[command(display_order = 2)]
+    #[command(
+        display_order = 2,
+        about = help::uninstall::SUMMARY,
+        long_about = help::uninstall::DESCRIPTION,
+        after_help = help::uninstall::EXAMPLES
+    )]
     Uninstall {
+        #[arg(help = help::uninstall::opt::PROVIDER)]
         provider: Provider,
-        #[arg(long, value_enum, default_value_t = ScopeArg::User)]
+        #[arg(long, value_enum, default_value_t = ScopeArg::User, help = help::uninstall::opt::SCOPE)]
         scope: ScopeArg,
-        #[arg(long)]
+        #[arg(long, help = help::uninstall::opt::DRY_RUN)]
         dry_run: bool,
-        #[arg(long, short)]
+        #[arg(long, short, help = help::uninstall::opt::YES)]
         yes: bool,
     },
-    /// Print the graph once, as a text tree
-    #[command(display_order = 5)]
+    #[command(
+        display_order = 5,
+        about = help::tree::SUMMARY,
+        long_about = help::tree::DESCRIPTION,
+        after_help = help::tree::EXAMPLES
+    )]
     Tree {
-        /// Include sessions with no activity in the last 24 hours.
-        #[arg(long)]
+        #[arg(long, help = help::tree::opt::ALL)]
         all: bool,
-        #[arg(long, default_value_t = 30)]
+        #[arg(long, default_value_t = 30, help = help::tree::opt::STALE_MINUTES)]
         stale_minutes: u64,
     },
-    /// Save a picture of a session, sized for a phone, and print its path
-    ///
-    /// Made for sharing: an agent can run this and send you the image, so
-    /// you can check on your agents from your phone. With --json it gives
-    /// the whole graph as data instead.
-    #[command(display_order = 6, after_help = SNAPSHOT_EXAMPLES)]
+    #[command(
+        display_order = 6,
+        about = help::snapshot::SUMMARY,
+        long_about = help::snapshot::DESCRIPTION,
+        after_help = help::snapshot::EXAMPLES
+    )]
     Snapshot {
-        /// The session to draw: its id, the first few characters of it, or
-        /// `current`. Defaults to (and `current` means) the Claude Code session
-        /// this runs inside, then the most recent session in this folder, then
-        /// the most recent overall.
-        #[arg(long)]
+        #[arg(long, help = help::snapshot::opt::SESSION)]
         session: Option<String>,
-        /// Draw every session active in the last 24 hours instead.
-        #[arg(long, conflicts_with = "session")]
+        #[arg(long, conflicts_with = "session", help = help::snapshot::opt::ALL)]
         all: bool,
-        /// Where to write it. The format follows the extension: .png, .svg
-        /// or .json. Defaults to a new PNG in the data directory's images
-        /// folder (or, with --json, to standard output).
-        #[arg(long, short)]
+        #[arg(long, short, help = help::snapshot::opt::OUT)]
         out: Option<PathBuf>,
-        /// The whole graph as JSON, instead of a picture.
-        #[arg(long, conflicts_with_all = ["session", "all"])]
+        #[arg(long, conflicts_with_all = ["session", "all"], help = help::snapshot::opt::JSON)]
         json: bool,
-        #[arg(long, value_enum, default_value_t = ThemeArg::Light)]
+        #[arg(long, value_enum, default_value_t = ThemeArg::Light, help = help::snapshot::opt::THEME)]
         theme: ThemeArg,
-        /// Flag unfinished nodes with no events for this many minutes.
-        #[arg(long, default_value_t = 30)]
+        #[arg(long, default_value_t = 30, help = help::snapshot::opt::STALE_MINUTES)]
         stale_minutes: u64,
     },
-    /// Watch the graph live in this terminal
-    ///
-    /// Takes over the terminal like `top` and redraws as events arrive, with
-    /// a summary of what needs you, what looks stuck and any deadlocks.
-    #[command(display_order = 3, after_help = TAIL_EXAMPLES)]
+    #[command(
+        display_order = 3,
+        about = help::tail::SUMMARY,
+        long_about = help::tail::DESCRIPTION,
+        after_help = help::tail::EXAMPLES
+    )]
     Tail {
-        /// Follow one session: its id, or the first few characters of it.
-        #[arg(long)]
+        #[arg(long, help = help::tail::opt::SESSION)]
         session: Option<String>,
-        /// Include sessions with no activity in the last 24 hours.
-        #[arg(long)]
+        #[arg(long, help = help::tail::opt::ALL)]
         all: bool,
-        /// Draw the tree with plain ASCII characters.
-        #[arg(long)]
+        #[arg(long, help = help::tail::opt::ASCII)]
         ascii: bool,
-        #[arg(long, default_value_t = 30)]
+        #[arg(long, default_value_t = 30, help = help::tail::opt::STALE_MINUTES)]
         stale_minutes: u64,
     },
-    /// Share the graph live on the web, and print its link
-    ///
-    /// Sends the event log to the Agent Graph site, then each new event as
-    /// it's recorded, until you stop it (Ctrl+C). The link is printed first,
-    /// straight away. Anyone with it can view the graph unless you set a
-    /// password. Only this run can add to the shared log.
-    #[command(display_order = 7, after_help = WATCH_REMOTE_EXAMPLES)]
+    #[command(
+        display_order = 7,
+        about = help::watch_remote::SUMMARY,
+        long_about = help::watch_remote::DESCRIPTION,
+        after_help = help::watch_remote::EXAMPLES
+    )]
     WatchRemote {
-        /// The site to share on.
-        #[arg(long, default_value = crate::remote::DEFAULT_URL)]
+        #[arg(long, default_value = crate::remote::DEFAULT_URL, help = help::watch_remote::opt::URL)]
         url: String,
-        /// Viewers must enter this to see the log. `--password=` means none,
-        /// even if a default is saved.
-        #[arg(long)]
+        #[arg(long, help = help::watch_remote::opt::PASSWORD)]
         password: Option<String>,
-        /// Also save --password as the default for future runs (an empty
-        /// --password= clears the saved default).
-        #[arg(long)]
+        #[arg(long, help = help::watch_remote::opt::SAVE_DEFAULT_PASSWORD)]
         save_default_password: bool,
-        /// Share just this session: its id, the first few characters of it, or
-        /// `current` (the one this runs inside, as for `snapshot`).
-        #[arg(long)]
+        #[arg(long, help = help::watch_remote::opt::SESSION)]
         session: Option<String>,
     },
-    /// Watch the graph live in your browser, with a timeline to step through
-    ///
-    /// Serves http://localhost:7777 on this machine only. The page updates as
-    /// events arrive, and its timeline steps back through every event in a
-    /// session.
-    #[command(display_order = 4)]
+    #[command(
+        display_order = 4,
+        about = help::view::SUMMARY,
+        long_about = help::view::DESCRIPTION,
+        after_help = help::view::EXAMPLES
+    )]
     View {
-        #[arg(long, default_value_t = 7777)]
+        #[arg(long, default_value_t = 7777, help = help::view::opt::PORT)]
         port: u16,
-        /// Open it in your browser.
-        #[arg(long)]
+        #[arg(long, help = help::view::opt::OPEN)]
         open: bool,
-        #[arg(long, default_value_t = 30)]
+        #[arg(long, default_value_t = 30, help = help::view::opt::STALE_MINUTES)]
         stale_minutes: u64,
     },
 }
@@ -292,12 +200,22 @@ impl From<ScopeArg> for Scope {
 }
 
 pub fn run() -> ExitCode {
+    // Every command's -h and --help show its full explanation and examples.
+    // (At the top level, -h stays a short summary.)
+    let command = Cli::command().mut_subcommands(|sub| {
+        sub.disable_help_flag(true).arg(
+            Arg::new("help")
+                .short('h')
+                .long("help")
+                .action(ArgAction::HelpLong)
+                .help("Explain this command in full, with examples"),
+        )
+    });
     if std::env::args_os().len() <= 1 {
-        use clap::CommandFactory;
-        let _ = Cli::command().print_help();
+        let _ = command.clone().print_help();
         return ExitCode::SUCCESS;
     }
-    let cli = Cli::parse();
+    let cli = Cli::from_arg_matches(&command.get_matches()).unwrap_or_else(|e| e.exit());
     let result = match cli.command {
         Command::Emit { .. } => unreachable!("main handles emit before parsing"),
         Command::Install {
@@ -825,4 +743,134 @@ fn view_cmd(port: u16, open: bool, stale_minutes: u64) -> Result<(), String> {
 
 fn display_dir(path: &Path) -> String {
     path.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use clap::CommandFactory;
+    use serde_json::Value;
+
+    use super::*;
+
+    fn text(value: &Value) -> &str {
+        value.as_str().unwrap_or("").trim()
+    }
+
+    /// Every command, and every option of every command, has help text in
+    /// docs/cli-help.json, and the file describes nothing that doesn't exist.
+    #[test]
+    fn every_command_and_option_has_help_text() {
+        let json: Value =
+            serde_json::from_str(help::JSON).expect("docs/cli-help.json is valid JSON");
+        let documented: BTreeMap<&str, &Value> = json["commands"]
+            .as_array()
+            .expect("commands is a list")
+            .iter()
+            .map(|c| (text(&c["name"]), c))
+            .collect();
+
+        let cli = Cli::command();
+        let mut commands = BTreeSet::new();
+        for sub in cli.get_subcommands().filter(|s| !s.is_hide_set()) {
+            let name = sub.get_name();
+            commands.insert(name);
+            let Some(doc) = documented.get(name) else {
+                panic!("`agent-graph {name}` has no help text: add it to docs/cli-help.json");
+            };
+            assert!(!text(&doc["summary"]).is_empty(), "`{name}` has no summary");
+            let description = doc["description"].as_array().map_or(0, Vec::len);
+            assert!(description > 0, "`{name}` has no description");
+            let examples = doc["examples"].as_array().cloned().unwrap_or_default();
+            assert!(!examples.is_empty(), "`{name}` has no examples");
+            for example in &examples {
+                assert!(
+                    !text(&example["command"]).is_empty() && !text(&example["text"]).is_empty(),
+                    "`{name}` has an example without a command or an explanation"
+                );
+            }
+
+            let options: BTreeMap<&str, &str> = doc["options"]
+                .as_array()
+                .map(|o| {
+                    o.iter()
+                        .map(|o| (text(&o["id"]), text(&o["text"])))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut args = BTreeSet::new();
+            for arg in sub.get_arguments() {
+                let id = arg.get_id().as_str();
+                if id == "help" || id == "version" {
+                    continue;
+                }
+                args.insert(id);
+                match options.get(id) {
+                    None => panic!(
+                        "`agent-graph {name}`'s `{id}` has no help text: add it to docs/cli-help.json"
+                    ),
+                    Some(&"") => panic!("`agent-graph {name}`'s `{id}` has empty help text"),
+                    Some(_) => {}
+                }
+                assert!(
+                    arg.get_help().is_some(),
+                    "`{name}`'s `{id}` doesn't use its help text"
+                );
+            }
+            for id in options.keys() {
+                assert!(
+                    args.contains(id),
+                    "docs/cli-help.json describes `{id}` for `{name}`, which it doesn't have"
+                );
+            }
+            assert!(
+                sub.get_about().is_some() && sub.get_long_about().is_some(),
+                "`{name}` isn't using its help text"
+            );
+        }
+        for name in documented.keys() {
+            assert!(
+                commands.contains(name),
+                "docs/cli-help.json describes `{name}`, which isn't a command"
+            );
+        }
+
+        assert!(
+            !text(&json["summary"]).is_empty(),
+            "no summary for agent-graph itself"
+        );
+        assert!(
+            json["sections"].as_array().is_some_and(|s| !s.is_empty()),
+            "no overview sections"
+        );
+    }
+
+    /// Each command's help is its full page, with examples.
+    #[test]
+    fn each_command_help_has_its_description_and_examples() {
+        for sub in Cli::command()
+            .get_subcommands()
+            .filter(|s| !s.is_hide_set())
+        {
+            let long = sub
+                .get_long_about()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let after = sub
+                .get_after_help()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            assert!(
+                long.len() > 80,
+                "`{}` has only a short description",
+                sub.get_name()
+            );
+            assert!(
+                after.starts_with("Examples:"),
+                "`{}` has no examples",
+                sub.get_name()
+            );
+        }
+    }
 }

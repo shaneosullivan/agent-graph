@@ -117,7 +117,10 @@ fn frame(tail: &Tail, opts: &Options, all: bool, live: bool) -> Result<Vec<Line>
         },
     );
     let roots = match &opts.session {
-        Some(want) => vec![crate::cli::find_node(&graph, want)?],
+        Some(want) => {
+            let cwd = std::env::current_dir().ok();
+            crate::cli::pick_roots(&graph, Some(want), false, cwd.as_deref())?
+        }
         None => graph
             .roots
             .iter()

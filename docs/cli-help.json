@@ -1,0 +1,299 @@
+{
+  "$comment": "The help text for the agent-graph command, shared by the binary (compiled in by build.rs) and the site's /docs page. Descriptions are lists of blocks: {text}, {list}, {steps}, {table}, {heading}, {code}. `Backticks` mark code.",
+  "program": "agent-graph",
+  "summary": "Record, watch and share a live graph of your AI coding agents.",
+  "description": [
+    { "text": "Agent Graph records what your coding agents do, from their own hooks, and shows how the sessions relate:" },
+    {
+      "list": [
+        "which session started which agents, and who is waiting on whom",
+        "what needs you: permission prompts, questions, plans to approve",
+        "what looks stuck or deadlocked, and how much work is left",
+        "what the sessions sent each other"
+      ]
+    },
+    { "text": "Everything is recorded on this machine. Nothing leaves it unless you share it, with `watch-remote` or at https://agentgraph.chofter.com." }
+  ],
+  "quickStart": [
+    "Get started: `agent-graph install claude-code`, then start a new Claude Code session.",
+    "Run `agent-graph --help` for examples, where data lives, and settings."
+  ],
+  "sections": [
+    {
+      "title": "Getting started",
+      "blocks": [
+        {
+          "steps": [
+            { "command": "agent-graph install claude-code", "text": "Add the recording hooks and the /agent-graph command." },
+            { "text": "Start a new Claude Code session. Sessions that were already running aren't recorded." },
+            { "command": "agent-graph tail", "text": "Watch it live in this terminal, or in your browser with `agent-graph view --open`." }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Examples",
+      "examples": [
+        { "command": "agent-graph tree --all", "text": "Every session, once, as text." },
+        { "command": "agent-graph snapshot", "text": "A picture of this session, sized for a phone." },
+        { "command": "agent-graph watch-remote --password=hunter2", "text": "Share it live; prints a link." },
+        { "command": "agent-graph install codex", "text": "Add the command to Codex as well." }
+      ]
+    },
+    {
+      "title": "Where things live",
+      "blocks": [
+        {
+          "table": [
+            ["~/.agent-graph/events/", "One JSON Lines file per session"],
+            ["~/.agent-graph/images/", "Pictures from `snapshot`"]
+          ]
+        },
+        { "text": "On Windows the folder is %USERPROFILE%\\.agent-graph." }
+      ]
+    },
+    {
+      "title": "Settings (environment variables)",
+      "blocks": [
+        {
+          "table": [
+            ["AGENT_GRAPH_HOME=<dir>", "Keep data somewhere else"],
+            ["AGENT_GRAPH_CAPTURE_BODIES=1", "Also record message bodies and final agent messages"],
+            ["AGENT_GRAPH_RAW=1", "Also keep raw hook payloads, for building adapters"],
+            ["AGENT_GRAPH_NOW=<RFC 3339 time>", "Read logs as if it were this time"]
+          ]
+        }
+      ]
+    }
+  ],
+  "footer": "`agent-graph <command> -h` (or --help) explains a command in full, with examples.",
+  "commands": [
+    {
+      "name": "install",
+      "summary": "Set up a coding agent: hooks that record its sessions, and an /agent-graph command",
+      "description": [
+        { "text": "Set up a coding agent to work with Agent Graph. For Claude Code this does two things:" },
+        {
+          "steps": [
+            { "text": "Adds hooks to Claude Code's settings, so every new session is recorded. Each hook runs `agent-graph emit` in the background: it takes a few milliseconds, never blocks the agent, and never sends anything anywhere. Everything else in the settings file is kept, and the old file is backed up beside it (settings.json.agent-graph.bak). Sessions that were already running aren't recorded; start a new one." },
+            { "text": "Adds an /agent-graph command (a skill). Run it in any session for a picture of the session and a short summary of what needs you, what looks stuck and what's in progress. `/agent-graph all` covers every session from the last day, and `/agent-graph share` gives you a live link. Claude can also use it by itself when you ask how your agents are doing." }
+          ]
+        },
+        { "text": "For Codex, Gemini CLI and Cursor it adds just the command for now. Their own sessions aren't recorded yet, so it shows the Claude Code sessions that are." },
+        { "heading": "Where the command goes (with --scope user)" },
+        {
+          "table": [
+            ["Claude Code", "~/.claude/skills/agent-graph/SKILL.md; run it as /agent-graph"],
+            ["Codex", "~/.agents/skills/agent-graph/SKILL.md; run it as $agent-graph"],
+            ["Gemini CLI", "~/.gemini/commands/agent-graph.toml; run it as /agent-graph"],
+            ["Cursor", "~/.cursor/skills/agent-graph/SKILL.md; run it as /agent-graph"]
+          ]
+        },
+        { "heading": "What --scope changes" },
+        {
+          "table": [
+            ["user", "Every project: files in your home folder. The default."],
+            ["project", "Just this project: .claude/ (or .agents/, .gemini/, .cursor/) in this folder, which you'd usually commit."],
+            ["local", "Like project, but Claude Code's hooks go in .claude/settings.local.json, which isn't committed."]
+          ]
+        },
+        { "text": "It lists what it will change and asks before writing: --yes skips the question, and --dry-run only shows the changes. Installing again changes nothing unless something is out of date. A command file of the same name that you wrote yourself is never overwritten." }
+      ],
+      "options": [
+        { "id": "provider", "flag": "<claude-code|codex|gemini|cursor>", "text": "The coding agent to set up." },
+        { "id": "scope", "flag": "--scope <user|project|local>", "text": "Every project (user, the default), or just this one (project, or local to keep Claude Code's hooks out of version control)." },
+        { "id": "dry_run", "flag": "--dry-run", "text": "Show what would change, and change nothing." },
+        { "id": "yes", "flag": "-y, --yes", "text": "Don't ask before making the changes." },
+        { "id": "command", "flag": "--command <COMMAND>", "text": "The command the hooks run. Defaults to this executable's `emit`." },
+        { "id": "no_slash_command", "flag": "--no-slash-command", "text": "Don't add the /agent-graph command; just the hooks." }
+      ],
+      "examples": [
+        { "command": "agent-graph install claude-code", "text": "Hooks and /agent-graph for every project." },
+        { "command": "agent-graph install claude-code --dry-run", "text": "Show exactly what would change, and change nothing." },
+        { "command": "agent-graph install claude-code --scope project", "text": "Just this project, in .claude/ (usually committed)." },
+        { "command": "agent-graph install claude-code --no-slash-command", "text": "Just the hooks." },
+        { "command": "agent-graph install codex", "text": "Add the command to Codex too. `gemini` and `cursor` work the same way." },
+        { "command": "agent-graph install claude-code --command \"/opt/bin/agent-graph emit --provider claude-code\"", "text": "Register a different path for the hooks. They use this executable by default." }
+      ]
+    },
+    {
+      "name": "uninstall",
+      "summary": "Remove what `install` added",
+      "description": [
+        { "text": "Remove what `install` added: Agent Graph's hooks from the agent's settings, and the /agent-graph command if Agent Graph wrote it." },
+        { "text": "Everything else in the settings file is kept, and the old file is backed up beside it first. A command file you wrote yourself is left alone. Use the same --scope you installed with." },
+        { "text": "What's already been recorded stays in ~/.agent-graph; delete that folder to remove it." }
+      ],
+      "options": [
+        { "id": "provider", "flag": "<claude-code|codex|gemini|cursor>", "text": "The coding agent to remove Agent Graph from." },
+        { "id": "scope", "flag": "--scope <user|project|local>", "text": "Where it was installed: every project (user, the default), or this one (project or local)." },
+        { "id": "dry_run", "flag": "--dry-run", "text": "Show what would be removed, and remove nothing." },
+        { "id": "yes", "flag": "-y, --yes", "text": "Don't ask before removing." }
+      ],
+      "examples": [
+        { "command": "agent-graph uninstall claude-code", "text": "Remove the hooks and the command from your user settings." },
+        { "command": "agent-graph uninstall claude-code --scope project", "text": "Remove them from this project." },
+        { "command": "agent-graph uninstall claude-code --dry-run", "text": "Show what would be removed, and remove nothing." },
+        { "command": "agent-graph uninstall codex", "text": "Remove the command from Codex." }
+      ]
+    },
+    {
+      "name": "tail",
+      "summary": "Watch the graph live in this terminal",
+      "description": [
+        { "text": "Watch the graph live in this terminal." },
+        { "text": "Takes over the terminal like `top` and redraws as events arrive. The top line sums everything up: how many sessions and working agents, and, in colour, how many need you, look stuck or are deadlocked. Below it, each session is a tree of its agents, most recently active first:" },
+        { "code": "claude-code:e0000002  search-indexer  [working]  Rebuilding the index schema\n└─ Explore a91d0160  [working] (stale?)  Profile the slow bulk import" },
+        { "heading": "How to read it" },
+        {
+          "table": [
+            ["[working] [idle] [input_required] [completed] [failed] [canceled]", "The state. idle means its turn is over and it's waiting for your next message."],
+            ["needs you: …", "It's waiting on you: a permission prompt, a question, or a plan to approve."],
+            ["(stale?)", "Working, but no events for --stale-minutes (30 by default). It may have hung or crashed, or be in one long, quiet command."],
+            ["waiting on …", "Blocked on another agent or session, with how much work is ahead of it. \"looks stuck\" names a stale one it's waiting on."],
+            ["DEADLOCK", "Sessions waiting on each other: none of them can finish."],
+            ["tasks 3/5", "Its task list: done out of total."]
+          ]
+        },
+        { "heading": "Keys" },
+        {
+          "table": [
+            ["q, Esc, Ctrl+C", "Quit. The terminal is put back as it was."],
+            ["a", "Show or hide sessions with no activity in the last day."]
+          ]
+        },
+        { "text": "It checks for new events four times a second, and redraws at least every five seconds so \"stale?\" keeps up with the clock. Lines are cut to the terminal's width; if there are more than fit, it says how many more." },
+        { "text": "When its output isn't a terminal (piped or redirected), it prints the whole picture each time something changes instead, so it can be logged." }
+      ],
+      "options": [
+        { "id": "session", "flag": "--session <SESSION>", "text": "Follow one session: its id, the first few characters of it, or `current` (the one this runs in)." },
+        { "id": "all", "flag": "--all", "text": "Start with sessions older than a day shown too." },
+        { "id": "ascii", "flag": "--ascii", "text": "Draw the tree with plain ASCII characters." },
+        { "id": "stale_minutes", "flag": "--stale-minutes <MINUTES>", "text": "Flag working agents with no events for this long as stale." }
+      ],
+      "examples": [
+        { "command": "agent-graph tail", "text": "Every session from the last day." },
+        { "command": "agent-graph tail --session current", "text": "Just the session this runs in (or the latest one in this folder)." },
+        { "command": "agent-graph tail --session 5f2c", "text": "Just the session whose id starts with 5f2c." },
+        { "command": "agent-graph tail --ascii", "text": "Plain | and ` for the tree, for terminals without Unicode." },
+        { "command": "agent-graph tail --stale-minutes 10", "text": "Flag quiet agents sooner." },
+        { "command": "agent-graph tail | tee graph.log", "text": "Not a terminal: a new frame is printed on each change." }
+      ]
+    },
+    {
+      "name": "view",
+      "summary": "Watch the graph live in your browser, with a timeline to step through",
+      "description": [
+        { "text": "Watch the graph live in your browser, and step back through its history." },
+        { "text": "Serves a web page at http://localhost:7777 (or --port) until you stop it with Ctrl+C. It's only reachable from this machine, and it refuses requests made by other websites. --open opens it in your browser." },
+        { "heading": "The page has" },
+        {
+          "table": [
+            ["Sessions", "Every session, with anything that needs you, is deadlocked or looks stuck called out. \"Older\" shows sessions from before today."],
+            ["Tree", "The selected session's agents, what each is doing, its task progress, and what it's waiting on."],
+            ["Details", "Click any session or agent: its tasks, what it's waiting on, the agents it started, its messages, and when things happened."],
+            ["Timeline", "Every event in the session is a stop on a slider. Drag it, click it, or use ← and → to see the graph exactly as it was at that moment; the node that step changed is ringed. \"Live\" (or L, or End) jumps back to now."],
+            ["Save image", "A picture of the session as it is at the step you're on."]
+          ]
+        },
+        { "text": "The page updates as events arrive, without reloading." }
+      ],
+      "options": [
+        { "id": "port", "flag": "--port <PORT>", "text": "The port to serve on." },
+        { "id": "open", "flag": "--open", "text": "Open the page in your browser." },
+        { "id": "stale_minutes", "flag": "--stale-minutes <MINUTES>", "text": "Flag working agents with no events for this long as stale." }
+      ],
+      "examples": [
+        { "command": "agent-graph view --open", "text": "Start it, and open it in your browser." },
+        { "command": "agent-graph view --port 8080", "text": "Use another port (if 7777 is taken, or to run two)." },
+        { "command": "AGENT_GRAPH_HOME=examples/logs AGENT_GRAPH_NOW=2026-09-25T12:00:00Z agent-graph view --open", "text": "Browse the example logs that come with Agent Graph's source." }
+      ]
+    },
+    {
+      "name": "tree",
+      "summary": "Print the graph once, as a text tree",
+      "description": [
+        { "text": "Print the graph once, as text, and exit." },
+        { "text": "Shows each session active in the last day (--all for every one) with its agents underneath, using the same markers as `tail` (`agent-graph tail -h` explains them). Handy in scripts, or to paste into a message." }
+      ],
+      "options": [
+        { "id": "all", "flag": "--all", "text": "Include sessions with no activity in the last day." },
+        { "id": "stale_minutes", "flag": "--stale-minutes <MINUTES>", "text": "Flag working agents with no events for this long as stale." }
+      ],
+      "examples": [
+        { "command": "agent-graph tree", "text": "Sessions from the last day." },
+        { "command": "agent-graph tree --all", "text": "Every session ever recorded." },
+        { "command": "agent-graph tree --stale-minutes 10", "text": "Flag quiet agents sooner." }
+      ]
+    },
+    {
+      "name": "snapshot",
+      "summary": "Save a picture of a session, sized for a phone, and print its path",
+      "description": [
+        { "text": "Save a picture of a session and print where it went." },
+        { "text": "The picture is sized for a phone (1080 pixels wide). From the top: the session's name and state, a callout for anything that needs you, its agents as a tree (stuck ones flagged), and its task list. It's made for sharing: an agent can run this and send you the image, which is what the /agent-graph command does." },
+        { "heading": "Which session it draws" },
+        {
+          "table": [
+            ["--session <id>", "That session: its id, or the first few characters of it."],
+            ["--all", "Every session active in the last day, one after another."],
+            ["--session current", "The Claude Code session this runs in, then the latest session in this folder, then the latest anywhere. This is also the default."]
+          ]
+        },
+        { "text": "Only the file's path is printed, so scripts can use it. By default the picture goes in ~/.agent-graph/images/ with a new name each time. --out chooses the file, and its extension chooses the format: .png, .svg, or .json (the whole graph as data, like --json)." }
+      ],
+      "options": [
+        { "id": "session", "flag": "--session <SESSION>", "text": "The session to draw: its id, the first few characters of it, or `current` (the default)." },
+        { "id": "all", "flag": "--all", "text": "Draw every session active in the last day instead." },
+        { "id": "out", "flag": "-o, --out <FILE>", "text": "Where to write it. The extension picks the format: .png, .svg or .json." },
+        { "id": "json", "flag": "--json", "text": "Print the whole graph as JSON instead of drawing it." },
+        { "id": "theme", "flag": "--theme <light|dark>", "text": "The picture's colours." },
+        { "id": "stale_minutes", "flag": "--stale-minutes <MINUTES>", "text": "Flag working agents with no events for this long as stale." }
+      ],
+      "examples": [
+        { "command": "agent-graph snapshot", "text": "This session (or the latest one here), as a PNG." },
+        { "command": "agent-graph snapshot --session 5f2c --theme dark", "text": "The session whose id starts with 5f2c, in dark colours." },
+        { "command": "agent-graph snapshot --all", "text": "Every session from the last day, in one tall picture." },
+        { "command": "agent-graph snapshot --out graph.svg", "text": "As SVG, to the file you name." },
+        { "command": "agent-graph snapshot --json", "text": "The whole graph as JSON on standard output, for scripts." },
+        { "command": "open \"$(agent-graph snapshot)\"", "text": "Make one and open it (macOS; use xdg-open on Linux)." }
+      ]
+    },
+    {
+      "name": "watch-remote",
+      "summary": "Share the graph live on the web, and print its link",
+      "description": [
+        { "text": "Share the graph live on the web, and print its link." },
+        { "text": "It sends the event log to the Agent Graph site (https://agentgraph.chofter.com, or --url), prints the link straight away, then sends each new event as it's recorded, until you stop it with Ctrl+C. Open the link anywhere, including on a phone: it's the same viewer as `agent-graph view`, timeline and all." },
+        { "text": "What's shared: every session on this machine, or just one with --session (`--session current` for the one this runs in). Agent Graph records task names and agent descriptions, not prompts or tool output (unless you've set AGENT_GRAPH_CAPTURE_BODIES=1). The site stores it encrypted." },
+        { "heading": "Who can see it" },
+        { "text": "Anyone with the link, unless there's a password:" },
+        {
+          "table": [
+            ["--password=…", "Viewers must enter it. The site keeps only a hash."],
+            ["--save-default-password", "Also use that password from now on. It's saved in ~/.agent-graph/remote.json, readable only by you."],
+            ["--password= --save-default-password", "Forget the saved password."],
+            ["--password=", "Share this time without one, even if one's saved."]
+          ]
+        },
+        { "text": "A password is only sent over HTTPS, or to your own machine." },
+        { "heading": "Who can change it" },
+        { "text": "Only this run. The site gives it a key when the log is created, every update must carry it, and it's kept only in memory." },
+        { "text": "It checks for new events once a second and sends them together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why." }
+      ],
+      "options": [
+        { "id": "url", "flag": "--url <URL>", "text": "The site to share on." },
+        { "id": "password", "flag": "--password <PASSWORD>", "text": "Viewers must enter this. `--password=` shares without one, even if a default is saved." },
+        { "id": "save_default_password", "flag": "--save-default-password", "text": "Save --password as the default for future runs; with an empty --password=, forget it." },
+        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session: its id, the first few characters of it, or `current` (the one this runs in)." }
+      ],
+      "examples": [
+        { "command": "agent-graph watch-remote", "text": "Share every session, live. The first line printed is the link." },
+        { "command": "agent-graph watch-remote --session current", "text": "Share just the session this runs in." },
+        { "command": "agent-graph watch-remote --password=s3cret --save-default-password", "text": "Require a password, and use it from now on." },
+        { "command": "agent-graph watch-remote --password= --save-default-password", "text": "Forget the saved password (and share this time without one)." },
+        { "command": "agent-graph watch-remote --url=http://localhost:3000", "text": "Share to a copy of the site you're running yourself." }
+      ]
+    }
+  ]
+}

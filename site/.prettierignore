@@ -1,3 +1,4 @@
 public/viewer/app.js
 public/viewer/app.css
 lib/viewer-shell.ts
+lib/cli-help.json

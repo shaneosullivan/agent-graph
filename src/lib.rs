@@ -18,6 +18,8 @@ pub mod cli;
 #[cfg(feature = "cli")]
 pub mod emit;
 #[cfg(feature = "cli")]
+pub mod help;
+#[cfg(feature = "cli")]
 pub mod image;
 #[cfg(feature = "cli")]
 pub mod install;
