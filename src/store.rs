@@ -5,7 +5,7 @@
 //! and no locking is needed.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, Write};
 use std::path::Path;
 
 use crate::event::Envelope;
@@ -164,6 +164,9 @@ pub struct Loaded {
     pub events: Vec<Envelope>,
     /// Lines that weren't valid events, e.g. a line cut short by a crash.
     pub skipped_lines: usize,
+    /// Files that couldn't be read at all (permissions, a folder with that
+    /// name). The rest are loaded without them.
+    pub unreadable: Vec<std::path::PathBuf>,
 }
 
 /// Reads every `*.jsonl` file in `dir`. A missing directory is just empty.
@@ -179,14 +182,23 @@ pub fn load_events(dir: &Path) -> io::Result<Loaded> {
         if path.extension().is_none_or(|ext| ext != "jsonl") {
             continue;
         }
+        // Each file whole, or not at all: one that can't be read is left
+        // out (and listed), rather than stopping every other.
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                loaded.unreadable.push(path);
+                continue;
+            }
+        };
         // Lines as bytes: one that isn't UTF-8 (a write torn mid-character)
         // is just a bad line, like any other that doesn't parse.
-        for line in BufReader::new(fs::File::open(&path)?).split(b'\n') {
-            let line = line?;
+        for line in bytes.split(|&b| b == b'\n') {
             if line.trim_ascii().is_empty() {
                 continue;
             }
-            match serde_json::from_slice::<Envelope>(&line) {
+            match serde_json::from_slice::<Envelope>(line) {
                 Ok(event) => loaded.events.push(event),
                 Err(_) => loaded.skipped_lines += 1,
             }
@@ -320,6 +332,23 @@ mod tests {
         let loaded = load_events(dir.path()).expect("loads despite the bad bytes");
         assert_eq!(loaded.events.len(), 3, "lines 1 and 3, and the other file");
         assert_eq!(loaded.skipped_lines, 1);
+    }
+
+    /// R15: a file that can't be read is left out, and listed, rather than
+    /// stopping every other file loading.
+    #[test]
+    fn a_file_that_cant_be_read_is_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = r#"{"v":1,"id":"01J8ZK3V7Q9R2M5X4T6W8Y0B1C","ts":"2026-09-25T10:00:00.000Z","type":"status","node":"x:1","data":{"state":"idle"}}"#;
+        append(
+            &dir.path().join("x-1.jsonl"),
+            format!("{good}\n").as_bytes(),
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("broken.jsonl")).unwrap();
+        let loaded = load_events(dir.path()).expect("loads the rest");
+        assert_eq!(loaded.events.len(), 1);
+        assert_eq!(loaded.unreadable, [dir.path().join("broken.jsonl")]);
     }
 
     #[test]

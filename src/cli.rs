@@ -662,6 +662,9 @@ fn load_graph(stale_minutes: u64) -> Result<(Graph, std::path::PathBuf), String>
             loaded.skipped_lines
         );
     }
+    for file in &loaded.unreadable {
+        eprintln!("agent-graph: couldn't read {}; left it out", file.display());
+    }
     let opts = reducer::Options {
         now: crate::clock::now(),
         stale_after: Duration::from_secs(stale_minutes * 60),

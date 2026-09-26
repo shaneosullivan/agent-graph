@@ -102,7 +102,7 @@ Status is updated as each is done.
 - **Where:** `src/remote.rs` (`Lines::poll`)
 - **Problem:** Offsets of files read earlier in a poll are saved even when a later file fails, and the error is ignored, so those lines are never sent.
 - **Fix:** keep going past a bad file, and report it.
-- **Status:** open
+- **Status:** fixed. A file that can't be read is skipped, said once, and retried; its offset doesn't move, so nothing is lost. Sharing one session's tree: a member that can't be read holds back the rest until a recheck drops it (with the sessions under it, which may have moved along), and rejoins once it can be read; `--session` takes only a whole id while any file can't be read; `load_events` leaves out, and names, a file it can't read. Tests: `a_file_that_cant_be_read_is_left_out` (src/store.rs), `a_file_that_cant_be_read_doesnt_stop_the_rest`, `an_unreadable_file_elsewhere_doesnt_block_the_tree`, `a_deleted_file_is_forgotten`, `a_restarted_member_is_held_back_until_the_tree_can_be_checked`, `an_unreadable_member_drops_out_and_the_rest_carry_on`, `a_member_that_can_be_read_again_rejoins`, `a_session_under_an_unreadable_one_drops_out_too`, `a_file_the_recheck_can_read_again_is_forgotten`, `a_prefix_is_refused_while_a_file_cant_be_read`, `a_failed_recheck_tries_again` (src/remote.rs). Reviewed (three rounds).
 
 ### R16. A retried append can grow at the same offset, so viewers miss events and a late commit loses them
 - **Where:** `src/remote.rs`, `site/lib/store.ts`, `site/app/api/logs/[id]/append/route.ts`
