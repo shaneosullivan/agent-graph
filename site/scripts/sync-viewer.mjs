@@ -57,7 +57,7 @@ function crates() {
     encoding: "utf8",
   });
   if (tree.status !== 0) {
-    console.error(tree.stderr);
+    console.error(tree.error ? `Can't run cargo (${tree.error.message}); is Rust installed?` : tree.stderr);
     process.exit(tree.status ?? 1);
   }
   const lines = tree.stdout.split("\n").map((l) => l.replace(/ \([^)]*\)/g, "").trim());
@@ -92,6 +92,14 @@ if (args.has("--check-wasm")) {
           : null;
   if (problem) {
     console.error(`public/viewer/agent_graph.wasm is out of date: ${problem}. In site/, run \`npm run build-wasm\`, and commit it.`);
+    // What differs, to see why.
+    const now = { crates: crates(), profiles: profiles() };
+    for (const key of ["crates", "profiles"]) {
+      const was = new Set(record ? record[key] : []);
+      const is = new Set(now[key]);
+      for (const line of was) if (!is.has(line)) console.error(`  was: ${key}: ${line}`);
+      for (const line of is) if (!was.has(line)) console.error(`  now: ${key}: ${line}`);
+    }
     process.exit(1);
   }
   console.log("The site's WebAssembly is built from the crate as it is now.");
