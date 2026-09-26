@@ -1421,3 +1421,47 @@ fn snapshot_json_of_sessions_needs_some() {
     }
     assert!(snapshot(&["--out", "all.json"]).status.success());
 }
+
+/// R49: the backup is of the settings as they were without Agent Graph.
+/// Installing again, or uninstalling, doesn't replace it with a copy that
+/// has the hooks.
+#[test]
+fn the_settings_backup_keeps_the_original() {
+    let project = tempfile::tempdir().unwrap();
+    let settings = project.path().join(".claude/settings.json");
+    let backup = project.path().join(".claude/settings.json.agent-graph.bak");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, r#"{"model": "opus"}"#).unwrap();
+    let run = |args: &[&str]| {
+        let out = bin()
+            .args(args)
+            .args(["--scope", "project", "--yes"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    run(&["install", "claude-code"]);
+    assert_eq!(read(&backup), r#"{"model": "opus"}"#);
+    // A different hook command, so the settings change again.
+    run(&[
+        "install",
+        "claude-code",
+        "--command",
+        "ag emit --provider claude-code",
+    ]);
+    assert_eq!(read(&backup), r#"{"model": "opus"}"#, "installing again");
+    run(&["uninstall", "claude-code"]);
+    assert_eq!(read(&backup), r#"{"model": "opus"}"#, "uninstalling");
+
+    // Without the hooks, the settings are the user's own again, and those
+    // are what the next install backs up.
+    std::fs::write(&settings, r#"{"model": "sonnet"}"#).unwrap();
+    run(&["install", "claude-code"]);
+    assert_eq!(read(&backup), r#"{"model": "sonnet"}"#);
+}
