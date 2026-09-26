@@ -216,11 +216,12 @@ pub struct SpawnRequested {
     pub purpose: Option<String>,
     #[serde(default)]
     pub background: bool,
-    /// It's for `agent-graph run`, whose session is named for the run, not
-    /// the program: only a run's session is paired with it, and a run's
-    /// session only with such a request.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub run: bool,
+    /// For a session: whether it's for `agent-graph run`, whose session is
+    /// named for the run, not the program. Only a run's session is paired
+    /// with one that is, and a run's session only with such a request. Not
+    /// known in logs from before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<bool>,
 }
 
 /// The spawning call returned. `child`, when the provider reports it, is authoritative.
