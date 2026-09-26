@@ -1,0 +1,88 @@
+#!/bin/sh
+# Runs the repository's checks, as .github/workflows/ci.yml does, for
+# Chofter's CI (.chofter.json) or by hand:
+#
+#   bin/chofter test          every check: rust, then wasm, then site
+#   bin/chofter test rust     formatting, clippy and the Rust tests
+#   bin/chofter test wasm     the core without the CLI, the WebAssembly, and
+#                             that the site's copies of the viewer are current
+#   bin/chofter test site     the site's typecheck, unit tests and build, then
+#                             its API and store tests against the Firestore
+#                             emulator (needs Java 21 and ports 3000 and 8080)
+#
+# It needs cargo (with rustup, for the wasm32 target), Node 22 and npm; the
+# Firebase CLI is used from PATH, or fetched with npx.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+step() {
+  printf '\n==> %s\n' "$*"
+  "$@"
+}
+
+rust() {
+  step cargo fmt --all --check
+  step cargo clippy --workspace --all-targets -- -D warnings
+  step cargo test --workspace
+}
+
+wasm() {
+  if command -v rustup >/dev/null 2>&1; then
+    step rustup target add wasm32-unknown-unknown
+  fi
+  # The core must build without the CLI's dependencies.
+  step cargo build --lib --no-default-features
+  step cargo build -p agent-graph-wasm --target wasm32-unknown-unknown --profile wasm
+  # The site's copy of the viewer must match the crate's.
+  step node site/scripts/sync-viewer.mjs
+  step git diff --exit-code -- site/public/viewer/app.js site/public/viewer/app.css site/lib/viewer-shell.ts
+  # And its WebAssembly must be built from the Rust as it is now.
+  step node site/scripts/sync-viewer.mjs --check-wasm
+}
+
+site() {
+  # Throwaway values for tests only, as CI's.
+  export AGENT_GRAPH_SECRET="${AGENT_GRAPH_SECRET:-ci-only-secret}"
+  export CRON_SECRET="${CRON_SECRET:-ci-only-cron-secret}"
+  # 32 bytes of 0x03, base64url.
+  export AGENT_GRAPH_ENCRYPTION_KEY="${AGENT_GRAPH_ENCRYPTION_KEY:-AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM}"
+  export FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-demo-agent-graph}"
+  (
+    cd site
+    step npm ci
+    step npm run typecheck
+    step npm run test:unit
+    step npm run build
+    # test:ci runs `firebase`: from PATH, or else a shim for npx's.
+    if ! command -v firebase >/dev/null 2>&1; then
+      shim="$(mktemp -d)"
+      trap 'rm -rf "$shim"' EXIT
+      printf '#!/bin/sh\nexec npx --yes firebase-tools "$@"\n' >"$shim/firebase"
+      chmod +x "$shim/firebase"
+      PATH="$shim:$PATH"
+    fi
+    # The API tests, against the built site and the Firestore emulator,
+    # then lib/store.ts's own tests against the emulator.
+    step npm run test:ci
+  )
+}
+
+usage() {
+  echo "usage: bin/chofter test [rust|wasm|site]" >&2
+  exit 2
+}
+
+[ "${1:-}" = test ] || usage
+case "${2:-all}" in
+  rust) rust ;;
+  wasm) wasm ;;
+  site) site ;;
+  all)
+    rust
+    wasm
+    site
+    ;;
+  *) usage ;;
+esac
+printf '\nAll checks passed.\n'
