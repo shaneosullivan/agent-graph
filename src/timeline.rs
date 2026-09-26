@@ -939,8 +939,10 @@ mod tests {
         );
     }
 
-    /// R23 (and R54): a child another session's request also claims is
-    /// named, though it's in that session's tree.
+    /// R23: a child a request claims is named, though it's in another
+    /// session's tree (moved there by a call that session returned without
+    /// having asked for it; since R54, not by one it did ask for, which
+    /// takes the child from the first).
     #[test]
     fn a_child_claimed_from_outside_the_tree_is_named() {
         let events = events_of(&[
@@ -954,11 +956,6 @@ mod tests {
             ),
             ("x:s/a", "agent.spawned", "{}"),
             ("x:t", "session.started", "{}"),
-            (
-                "x:t",
-                "spawn.requested",
-                r#"{"call_id":"c","kind":"agent"}"#,
-            ),
             (
                 "x:t",
                 "spawn.returned",

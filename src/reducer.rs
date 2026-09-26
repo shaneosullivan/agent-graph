@@ -75,6 +75,10 @@ pub struct Node {
     /// The spawn request (`call_id`) this node was bound to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spawned_by: Option<String>,
+    /// The node that made that request: call ids aren't unique across
+    /// sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<String>,
     /// For a session started by another: how the link was found. `env` (it
     /// inherited its parent's identity), `run` (`agent-graph run` started
     /// it) or `process` (its parent's agent is among its processes).
@@ -755,6 +759,7 @@ impl Reducer {
                 purpose: None,
                 background: None,
                 spawned_by: None,
+                requested_by: None,
                 link: None,
                 process: None,
                 tasks: Vec::new(),
@@ -817,15 +822,23 @@ impl Reducer {
         if let Some(previous) = &displaced {
             if let Some(n) = self.nodes.get_mut(previous) {
                 n.spawned_by = None;
+                n.requested_by = None;
             }
         }
-        // Undo a guess that bound this child to a different spawn.
-        if let Some(other_call) = self.nodes[child]
-            .spawned_by
-            .clone()
-            .filter(|c| c != call_id)
-        {
-            for id in self.requesters.get(&other_call).into_iter().flatten() {
+        // Undo a guess that bound this child to a different spawn: another
+        // call, or one with the same call id that another node made.
+        let bound = &self.nodes[child];
+        let other_call = bound.spawned_by.clone().filter(|c| {
+            c != call_id || bound.requested_by.as_deref().is_none_or(|r| r != requester)
+        });
+        if let Some(other_call) = other_call {
+            // Its maker (in a keyframe from before that was recorded, any
+            // node that made a request with that call id).
+            let makers = match &self.nodes[child].requested_by {
+                Some(maker) => vec![maker.clone()],
+                None => self.requesters.get(&other_call).cloned().unwrap_or_default(),
+            };
+            for id in &makers {
                 let Some(node) = self.nodes.get_mut(id) else {
                     continue;
                 };
@@ -864,6 +877,7 @@ impl Reducer {
 
         let child_node = self.nodes.get_mut(child).expect("exists");
         child_node.spawned_by = Some(call_id.to_string());
+        child_node.requested_by = Some(requester.to_string());
         // The request is where the purpose comes from, so it also replaces one
         // left behind by an earlier wrong guess.
         if purpose.is_some() {
