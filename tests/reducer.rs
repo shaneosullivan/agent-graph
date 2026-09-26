@@ -466,6 +466,52 @@ fn correcting_a_guess_leaves_other_sessions_requests_alone() {
     assert_eq!(graph.nodes["x:t/a"].spawned_by.as_deref(), Some("c"));
 }
 
+/// R54: a child named by a request with the same call id as the one it was
+/// paired with, but another session's, is taken from that one: only one
+/// request claims it.
+#[test]
+fn a_child_named_by_another_sessions_request_with_the_same_call_id_is_taken() {
+    let graph = reduce_at(
+        vec![
+            ev(0, "x:p", "session.started", json!({})),
+            ev(0, "x:q", "session.started", json!({})),
+            ev(
+                1,
+                "x:p",
+                "spawn.requested",
+                json!({"call_id": "k", "kind": "session"}),
+            ),
+            ev(
+                1,
+                "x:q",
+                "spawn.requested",
+                json!({"call_id": "k", "kind": "session"}),
+            ),
+            // Guessed as x:p's, then named as x:q's.
+            under(ev(2, "x:c", "session.started", json!({})), "x:p"),
+            ev(
+                3,
+                "x:q",
+                "spawn.returned",
+                json!({"call_id": "k", "child": "x:c"}),
+            ),
+        ],
+        4,
+    );
+    let claims: Vec<&str> = graph
+        .nodes
+        .values()
+        .filter(|n| n.spawns.iter().any(|s| s.child.as_deref() == Some("x:c")))
+        .map(|n| n.id.as_str())
+        .collect();
+    assert_eq!(claims, ["x:q"]);
+    let p = &graph.nodes["x:p"];
+    assert!(p.waits.iter().all(|w| w.on.is_none()), "{:?}", p.waits);
+    let c = &graph.nodes["x:c"];
+    assert_eq!(c.parent.as_deref(), Some("x:q"));
+    assert_eq!(c.spawned_by.as_deref(), Some("k"));
+}
+
 /// A session `child` (from provider `provider`, with `data`) started under `x:p`.
 fn shell_child(secs: u64, child: &str, provider: &str, data: Value) -> Envelope {
     let mut e = under(ev(secs, child, "session.started", data), "x:p");
