@@ -126,7 +126,7 @@ Status is updated as each is done.
 - **Where:** `site/app/api/logs/[id]/unlock/route.ts`
 - **Problem:** Unlimited guesses, each costing a scrypt run on the server.
 - **Fix:** limit attempts per log and per address, with a cooldown.
-- **Status:** open
+- **Status:** fixed. Each guess is counted before the password is checked, in a Firestore transaction against three buckets per 15-minute window: the log and address together (`UNLOCKS_PER_LOG_AND_ADDRESS`, 5), the log (`UNLOCKS_PER_LOG`, 20) and the address (`UNLOCKS_PER_ADDRESS`, 30); a right guess is given back, so only wrong ones use up the limits, and one address can only hold itself back. Past a limit, unlocking answers `429` with `Retry-After` (the page shows its message) and runs no scrypt; refused guesses aren't counted, a full bucket is refused by a plain read (no transaction to contend over), and too many guesses at once to count get a short `429`, not an error. The route's logic is in `lib/unlock.ts`, with what it uses passed in. Bucket documents are keyed (the log's storage id, HMACs of the address) and carry `expireAt` for a TTL policy. The address is `X-Real-IP` (which Vercel sets), IPv6 by its /64; without one, guesses are limited per log only. Tests: "a refused guess isn't checked", "a guess is counted, then checked, and a right one given back", "a password that can't be right isn't counted or checked", "guesses are counted by the platform's address, by block", "an IPv6 address is counted by its /64" (site/tests/unlock.test.mts); "unlocking a log is limited, from any number of addresses", "one address's guesses at a log hold back only that address", "unlocking is limited per address, across logs", "right passwords don't use up the limits" (site/tests/api.test.mjs); "password guesses are counted once each, and the count ends with its window", "a right guess is given back", "guesses that can't be counted just now wait a moment" (site/tests/store.test.mjs). Reviewed (three rounds). A full bucket counted in during the last 10 s (right guesses among those are about to be given back), or too many guesses at once to count, is a 5 s wait ("a few seconds"), not the window's end. Right guesses aren't limited, only how many are checked at once: see R52.
 
 ### R20. A slow timeline step can replace the graph after going Live, a cached step, or a session switch
 - **Where:** `src/view/assets/app.js`
@@ -275,4 +275,10 @@ Status is updated as each is done.
 
 ### R51. `uninstall` leaves behind the empty folders `install` created
 - **Where:** `src/cli.rs`
+- **Status:** open
+
+### R52. Creating a log with a password, or unlocking one with the right password, runs scrypt without limit
+- **Where:** `site/app/api/logs/route.ts` (`hashPassword`), `site/lib/unlock.ts`
+- **Problem:** Found reviewing R19. Only wrong guesses are limited, so one address can run scrypt (about 50 ms each) as often as it likes by unlocking its own log with the right password, or by creating logs with passwords, which isn't limited at all.
+- **Fix:** a generous per-address cap on every scrypt run (say 200 per 15 minutes), counted like R19's buckets.
 - **Status:** open

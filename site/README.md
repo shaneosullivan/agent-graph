@@ -53,7 +53,12 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 - Each viewer polls every 3 s while events are arriving, backing off to 15 s when quiet or when the tab is hidden.
 - A log's metadata never changes, so each server instance caches it.
 
-Passwords are hashed with scrypt. Firestore's security rules (`firestore.rules`) deny all direct access; only the server, using the Admin SDK, touches the data.
+Passwords are hashed with scrypt. Wrong guesses are limited, every 15 minutes: 5 at a log from one address, 20 at a log from anywhere, and 30 from one address across logs (counted in Firestore, so across every server instance; a right password doesn't count). Past a limit, unlocking answers `429` until the window ends, even with the right password.
+- **What that costs viewers:** one address can only hold back itself and anyone sharing it (an office, or a mobile carrier's shared address), but someone guessing from four or more addresses can keep a log's new viewers waiting for as long as they keep at it. Viewers who have already unlocked it aren't affected.
+- **What it allows guessers:** about 2,000 guesses a day at a log, for as long as it exists. Choose a password that wouldn't fall to that: not a word, a name or a date.
+- **Addresses** are the ones Vercel reports (`X-Real-IP`), IPv6 counted by its /64. Behind another proxy, check it sets that header, or the per-address limits can be dodged (the per-log one holds regardless).
+
+Firestore's security rules (`firestore.rules`) deny all direct access; only the server, using the Admin SDK, touches the data.
 
 **Logs are encrypted at rest.** Google already encrypts Firestore's disks. On top of that, the site encrypts every chunk before storing it, so the database holds only ciphertext. Anyone who can read Firestore itself (the console, exports and backups, a leaked service-account key) sees nothing readable.
 - **Cipher:** AES-256-GCM, which also detects any change to stored data.
@@ -131,7 +136,8 @@ npm run test:ci
    - `FIREBASE_SERVICE_ACCOUNT`: the service account's JSON key, on one line.
    - `NEXT_PUBLIC_SITE_URL`: `https://agentgraph.chofter.com`
 5. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
-6. **Logs from before storage ids.** Logs created before logs were stored under an HMAC of their id can't be found by the new site until they're copied. Run the migration with the production environment: the same `AGENT_GRAPH_ENCRYPTION_KEY`, and `FIREBASE_SERVICE_ACCOUNT`. It refuses to run without the key, prints the project, and checks that the key decrypts the logs before writing anything.
+6. **Optional:** add a Firestore TTL policy on the `unlock-attempts` collection's `expireAt` field, so counts of password guesses are cleared away once their window is over.
+7. **Logs from before storage ids.** Logs created before logs were stored under an HMAC of their id can't be found by the new site until they're copied. Run the migration with the production environment: the same `AGENT_GRAPH_ENCRYPTION_KEY`, and `FIREBASE_SERVICE_ACCOUNT`. It refuses to run without the key, prints the project, and checks that the key decrypts the logs before writing anything.
    1. Before deploying, copy the logs. The old site doesn't see the copies.
       ```bash
       npm run migrate:storage-ids

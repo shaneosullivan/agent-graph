@@ -45,6 +45,14 @@ export function writeToken(id: string): string {
   return hmac(`write:${id}`);
 }
 
+/**
+ * An address (and a log, for counting its guesses at that log), as it's
+ * stored to count password guesses: keyed, so it can't be read back.
+ */
+export function addressKey(address: string, log?: string): string {
+  return hmac(log ? `address:${address}:log:${log}` : `address:${address}`);
+}
+
 export function viewToken(id: string, passwordHash: string): string {
   return hmac(`view:${id}:${passwordHash}`);
 }

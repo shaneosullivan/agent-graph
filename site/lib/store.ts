@@ -1,7 +1,17 @@
 import { FieldPath, Timestamp } from "firebase-admin/firestore";
 
-import { BYTES_PER_READ, CHUNKS_PER_QUERY, CHUNKS_PER_READ, type Source } from "./config";
-import { safeEqual } from "./crypto";
+import {
+  BYTES_PER_READ,
+  CHUNKS_PER_QUERY,
+  CHUNKS_PER_READ,
+  type Source,
+  UNLOCK_BUSY_SECONDS,
+  UNLOCK_WINDOW_MS,
+  UNLOCKS_PER_ADDRESS,
+  UNLOCKS_PER_LOG,
+  UNLOCKS_PER_LOG_AND_ADDRESS,
+} from "./config";
+import { addressKey, safeEqual } from "./crypto";
 import { decryptChunk, encryptChunk, metaTag, storageId } from "./encryption";
 import { firestore } from "./firebase";
 
@@ -10,6 +20,7 @@ import { firestore } from "./firebase";
  *
  *   logs/{sid}                 { source, pw?, createdAt, mac }
  *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes> }
+ *   unlock-attempts/{bucket}   { n, since, expireAt }  (password guesses)
  *
  * `sid` is an HMAC of the log's id (lib/encryption.ts), not the id itself:
  * the id is the link that opens the log, so the database doesn't hold it.
@@ -166,4 +177,112 @@ export async function readChunks(
     if (snap.size < want) return { text: texts.join(""), last, more: false };
   }
   return { text: texts.join(""), last, more: true };
+}
+
+/** A guess counted by `takeUnlockAttempt`, to give back if it was right. */
+export type Reservation = { ref: FirebaseFirestore.DocumentReference; since: number }[];
+
+/** The buckets a guess at log `id` from `address` counts against. */
+function unlockBuckets(id: string, address: string | null) {
+  const attempts = firestore().collection("unlock-attempts");
+  const sid = storageId(id);
+  // All keyed: the documents name neither the log nor the address.
+  const buckets = [{ ref: attempts.doc(`log-${sid}`), limit: UNLOCKS_PER_LOG }];
+  if (address) {
+    buckets.push(
+      { ref: attempts.doc(`pair-${addressKey(address, sid)}`), limit: UNLOCKS_PER_LOG_AND_ADDRESS },
+      { ref: attempts.doc(`address-${addressKey(address)}`), limit: UNLOCKS_PER_ADDRESS },
+    );
+  }
+  return buckets;
+}
+
+/** How recently a full bucket must have been counted in to be full of guesses still being checked. */
+const CHECKING_MS = 10_000;
+
+/**
+ * Each bucket's count this window (and when the window began), and how long
+ * until a full one has room: the window's end, or only a moment if it was
+ * counted in just now (right guesses among those are about to be given back).
+ */
+function counted(snaps: FirebaseFirestore.DocumentSnapshot[], limits: number[], now: number) {
+  let wait = 0;
+  const counts = snaps.map((snap, i) => {
+    const since = (snap.get("since") as Timestamp | undefined)?.toMillis();
+    if (since === undefined || now - since >= UNLOCK_WINDOW_MS) return { n: 0, since: now };
+    const n = Number(snap.get("n")) || 0;
+    if (n >= limits[i]) {
+      const at = (snap.get("at") as Timestamp | undefined)?.toMillis() ?? since;
+      const checking = now - at < CHECKING_MS;
+      wait = Math.max(wait, checking ? UNLOCK_BUSY_SECONDS * 1000 : since + UNLOCK_WINDOW_MS - now);
+    }
+    return { n, since };
+  });
+  return { counts, wait: Math.ceil(wait / 1000) };
+}
+
+let warnedNoAddress = false;
+
+/**
+ * Counts a guess at log `id`'s password from `address`, unless the log, the
+ * address, or the two together have had their fill of wrong guesses this
+ * window: then it isn't counted, and the seconds until they may try again
+ * are returned. Counted in a transaction, so guesses made at once can't get
+ * past a limit; a right guess is given back with `giveBackUnlockAttempt`.
+ */
+export async function takeUnlockAttempt(
+  id: string,
+  address: string | null,
+): Promise<{ wait: number } | { reservation: Reservation }> {
+  if (!address && !warnedNoAddress) {
+    console.warn("A request came without an address; guesses are only limited per log.");
+    warnedNoAddress = true;
+  }
+  const buckets = unlockBuckets(id, address);
+  const refs = buckets.map((b) => b.ref);
+  const limits = buckets.map((b) => b.limit);
+  // A flood of guesses meets full buckets: refused by a plain read, since a
+  // transaction would only contend with the others.
+  const before = counted(await firestore().getAll(...refs), limits, Date.now());
+  if (before.wait > 0) return { wait: before.wait };
+  try {
+    return await firestore().runTransaction(async (tx) => {
+      const now = Date.now();
+      const { counts, wait } = counted(await tx.getAll(...refs), limits, now);
+      if (wait > 0) return { wait };
+      counts.forEach(({ n, since }, i) =>
+        tx.set(refs[i], {
+          n: n + 1,
+          since: Timestamp.fromMillis(since),
+          at: Timestamp.fromMillis(now),
+          // For a TTL policy to clear them away (see README).
+          expireAt: Timestamp.fromMillis(since + UNLOCK_WINDOW_MS),
+        }),
+      );
+      return { reservation: counts.map(({ since }, i) => ({ ref: refs[i], since })) };
+    });
+  } catch (err) {
+    // ABORTED: too many guesses at once to count them all.
+    if ((err as { code?: number }).code === 10) return { wait: UNLOCK_BUSY_SECONDS };
+    throw err;
+  }
+}
+
+/**
+ * Gives back a guess that was right, so only wrong ones use up the limits
+ * (unless its window has since ended). If that fails, it stays counted.
+ */
+export async function giveBackUnlockAttempt(reservation: Reservation): Promise<void> {
+  try {
+    await firestore().runTransaction(async (tx) => {
+      const snaps = await tx.getAll(...reservation.map((r) => r.ref));
+      snaps.forEach((snap, i) => {
+        const n = Number(snap.get("n")) || 0;
+        const since = (snap.get("since") as Timestamp | undefined)?.toMillis();
+        if (since === reservation[i].since && n > 0) tx.update(reservation[i].ref, { n: n - 1 });
+      });
+    });
+  } catch (err) {
+    console.error("Couldn't give back a right password guess; it counts as a wrong one.", err);
+  }
 }

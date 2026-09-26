@@ -488,6 +488,7 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 - **Viewing** needs only the link, unless a password was set:
   - `--password=…` (or the upload page's field) is sent base64url-encoded in a header, over HTTPS; the CLI refuses a password over plain HTTP except to localhost.
   - The site stores only a scrypt hash.
+  - Wrong guesses are limited every 15 minutes: 5 at a log from one address, 20 at a log in all, and 30 from one address across logs, counted in Firestore. Past a limit, unlocking waits for the window to end. That still allows about 2,000 guesses a day at a log (so the password should be a strong one), and someone guessing from several addresses can keep a log's new viewers waiting.
   - Unlocking sets an HttpOnly cookie, derived the same way, for that log.
   - The page and the content API both check it, so the log's text never reaches a browser without the password.
 - **Saved passwords.** `--save-default-password` saves the password as the default for later runs, in `~/.agent-graph/remote.json`, readable only by you. It's stored in plain text, because the site needs the password itself. `--password= --save-default-password` clears it.

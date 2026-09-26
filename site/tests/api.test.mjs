@@ -178,6 +178,67 @@ test("password-protected logs need the password to read", async () => {
   assert.doesNotMatch(page, /agent-graph-config/);
 });
 
+/** Tries a password on a log, from `address` (as the platform reports it). */
+function unlock(id, password, address) {
+  return fetch(`${BASE}/api/logs/${id}/unlock`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(address ? { "X-Real-IP": address } : {}) },
+    body: JSON.stringify({ password }),
+  });
+}
+
+/** A random address, so runs against the same emulator don't meet each other's counts. */
+const anAddress = () => `10.${[0, 0, 0].map(() => Math.floor(Math.random() * 256)).join(".")}`;
+
+const protectedLog = () => create(line(1), { "X-Agent-Graph-Password": b64url("pässwörd") });
+
+// R19: wrong guesses at a log's password are limited, however many
+// addresses they come from; while it cools down, even the right one waits.
+test("unlocking a log is limited, from any number of addresses", async () => {
+  const log = await protectedLog();
+  for (let i = 0; i < 20; i++) assert.equal((await unlock(log.id, "nope", anAddress())).status, 401);
+  const refused = await unlock(log.id, "pässwörd", anAddress());
+  assert.equal(refused.status, 429);
+  assert.ok(Number(refused.headers.get("retry-after")) > 0, "says when to try again");
+  assert.match(await refused.text(), /Too many tries/);
+
+  const other = await protectedLog();
+  assert.equal((await unlock(other.id, "pässwörd", anAddress())).status, 204, "other logs aren't affected");
+});
+
+// R19: one address alone can't lock a log for everyone else.
+test("one address's guesses at a log hold back only that address", async () => {
+  const log = await protectedLog();
+  const guesser = anAddress();
+  for (let i = 0; i < 5; i++) assert.equal((await unlock(log.id, "nope", guesser)).status, 401);
+  assert.equal((await unlock(log.id, "pässwörd", guesser)).status, 429);
+  assert.equal((await unlock(log.id, "pässwörd", anAddress())).status, 204, "others still get in");
+});
+
+// R19: one address can't guess at many logs either.
+test("unlocking is limited per address, across logs", async () => {
+  const logs = [];
+  for (let i = 0; i < 7; i++) logs.push(await protectedLog());
+  const guesser = anAddress();
+  for (const log of logs.slice(0, 6)) {
+    for (let i = 0; i < 5; i++) assert.equal((await unlock(log.id, "nope", guesser)).status, 401);
+  }
+  assert.equal((await unlock(logs[6].id, "pässwörd", guesser)).status, 429, "a log it hasn't tried yet");
+  assert.equal((await unlock(logs[6].id, "pässwörd", anAddress())).status, 204, "other addresses aren't affected");
+});
+
+// R19: only wrong guesses count: a log shared with many people, or many
+// people behind one address, isn't locked by their getting it right.
+test("right passwords don't use up the limits", async () => {
+  const log = await protectedLog();
+  for (let i = 0; i < 25; i++) assert.equal((await unlock(log.id, "pässwörd", anAddress())).status, 204);
+  const office = anAddress();
+  for (let i = 0; i < 8; i++) assert.equal((await unlock(log.id, "pässwörd", office)).status, 204);
+  // And wrong ones still count in full.
+  for (let i = 0; i < 20; i++) assert.equal((await unlock(log.id, "nope", anAddress())).status, 401);
+  assert.equal((await unlock(log.id, "pässwörd", anAddress())).status, 429);
+});
+
 test("bad input is refused", async () => {
   const log = await create(line(1));
   assert.equal((await append(log.id, "abc", line(2), log.writeToken)).status, 400, "bad offset");

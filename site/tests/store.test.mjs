@@ -355,3 +355,114 @@ test("a stored chunk that can't be decrypted isn't replaced", { skip, timeout: 6
   await chunk.update({ e: Buffer.from("not a chunk") });
   await assert.rejects(store.appendChunk(id, text.length, text), store.ChunkTaken);
 });
+
+/** A random address, so tests (and runs against the same emulator) don't share counts. */
+const anAddress = () => `10.${[0, 0, 0].map(() => Math.floor(Math.random() * 256)).join(".")}`;
+
+// R19: guesses made at once can't get past a limit (they're counted in a
+// transaction, and too many at once to count are refused, not an error),
+// and the limit lifts when the window ends.
+test("password guesses are counted once each, and the count ends with its window", { skip, timeout: 120_000 }, async () => {
+  const { Timestamp } = await import("firebase-admin/firestore");
+  const { UNLOCK_WINDOW_MS, UNLOCKS_PER_LOG } = await import("../lib/config.ts");
+  const { storageId } = await import("../lib/encryption.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const store = await import("../lib/store.ts");
+
+  const id = newId();
+  const burst = await Promise.all(
+    Array.from({ length: UNLOCKS_PER_LOG * 2 }, (_, i) => store.takeUnlockAttempt(id, anAddress())),
+  );
+  const through = (results) => results.filter((r) => "reservation" in r).length;
+  assert.ok(through(burst) <= UNLOCKS_PER_LOG, `${through(burst)} let through at once`);
+  for (const r of burst.filter((r) => "wait" in r)) assert.ok(r.wait > 0 && r.wait <= UNLOCK_WINDOW_MS / 1000);
+  // One at a time, the rest of the limit, and no more.
+  let total = through(burst);
+  for (let i = 0; i < UNLOCKS_PER_LOG; i++) total += through([await store.takeUnlockAttempt(id, anAddress())]);
+  assert.equal(total, UNLOCKS_PER_LOG, "exactly the limit let through");
+
+  const bucket = firestore().collection("unlock-attempts").doc(`log-${storageId(id)}`);
+  assert.equal((await bucket.get()).get("n"), UNLOCKS_PER_LOG, "refused guesses aren't counted");
+
+  // Full for a while: a flood is refused by a plain read, without a
+  // transaction to contend over.
+  await bucket.update({ at: Timestamp.fromMillis(Date.now() - 60_000) });
+  const { Firestore } = await import("firebase-admin/firestore");
+  const { runTransaction } = Firestore.prototype;
+  let transactions = 0;
+  Firestore.prototype.runTransaction = function (...args) {
+    transactions++;
+    return runTransaction.apply(this, args);
+  };
+  let flood;
+  try {
+    const flooder = anAddress();
+    flood = await Promise.all(Array.from({ length: 50 }, () => store.takeUnlockAttempt(id, flooder)));
+  } finally {
+    Firestore.prototype.runTransaction = runTransaction;
+  }
+  assert.ok(flood.every((r) => "wait" in r && r.wait > 60), "all told to wait for the window");
+  assert.equal(transactions, 0, "no transactions");
+
+  // The window ends: counting starts again.
+  await bucket.update({ since: Timestamp.fromMillis(Date.now() - UNLOCK_WINDOW_MS - 1000) });
+  assert.ok("reservation" in (await store.takeUnlockAttempt(id, anAddress())));
+  assert.equal((await bucket.get()).get("n"), 1);
+});
+
+// R19: a right guess is given back to every bucket it was counted in, but
+// not into a window that began since.
+test("a right guess is given back", { skip, timeout: 60_000 }, async () => {
+  const { Timestamp } = await import("firebase-admin/firestore");
+  const { UNLOCK_WINDOW_MS } = await import("../lib/config.ts");
+  const store = await import("../lib/store.ts");
+
+  const id = newId();
+  const address = anAddress();
+  const first = await store.takeUnlockAttempt(id, address);
+  const second = await store.takeUnlockAttempt(id, address);
+  assert.equal(first.reservation.length, 3, "the log, the address, and the two together");
+  const counts = async () => Promise.all(first.reservation.map(async ({ ref }) => (await ref.get()).get("n")));
+  assert.deepEqual(await counts(), [2, 2, 2]);
+  await store.giveBackUnlockAttempt(first.reservation);
+  assert.deepEqual(await counts(), [1, 1, 1]);
+
+  // A new window since: nothing to give back to.
+  for (const { ref } of second.reservation) {
+    await ref.update({ since: Timestamp.fromMillis(Date.now() - UNLOCK_WINDOW_MS - 1000) });
+  }
+  const renewed = await store.takeUnlockAttempt(id, address);
+  await store.giveBackUnlockAttempt(second.reservation);
+  assert.deepEqual(await counts(), [1, 1, 1], "the new window's guess stays counted");
+  assert.equal(renewed.reservation.length, 3);
+
+  // Without an address, only the log counts it.
+  assert.equal((await store.takeUnlockAttempt(newId(), null)).reservation.length, 1);
+});
+
+// R19: too many guesses at once to count is a short wait, not an error; and
+// a log full only of guesses still being checked (right ones among them are
+// about to be given back) is a short wait too, not the window's end.
+test("guesses that can't be counted just now wait a moment", { skip, timeout: 60_000 }, async () => {
+  const { Firestore, Timestamp } = await import("firebase-admin/firestore");
+  const { UNLOCK_BUSY_SECONDS, UNLOCKS_PER_LOG } = await import("../lib/config.ts");
+  const { storageId } = await import("../lib/encryption.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const store = await import("../lib/store.ts");
+
+  const { runTransaction } = Firestore.prototype;
+  Firestore.prototype.runTransaction = () => Promise.reject(Object.assign(new Error("contention"), { code: 10 }));
+  try {
+    assert.deepEqual(await store.takeUnlockAttempt(newId(), anAddress()), { wait: UNLOCK_BUSY_SECONDS });
+  } finally {
+    Firestore.prototype.runTransaction = runTransaction;
+  }
+
+  const id = newId();
+  for (let i = 0; i < UNLOCKS_PER_LOG; i++) assert.ok("reservation" in (await store.takeUnlockAttempt(id, anAddress())));
+  assert.deepEqual(await store.takeUnlockAttempt(id, anAddress()), { wait: UNLOCK_BUSY_SECONDS }, "just filled");
+  const bucket = firestore().collection("unlock-attempts").doc(`log-${storageId(id)}`);
+  await bucket.update({ at: Timestamp.fromMillis(Date.now() - 60_000) });
+  const later = await store.takeUnlockAttempt(id, anAddress());
+  assert.ok(later.wait > 60, `full a while: ${later.wait}s`);
+});
