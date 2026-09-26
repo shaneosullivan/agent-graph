@@ -2,9 +2,10 @@
 //! `codex exec "…"` or `claude -p "…"` run from an agent's shell tool.
 //!
 //! This reads commands the way a shell roughly would: it splits them into
-//! simple commands at `;`, `&&`, `||`, `|`, `&`, newlines, `(` and command
-//! substitutions, outside quotes, then looks at the program each one runs,
-//! past variable assignments and wrappers like `env`, `nohup` or `timeout`.
+//! simple commands at `;`, `&&`, `||`, `|`, `&` and newlines, outside quotes
+//! and comments, reading groups `( … )` and command substitutions as commands
+//! of their own, then looks at the program each one runs, past variable
+//! assignments and wrappers like `env`, `nohup` or `timeout`.
 //! It's a heuristic: a script that starts an agent inside itself isn't seen,
 //! though the agent still links itself to the session (see `link`).
 
@@ -104,8 +105,10 @@ const MANAGES_SESSIONS: &[(&str, &str, &[&str])] = &[(
     &["list", "remove", "export", "diagnostics"],
 )];
 
-/// Shell keywords that can come before a command.
-const KEYWORDS: &[&str] = &["do", "then", "else", "if", "elif", "while", "until", "!"];
+/// Shell keywords that can come before a command (`{` starts a group).
+const KEYWORDS: &[&str] = &[
+    "do", "then", "else", "if", "elif", "while", "until", "!", "{",
+];
 
 /// Programs that run the rest of their arguments as a command.
 const WRAPPERS: &[&str] = &[
@@ -121,6 +124,123 @@ const WRAPPERS: &[&str] = &[
     "bunx",
     "stdbuf",
     "timeout",
+    "xargs",
+    "parallel",
+];
+
+/// Wrappers' options that take a value as the next word (`nice -n 10`,
+/// `xargs -I {}`), which isn't the program.
+const WRAPPER_VALUES: &[(&str, &[&str])] = &[
+    (
+        "env",
+        &[
+            "-u",
+            "--unset",
+            "-C",
+            "--chdir",
+            "-S",
+            "--split-string",
+            "-P",
+            "-L",
+            "-U",
+        ],
+    ),
+    ("nice", &["-n", "--adjustment"]),
+    ("exec", &["-a"]),
+    (
+        "sudo",
+        &[
+            "-u",
+            "--user",
+            "-g",
+            "--group",
+            "-p",
+            "--prompt",
+            "-C",
+            "--close-from",
+            "-D",
+            "--chdir",
+            "-r",
+            "--role",
+            "-t",
+            "--type",
+            "-U",
+            "--other-user",
+            "-T",
+            "--command-timeout",
+            "-R",
+            "--chroot",
+            "-h",
+            "--host",
+        ],
+    ),
+    ("caffeinate", &["-t", "-w"]),
+    ("npx", &["-p", "--package"]),
+    ("bunx", &["-p", "--package"]),
+    (
+        "stdbuf",
+        &["-i", "-o", "-e", "--input", "--output", "--error"],
+    ),
+    ("timeout", &["-s", "--signal", "-k", "--kill-after"]),
+    ("time", &["-f", "--format", "-o", "--output"]),
+    (
+        "xargs",
+        &[
+            "-I",
+            "-J",
+            "-L",
+            "-P",
+            "-R",
+            "-S",
+            "-E",
+            "-a",
+            "-d",
+            "-n",
+            "-s",
+            "--arg-file",
+            "--delimiter",
+            "--max-args",
+            "--max-chars",
+            "--max-procs",
+            "--process-slot-var",
+        ],
+    ),
+    (
+        "parallel",
+        &[
+            "-j",
+            "--jobs",
+            "-P",
+            "-S",
+            "--sshlogin",
+            "--sshloginfile",
+            "-a",
+            "--arg-file",
+            "-d",
+            "--delimiter",
+            "-n",
+            "-N",
+            "--max-args",
+            "-L",
+            "-E",
+            "-I",
+            "--colsep",
+            "--joblog",
+            "--results",
+            "--tmpdir",
+            "--workdir",
+            "--wd",
+            "--halt",
+            "--retries",
+            "--timeout",
+            "--delay",
+            "--tagstring",
+            "--env",
+            "--block",
+            "--memfree",
+            "--load",
+        ],
+    ),
 ];
 
 /// A command that starts an agent session.
@@ -213,8 +333,9 @@ fn named<'a, S: AsRef<str>>(word: &str, names: &'a [S]) -> Option<&'a str> {
     })
 }
 
-/// Skips `NAME=value` assignments and wrapper programs (with their options,
-/// and `timeout`'s duration) at the start of a simple command.
+/// Skips `NAME=value` assignments, keywords (and `function NAME`, whose
+/// body follows) and wrapper programs (with their options, and `timeout`'s
+/// duration) at the start of a simple command.
 fn skip_prefixes(words: &[String]) -> &[String] {
     let mut i = 0;
     while let Some(word) = words.get(i) {
@@ -222,17 +343,28 @@ fn skip_prefixes(words: &[String]) -> &[String] {
             i += 1;
             continue;
         }
+        if word == "function" {
+            i += 2;
+            continue;
+        }
         let Some(name) = named(word, WRAPPERS) else {
             break;
         };
+        let values = WRAPPER_VALUES
+            .iter()
+            .find(|(w, _)| *w == name)
+            .map_or(&[][..], |(_, v)| *v);
         i += 1;
         let options = i;
-        while words.get(i).is_some_and(|w| w.starts_with('-')) {
+        while let Some(option) = words.get(i).filter(|w| w.starts_with('-')) {
             i += 1;
+            if takes_value(option, values) {
+                i += 1;
+            }
         }
         // `command -v X` (or `-V`, `-pv`, …) looks X up: it runs nothing.
         let lookup = |o: &String| !o.starts_with("--") && o[1..].contains(['v', 'V']);
-        if name == "command" && words[options..i].iter().any(lookup) {
+        if name == "command" && words[options..i.min(words.len())].iter().any(lookup) {
             return &words[words.len()..];
         }
         if name == "timeout" && words.get(i).is_some() {
@@ -240,6 +372,27 @@ fn skip_prefixes(words: &[String]) -> &[String] {
         }
     }
     &words[i.min(words.len())..]
+}
+
+/// Whether the word after `option` is its value: it's one of `values`, or
+/// a cluster of short options (`-tP`) whose last one takes a value (an
+/// earlier one's value is the rest of the cluster: `-oL`).
+fn takes_value(option: &str, values: &[&str]) -> bool {
+    if values.contains(&option) {
+        return true;
+    }
+    let Some(letters) = option.strip_prefix('-').filter(|l| !l.starts_with('-')) else {
+        return false;
+    };
+    let short = |c: char| {
+        values
+            .iter()
+            .any(|v| v.strip_prefix('-').is_some_and(|l| l.chars().eq([c])))
+    };
+    letters
+        .char_indices()
+        .find(|&(_, c)| short(c))
+        .is_some_and(|(i, c)| i + c.len_utf8() == letters.len())
 }
 
 fn is_assignment(word: &str) -> bool {
@@ -309,67 +462,190 @@ fn skip_arithmetic(chars: &mut std::iter::Peekable<std::str::Chars>, word: &mut 
     }
 }
 
+/// What opened a level of a command: a group of commands, `( … )`, or a
+/// command substitution, `$( … )` or backticks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Opened {
+    #[default]
+    Top,
+    Group,
+    Substitution,
+    Backticks,
+}
+
+/// The simple command being read at one level: the top, or inside a group
+/// or substitution, after which the command around it carries on.
+#[derive(Default)]
+struct Level {
+    opened: Opened,
+    words: Vec<String>,
+    word: String,
+    in_word: bool,
+    double: bool,
+    /// How many of `words` are keywords before the command's first word.
+    lead: usize,
+    /// `case`s open at this level, whose patterns end with a `)` of their own.
+    cases: usize,
+    /// `${`s open in `word`.
+    braces: usize,
+    /// Where this level's commands start in the output.
+    start: usize,
+}
+
+impl Level {
+    fn end_word(&mut self) {
+        if !self.in_word {
+            return;
+        }
+        let word = std::mem::take(&mut self.word);
+        if self.lead == self.words.len() {
+            // `function NAME` comes before a function's body, as keywords do.
+            let name = self.lead > 0 && self.words[self.lead - 1] == "function";
+            match word.as_str() {
+                "case" => self.cases += 1,
+                "esac" => self.cases = self.cases.saturating_sub(1),
+                _ => {}
+            }
+            if name || word == "function" || KEYWORDS.contains(&word.as_str()) {
+                self.lead += 1;
+            }
+        }
+        self.words.push(word);
+        self.in_word = false;
+    }
+
+    fn end_command(&mut self, out: &mut Vec<(Vec<String>, bool)>, background: bool) {
+        self.end_word();
+        if !self.words.is_empty() {
+            out.push((std::mem::take(&mut self.words), background));
+        }
+        self.lead = 0;
+    }
+
+    /// Whether what's been read of this command is a function's name, so
+    /// that `()` defines it: a name alone (after any keywords, or after
+    /// `function`), not a command's argument (`claude -p hi <()`).
+    fn names_function(&self) -> bool {
+        let rest = self.words.len() - self.lead;
+        rest == usize::from(!self.in_word)
+    }
+
+    /// Whether a command starts here, after any keywords (or `for`, for
+    /// `for ((…))`).
+    fn at_command_start(&self) -> bool {
+        !self.in_word
+            && (self.lead == self.words.len()
+                || self.lead + 1 == self.words.len() && self.words[self.lead] == "for")
+    }
+}
+
+/// Starts reading a group or substitution; the command around it waits.
+fn open(level: &mut Level, around: &mut Vec<Level>, opened: Opened, start: usize) {
+    let inner = Level {
+        opened,
+        start,
+        ..Level::default()
+    };
+    around.push(std::mem::replace(level, inner));
+}
+
+/// Ends a group or substitution, and carries on with the command around
+/// it, where a substitution is (part of) a word.
+fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<(Vec<String>, bool)>) {
+    level.end_command(out, false);
+    let opened = level.opened;
+    let empty = out.len() == level.start;
+    let Some(outer) = around.pop() else {
+        return;
+    };
+    *level = outer;
+    if opened != Opened::Group {
+        level.in_word = true;
+    } else if empty && level.names_function() {
+        // `NAME()` (or `function NAME()`) defines a function: that runs
+        // nothing, and its body is a command of its own.
+        level.words.clear();
+        level.word.clear();
+        level.in_word = false;
+        level.lead = 0;
+    }
+}
+
 /// Splits `command` into simple commands (as words, with quotes removed),
-/// each with whether it's put in the background.
+/// each with whether it's put in the background, in the order the shell
+/// runs them (a substitution before the command it's in).
 fn split(command: &str) -> Vec<(Vec<String>, bool)> {
     let mut out: Vec<(Vec<String>, bool)> = Vec::new();
-    let mut words: Vec<String> = Vec::new();
-    let mut word = String::new();
-    let mut in_word = false;
     let mut chars = command.chars().peekable();
     let mut single = false;
-    let mut double = false;
+    let mut cur = Level::default();
+    // The levels around this one, innermost last, and how many of them are
+    // backticks.
+    let mut around: Vec<Level> = Vec::new();
+    let mut backticks = 0;
     // Heredocs whose bodies start after this line: (delimiter, `<<-`).
     let mut heredocs: Vec<(String, bool)> = Vec::new();
-
-    let end_word = |words: &mut Vec<String>, word: &mut String, in_word: &mut bool| {
-        if *in_word {
-            words.push(std::mem::take(word));
-            *in_word = false;
-        }
-    };
-    let end_command = |out: &mut Vec<(Vec<String>, bool)>, words: &mut Vec<String>, bg: bool| {
-        if !words.is_empty() {
-            out.push((std::mem::take(words), bg));
-        }
-    };
 
     while let Some(c) = chars.next() {
         if single {
             if c == '\'' {
                 single = false;
             } else {
-                word.push(c);
+                cur.word.push(c);
             }
             continue;
         }
         match c {
-            '\\' => {
-                if let Some(next) = chars.next() {
-                    word.push(next);
-                    in_word = true;
+            '\\' => match chars.next() {
+                // A backslash-newline joins the two lines.
+                Some('\n') => {}
+                Some('\r') if chars.peek() == Some(&'\n') => {
+                    chars.next();
                 }
-            }
-            '\'' if !double => {
+                Some(next) => {
+                    cur.word.push(next);
+                    cur.in_word = true;
+                }
+                None => {}
+            },
+            '\'' if !cur.double => {
                 single = true;
-                in_word = true;
+                cur.in_word = true;
+            }
+            // `$$` is a parameter (the quote in `$$'…'` is a plain one).
+            '$' if chars.peek() == Some(&'$') => {
+                chars.next();
+                cur.word.push_str("$$");
+                cur.in_word = true;
+            }
+            // `$'…'`: quoted, with escapes (`$'it\'s'`).
+            '$' if !cur.double && chars.peek() == Some(&'\'') => {
+                chars.next();
+                while let Some(c) = chars.next() {
+                    match c {
+                        '\\' => cur.word.extend(chars.next()),
+                        '\'' => break,
+                        _ => cur.word.push(c),
+                    }
+                }
+                cur.in_word = true;
             }
             '"' => {
-                double = !double;
-                in_word = true;
+                cur.double = !cur.double;
+                cur.in_word = true;
             }
             // `$[…]`: arithmetic, the old way.
             '$' if chars.peek() == Some(&'[') => {
-                word.push(c);
+                cur.word.push(c);
                 for c in chars.by_ref() {
-                    word.push(c);
+                    cur.word.push(c);
                     if c == ']' {
                         break;
                     }
                 }
-                in_word = true;
+                cur.in_word = true;
             }
-            // A command substitution runs a command of its own, even inside
+            // A command substitution runs commands of its own, even inside
             // double quotes: `out="$(codex exec …)"`.
             '$' if chars.peek() == Some(&'(') => {
                 chars.next();
@@ -380,30 +656,53 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                     closes_as_arithmetic(ahead)
                 } {
                     chars.next();
-                    word.push('$');
-                    skip_arithmetic(&mut chars, &mut word);
-                    in_word = true;
+                    cur.word.push('$');
+                    skip_arithmetic(&mut chars, &mut cur.word);
+                    cur.in_word = true;
                     continue;
                 }
-                end_word(&mut words, &mut word, &mut in_word);
-                end_command(&mut out, &mut words, false);
-                double = false;
+                open(&mut cur, &mut around, Opened::Substitution, out.len());
+            }
+            '`' if cur.opened == Opened::Backticks => {
+                close(&mut cur, &mut around, &mut out);
+                backticks -= 1;
             }
             '`' => {
-                end_word(&mut words, &mut word, &mut in_word);
-                end_command(&mut out, &mut words, false);
-                double = false;
+                open(&mut cur, &mut around, Opened::Backticks, out.len());
+                backticks += 1;
             }
-            _ if double => {
-                word.push(c);
-                in_word = true;
+            _ if cur.double => {
+                cur.word.push(c);
+                cur.in_word = true;
+            }
+            // `${…}` is one word, spaces, `#` and all (`${x:- #}`).
+            '$' if chars.peek() == Some(&'{') => {
+                chars.next();
+                cur.word.push_str("${");
+                cur.braces += 1;
+                cur.in_word = true;
+            }
+            '}' if cur.braces > 0 => {
+                cur.word.push(c);
+                cur.braces -= 1;
+            }
+            _ if cur.braces > 0 => cur.word.push(c),
+            // A comment, to the end of the line (in backticks, or to the one
+            // that ends them).
+            '#' if !cur.in_word => {
+                let ends = |c: &char| *c == '\n' || backticks > 0 && *c == '`';
+                while let Some(c) = chars.next_if(|c| !ends(c)) {
+                    if c == '\\' && backticks > 0 {
+                        chars.next_if(|c| *c != '\n');
+                    }
+                }
             }
             // `<<-? WORD`: a heredoc, whose body (the lines after this one,
             // up to WORD) is text, not commands. (`<<<` is a here-string:
             // no WORD follows, so no body.)
             '<' if chars.peek() == Some(&'<') => {
                 chars.next();
-                end_word(&mut words, &mut word, &mut in_word);
+                cur.end_word();
                 let tabs = chars.next_if_eq(&'-').is_some();
                 while chars.next_if(|c| *c == ' ' || *c == '\t').is_some() {}
                 // WORD, unquoted: quotes can hold spaces (`<<"END OF"`), or
@@ -435,10 +734,9 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                     heredocs.push((delimiter, tabs));
                 }
             }
-            ' ' | '\t' | '\r' => end_word(&mut words, &mut word, &mut in_word),
+            ' ' | '\t' | '\r' => cur.end_word(),
             '\n' => {
-                end_word(&mut words, &mut word, &mut in_word);
-                end_command(&mut out, &mut words, false);
+                cur.end_command(&mut out, false);
                 for (delimiter, tabs) in heredocs.drain(..) {
                     loop {
                         let line: String = chars.by_ref().take_while(|c| *c != '\n').collect();
@@ -456,50 +754,53 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
             }
             // `((…))` starting a command (after any keywords: `if ((…))`,
             // `for ((…))`) is arithmetic too.
-            '(' if chars.peek() == Some(&'(')
-                && !in_word
-                && words
-                    .iter()
-                    .all(|w| KEYWORDS.contains(&w.as_str()) || w == "for")
-                && {
-                    let mut ahead = chars.clone();
-                    ahead.next();
-                    closes_as_arithmetic(ahead)
-                } =>
+            '(' if chars.peek() == Some(&'(') && cur.at_command_start() && {
+                let mut ahead = chars.clone();
+                ahead.next();
+                closes_as_arithmetic(ahead)
+            } =>
             {
                 chars.next();
-                skip_arithmetic(&mut chars, &mut word);
-                in_word = true;
+                skip_arithmetic(&mut chars, &mut cur.word);
+                cur.in_word = true;
             }
-            ';' | '(' | ')' | '{' | '}' => {
-                end_word(&mut words, &mut word, &mut in_word);
-                end_command(&mut out, &mut words, false);
+            '(' => open(&mut cur, &mut around, Opened::Group, out.len()),
+            ')' => {
+                cur.end_word();
+                // Unless it ends a `case` pattern.
+                if cur.cases == 0 && matches!(cur.opened, Opened::Group | Opened::Substitution) {
+                    close(&mut cur, &mut around, &mut out);
+                } else {
+                    cur.end_command(&mut out, false);
+                }
             }
+            ';' => cur.end_command(&mut out, false),
             '|' => {
                 chars.next_if_eq(&'|');
-                end_word(&mut words, &mut word, &mut in_word);
-                end_command(&mut out, &mut words, false);
+                cur.end_command(&mut out, false);
             }
             // `2>&1` and `&>` redirect: the `&` is part of the word.
-            '&' if word.ends_with('>') || chars.peek() == Some(&'>') => {
-                word.push(c);
-                in_word = true;
+            '&' if cur.word.ends_with('>') || chars.peek() == Some(&'>') => {
+                cur.word.push(c);
+                cur.in_word = true;
             }
             '&' => {
-                end_word(&mut words, &mut word, &mut in_word);
                 // `&&` runs the next command after this one; a lone `&` puts
                 // this one in the background.
                 let background = chars.next_if_eq(&'&').is_none();
-                end_command(&mut out, &mut words, background);
+                cur.end_command(&mut out, background);
             }
             _ => {
-                word.push(c);
-                in_word = true;
+                cur.word.push(c);
+                cur.in_word = true;
             }
         }
     }
-    end_word(&mut words, &mut word, &mut in_word);
-    end_command(&mut out, &mut words, false);
+    // What isn't closed ends here.
+    while !around.is_empty() {
+        close(&mut cur, &mut around, &mut out);
+    }
+    cur.end_command(&mut out, false);
     out
 }
 
@@ -696,6 +997,7 @@ mod tests {
     fn arithmetic_isnt_a_heredoc() {
         assert_eq!(launch("N=$((1<<4))\nclaude -p \"shard $N\""), fg("claude"));
         assert_eq!(launch("(( x <<= 1 ))\nclaude -p hi"), fg("claude"));
+        assert_eq!(launch("! true; (( x <<= 1 ))\nclaude -p hi"), fg("claude"));
         assert_eq!(
             launch("if (( 1 << 2 > 3 )); then echo y; fi\nclaude -p hi"),
             fg("claude")
@@ -776,6 +1078,208 @@ mod tests {
             launch(r"agent-graph run -- 'C:\bin\Worker.exe'"),
             fg("Worker")
         );
+    }
+
+    /// R26: a command substitution inside double quotes ends at its own
+    /// `)` (or backtick), and the quotes carry on after it.
+    #[test]
+    fn quotes_carry_on_after_a_substitution() {
+        // The commit message Claude writes, then a launch.
+        let commit = "git commit -m \"$(cat <<'EOF'\nFix it\nEOF\n)\" && claude -p hi";
+        assert_eq!(launch(commit), fg("claude"));
+        assert_eq!(launch(r#"echo "$(date)" && codex exec x"#), fg("codex"));
+        assert_eq!(launch(r#"echo "`date`"; codex exec x"#), fg("codex"));
+        // What comes after it inside the quotes is still quoted.
+        assert_eq!(launch(r#"echo "$(date): then claude -p hi""#), None);
+        // Its own quotes, parentheses and substitutions.
+        assert_eq!(
+            launch(r#"x="$(echo "a" ')' "$(date)")"; claude -p hi"#),
+            fg("claude")
+        );
+        assert_eq!(
+            launch(r#"x="$( (cd a && pwd) )"; claude -p hi"#),
+            fg("claude")
+        );
+        // Backticks and comments inside one.
+        assert_eq!(launch("x=\"$(echo `date`)\"; claude -p hi"), fg("claude"));
+        assert_eq!(launch("x=\"$(ls # it's\n)\"; claude -p hi"), fg("claude"));
+        // One that never closes ends with the command.
+        assert_eq!(launch(r#"claude -p "$(cat x"#), fg("claude"));
+        // A `case` pattern's `)` doesn't end it (but only `case` starting a
+        // command is one).
+        assert_eq!(launch(r#"x="$(echo case)"; claude -p hi"#), fg("claude"));
+        assert_eq!(
+            launch(r#"x="$(case $1 in a) echo "it's";; esac)"; claude -p hi"#),
+            fg("claude")
+        );
+    }
+
+    /// R26: the command around a substitution carries on after it: it's
+    /// one word of that command, not the end of it.
+    #[test]
+    fn a_substitution_is_a_word() {
+        assert_eq!(
+            launch(r#"codex exec "$(cat prompt.md)" &"#),
+            Some(("codex".into(), true))
+        );
+        assert_eq!(launch(r#""$(pwd)/bin/claude" -p hi"#), fg("claude"));
+        assert_eq!(launch("X=$(date) claude -p hi"), fg("claude"));
+        assert_eq!(launch("X=`date` claude -p hi"), fg("claude"));
+        // An argument, or the program, but not codex.
+        assert_eq!(launch("echo $(date) codex exec x"), None);
+        assert_eq!(launch("$(which x) codex exec x"), None);
+        assert_eq!(launch("`which x` codex exec x"), None);
+        // The shell runs a substitution first, so its launch comes first.
+        assert_eq!(launch(r#"claude -p "$(codex exec x)""#), fg("codex"));
+        // `( … )` is one too, as a process substitution.
+        assert_eq!(launch("diff <(ls a) <(ls b) codex"), None);
+    }
+
+    /// R26: a backslash at the end of a line joins it to the next.
+    #[test]
+    fn line_continuations_join_lines() {
+        assert_eq!(launch("cd app && \\\n  claude -p hi"), fg("claude"));
+        assert_eq!(launch("FOO=1 \\\n  codex exec x"), fg("codex"));
+        assert_eq!(launch("goose \\\n  session"), fg("goose"));
+        assert_eq!(launch("goose \\\r\n  session"), fg("goose"));
+        assert_eq!(launch("echo \"a \\\nb\" && claude -p hi"), fg("claude"));
+    }
+
+    /// R26: a comment is skipped, apostrophes and all.
+    #[test]
+    fn comments_are_skipped() {
+        assert_eq!(
+            launch("# don't skip the build\ncargo build && codex exec x"),
+            fg("codex")
+        );
+        assert_eq!(
+            launch("cargo build # it's slow\nclaude -p hi"),
+            fg("claude")
+        );
+        assert_eq!(launch("# claude -p hi\nls"), None);
+        // `#` inside a word isn't one.
+        assert_eq!(launch("echo ${#x} && claude -p hi"), fg("claude"));
+        assert_eq!(launch("echo a#b 'c' && claude -p hi"), fg("claude"));
+        // In backticks, it ends at the one that ends them.
+        assert_eq!(launch("x=`echo 1 #note`; claude -p hi"), fg("claude"));
+        assert_eq!(launch("x=`echo 1 #a \\` claude`; echo"), None);
+        assert_eq!(launch("x=`echo 1 #a \\\\`; claude -p hi"), fg("claude"));
+        assert_eq!(launch("x=`echo 1 #a \\\nclaude -p hi`"), fg("claude"));
+        // After a group, it starts one.
+        assert_eq!(launch("(cd a)#don't\nclaude -p hi"), fg("claude"));
+    }
+
+    /// R26: the other quotes: `$'…'` has escapes, and `${…}` is part of a
+    /// word, however it's braced (while `{` on its own starts a group).
+    #[test]
+    fn other_quotes_are_read_as_the_shell_reads_them() {
+        assert_eq!(launch(r"echo $'it\'s' && claude -p hi"), fg("claude"));
+        assert_eq!(launch(r#"echo "$'" && claude -p hi"#), fg("claude"));
+        assert_eq!(
+            launch("claude -p ${PROMPT} &"),
+            Some(("claude".into(), true))
+        );
+        assert_eq!(launch("echo ${x:-a} codex exec x"), None);
+        // `${…}` is all one word, spaces, `#` and all.
+        assert_eq!(launch("echo ${x:- #}; claude -p hi"), fg("claude"));
+        assert_eq!(launch("X=${y:- } claude -p hi"), fg("claude"));
+        // `$$` is a parameter: the quote after it is a plain one.
+        assert_eq!(launch(r"echo $$'a\'; claude -p hi"), fg("claude"));
+        assert_eq!(launch("{ claude -p hi; } > log"), fg("claude"));
+    }
+
+    /// R26: a function's body is a command of its own (it runs when the
+    /// function is called); defining one runs nothing.
+    #[test]
+    fn functions_bodies_are_commands() {
+        assert_eq!(launch(r#"f() { claude -p "$1"; }; f hi"#), fg("claude"));
+        assert_eq!(launch("f(){ claude -p hi; }"), fg("claude"));
+        assert_eq!(launch("f ()\n{\n  claude -p hi\n}"), fg("claude"));
+        assert_eq!(
+            launch(r#"function f { codex exec "$1"; }; f hi"#),
+            fg("codex")
+        );
+        assert_eq!(launch("function f() { codex exec x; }"), fg("codex"));
+        assert_eq!(
+            launch(r#"run() { codex exec "$1" > "$1.log" 2>&1; }; run a & run b & wait"#),
+            fg("codex")
+        );
+        assert_eq!(launch("codex() { echo hi; }"), None);
+        assert_eq!(launch("codex () { echo hi; }"), None);
+        assert_eq!(launch("function claude { echo hi; }"), None);
+        // Only a name before `()` makes it a definition.
+        assert_eq!(launch("claude -p hi <()"), fg("claude"));
+        assert_eq!(launch("claude <()"), fg("claude"));
+        assert_eq!(
+            launch(r#"claude -p "$(cat p.md)" <() &"#),
+            Some(("claude".into(), true))
+        );
+        // A `case` in a function's body is one.
+        assert_eq!(
+            launch(
+                r#"x="$(function f { case $1 in a) echo "it's";; esac; }; f a)"; claude -p hi &"#
+            ),
+            Some(("claude".into(), true))
+        );
+    }
+
+    /// R26: a wrapper's option that takes a value (`xargs -I {}`, `nice -n
+    /// 10`) isn't the program it runs.
+    #[test]
+    fn wrappers_option_values_arent_programs() {
+        assert_eq!(
+            launch(r#"ls *.md | xargs -I{} claude -p "review {}""#),
+            fg("claude")
+        );
+        assert_eq!(
+            launch(r#"ls *.md | xargs -P 4 -I {} codex exec "review {}""#),
+            fg("codex")
+        );
+        assert_eq!(launch("nice -n 10 claude -p hi"), fg("claude"));
+        assert_eq!(launch("sudo -u bot codex exec x"), fg("codex"));
+        assert_eq!(launch("timeout -s KILL 60 claude -p hi"), fg("claude"));
+        assert_eq!(launch("/usr/bin/time -o t.log codex exec x"), fg("codex"));
+        assert_eq!(launch("npx -p @openai/codex codex exec x"), fg("codex"));
+        assert_eq!(launch("parallel -j 4 claude -p {} ::: a b"), fg("claude"));
+        assert_eq!(
+            launch("parallel --halt now,fail=1 -j4 claude -p {} ::: a b"),
+            fg("claude")
+        );
+        assert_eq!(launch("sudo -R /jail codex exec x"), fg("codex"));
+        // Short options together: the last one's value is the next word,
+        // an earlier one's is the rest of the word.
+        assert_eq!(
+            launch(r#"ls | xargs -tP 4 -I{} codex exec "{}""#),
+            fg("codex")
+        );
+        assert_eq!(launch(r#"ls | xargs -rI {} codex exec "{}""#), fg("codex"));
+        assert_eq!(
+            launch(r#"cat f | xargs -0I {} claude -p "{}""#),
+            fg("claude")
+        );
+        assert_eq!(launch("sudo -Eu bot claude -p hi"), fg("claude"));
+        assert_eq!(launch("stdbuf -oL claude -p hi"), fg("claude"));
+        assert_eq!(launch("nice -n10 claude -p hi"), fg("claude"));
+        // A long option isn't a cluster.
+        assert!(takes_value("-xP", &["-P"]));
+        assert!(!takes_value("--xP", &["-P"]));
+        assert!(!takes_value("-Px", &["-P"]));
+    }
+
+    /// R26: splitting takes time in proportion to the command, however many
+    /// keywords start it.
+    #[test]
+    fn splitting_takes_time_in_proportion_to_the_command() {
+        let started = std::time::Instant::now();
+        for run in ["! ", "{ "] {
+            let command = format!("{}claude -p hi", run.repeat(200_000));
+            assert_eq!(launch(&command), fg("claude"), "{run:?}");
+        }
+        for then in ["esac ", "((1)) "] {
+            let command = format!("{}{}", "! ".repeat(100_000), then.repeat(100_000));
+            assert_eq!(launch(&command), None, "{then:?}");
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]

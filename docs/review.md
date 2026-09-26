@@ -168,7 +168,7 @@ Status is updated as each is done.
 - **Where:** `src/adapter/shell.rs`
 - **Problem:** A substitution inside double quotes flips the quote state for the rest of the command, and a backslash-newline becomes a word.
 - **Fix:** track quotes per substitution level; drop backslash-newlines.
-- **Status:** open
+- **Status:** fixed. The splitter reads a group (`( … )`) or command substitution (`$( … )`, backticks) as a level of its own (`Level`), which starts with no quotes; at its end (`)`, unless it ends a `case` pattern at that level, or the closing backtick) the command around it carries on as it was, in its quotes, with the substitution as (part of) a word, so `codex exec "$(cat prompt.md)" &` is a background launch, `"$(pwd)/bin/claude"` runs claude, and `echo $(date) codex` doesn't run codex; one left open ends with the command. Commands come out in the order the shell runs them (a substitution before the command it's in). So that `{` isn't a separator any more, a function's definition (`NAME()`, an empty group after a name alone, or `function NAME`) ends there, and its body is a command of its own (`claude -p hi <()` is still a command), and `xargs` and `parallel` are wrappers, whose options' values (as for the other wrappers: `nice -n 10`, `sudo -u bot`, `timeout -s KILL`, `xargs -I {}`, and in a cluster, `xargs -tP 4`) aren't taken for the program (`WRAPPER_VALUES`, `takes_value`). A backslash-newline is dropped (and before a CR, which bash would keep); a comment is skipped (it can hold an apostrophe; in backticks, it ends at the one that ends them); `$'…'` is read with its escapes, but not after `$$`; `${…}` is one word, spaces and all, and `{` on its own is a keyword. Whether a word starts a command is kept as a count of the keywords (and `function NAME`) before it (`Level::lead`), so a long run of them doesn't take quadratic time. The site's WebAssembly is rebuilt. Tests: `quotes_carry_on_after_a_substitution`, `a_substitution_is_a_word`, `line_continuations_join_lines`, `comments_are_skipped`, `other_quotes_are_read_as_the_shell_reads_them`, `functions_bodies_are_commands`, `wrappers_option_values_arent_programs`, `splitting_takes_time_in_proportion_to_the_command`, and in `arithmetic_isnt_a_heredoc` (src/adapter/shell.rs). Reviewed (three rounds). Still open: R58, R59, R60.
 
 ### R27. A long TodoWrite list is dropped entirely
 - **Where:** `src/emit.rs` (`to_line`)
@@ -311,4 +311,22 @@ Status is updated as each is done.
 - **Where:** `src/reducer.rs` (`bind_session_by_guess`), `src/run.rs`, `src/adapter/shell.rs`
 - **Problem:** Found reviewing R24. A run session is named for the run (`--name workers`) or the wrapper it was given (`npx`), not the agent CLI, so it might answer any request, including one for a CLI with no adapter (`codex exec … &`, which nothing else ever claims): it then takes that request's program, purpose and `background`, for good, and its own request shows as starting for the whole run.
 - **Fix:** record which requests were for `agent-graph run` (the shell adapter knows), and pair a run only with those, and nothing else with them; or have `run.rs` record the program it wraps, found as the shell adapter finds it.
+- **Status:** open
+
+### R58. `&` puts only the last simple command in the background
+- **Where:** `src/adapter/shell.rs`
+- **Problem:** Found fixing R26. A trailing `&` backgrounds the whole and-or list or group before it, but the splitter marks only the last simple command, so `(cd x && codex exec y) &`, `{ codex exec y; } &`, `claude -p a && echo done &` and `claude -p a | tee log &` are foreground launches; `0<&3` is read as `&`, putting the command before it in the background; and an array assignment, `arr=(claude codex)`, is read as a group, so it's a launch.
+- **Fix:** mark everything since the list began (with its groups and substitutions) when a `&` ends it, keep `<&` in its word, and read `NAME=(…)` as a word.
+- **Status:** open
+
+### R59. A `case` pattern after the first is read as a command
+- **Where:** `src/adapter/shell.rs`
+- **Problem:** Found reviewing R26. In `case $a in claude) …;; codex) …;; esac`, the patterns after `;;` (or on a line of their own) come out as simple commands, so `codex` is a launch that isn't there.
+- **Fix:** after `in` and after each `;;` (`;&`, `;;&`) in an open `case`, read the words up to `)` as a pattern and drop them.
+- **Status:** open
+
+### R60. A heredoc ended by `EOF)` inside a substitution swallows the rest of the command
+- **Where:** `src/adapter/shell.rs`
+- **Problem:** Found reviewing R26. Bash ends a heredoc inside `$( … )` (or backticks) at a line that's the delimiter followed by the `)` (or backtick) that closes it; the splitter only ends one at a line that's the delimiter alone, so the rest of the command is taken as the body.
+- **Fix:** inside a substitution, end the body at the delimiter followed by its closing `)` or backtick, and read on from there.
 - **Status:** open
