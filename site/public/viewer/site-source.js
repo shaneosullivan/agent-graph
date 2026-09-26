@@ -70,7 +70,8 @@
   window.agentGraphSource = {
     // "site": the graph is shown away from the computer the sessions ran on,
     // so it offers nothing to open.
-    graph: async (until) => reply({ op: "graph", env: "site", until: until || null, now_ms: now() }),
+    graph: async (until, root) =>
+      reply({ op: "graph", env: "site", until: until || null, root: root || null, now_ms: now() }),
     timeline: async (root) => reply({ op: "timeline", root, now_ms: now() }),
     info: async () => {
       const info = call({ op: "info" });

@@ -24,7 +24,7 @@ The generated files are committed, so building the site doesn't need Rust. After
 npm run build-wasm
 ```
 
-(`npm run dev` and `npm run build` re-copy the viewer files automatically when `../src` is present; only the WebAssembly needs this step.)
+(`npm run dev` and `npm run build` re-copy the viewer files automatically when `../src` is present; only the WebAssembly needs this step. It records what it was built from in `agent_graph.wasm.sources` (the crate's files the build compiled, the crates it used with their versions and features, and the build profile), and CI fails if any of that has changed since: `node scripts/sync-viewer.mjs --check-wasm`. Paths on the build machine are left out of the binary.)
 
 ## The API
 

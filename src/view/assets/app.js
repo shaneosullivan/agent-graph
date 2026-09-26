@@ -31,6 +31,7 @@ const S = {
   error: null,
   skew: 0, // server clock minus ours; non-zero when AGENT_GRAPH_NOW pins it
   opened: null, // { id, busy?, error?, command? }: the last Open button press
+  returnTo: null, // where to go back to if a node named in the address doesn't exist
 };
 
 // ---------- helpers ----------
@@ -107,8 +108,17 @@ async function getJSON(url) {
  * compiled to WebAssembly. Every method but `subscribe` returns a promise.
  */
 const source = window.agentGraphSource || {
-  /** The graph now, or as of event `until`. */
-  graph: (until) => getJSON(until ? `/api/graph?until=${encodeURIComponent(until)}` : '/api/graph'),
+  /**
+   * The graph now, or as of event `until`: a summary of every session
+   * (`sessions`), and the nodes of the tree under `root` (`nodes`).
+   */
+  graph: (until, root) => {
+    const params = new URLSearchParams();
+    if (root) params.set('root', root);
+    if (until) params.set('until', until);
+    const query = params.toString();
+    return getJSON(`/api/graph${query ? `?${query}` : ''}`);
+  },
   /** Every stop in the timeline of the tree under `root`. */
   timeline: (root) => getJSON(`/api/timeline?root=${encodeURIComponent(root)}`),
   /** `{ now_ms, where }`: the clock to measure "5m ago" by, and where events come from. */
@@ -175,8 +185,13 @@ function nodeName(node) {
   return `${node.agent_type || 'Agent'} ${short(node.id)}`;
 }
 
+/** Node `id` of `graph`: of its tree, or (only what names it) one the tree refers to. */
+function nodeOf(graph, id) {
+  return graph && (graph.nodes[id] || (graph.others && graph.others[id]));
+}
+
 function nameOf(graph, id) {
-  const node = graph && graph.nodes[id];
+  const node = nodeOf(graph, id);
   return node ? nodeName(node) : short(id);
 }
 
@@ -194,18 +209,6 @@ function ago(ts) {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
-}
-
-function subtree(graph, id) {
-  const out = [];
-  const queue = [id];
-  while (queue.length) {
-    const node = graph.nodes[queue.shift()];
-    if (!node || out.includes(node)) continue;
-    out.push(node);
-    queue.push(...node.children);
-  }
-  return out;
 }
 
 function plural(n, word) {
@@ -243,13 +246,29 @@ function scheduleRefresh() {
 async function refresh() {
   // A new map: a step still loading lands in the old one.
   S.cache = new Map();
-  S.live = await source.graph(null);
+  const before = S.root;
+  const asked = S.root || hashId();
+  const live = await source.graph(null, asked);
+  // Another session was chosen meanwhile; the refresh that follows shows it.
+  if (S.root !== before) return;
+  S.live = live;
 
-  if (!S.root || !S.live.nodes[S.root]) {
-    // The session has gone: another, live, and nothing of the old one's
-    // (not its timeline to step through either, while the new one comes).
+  const back = S.returnTo;
+  S.returnTo = null;
+  if (live.root !== S.root && back) {
+    // The address named a node that doesn't exist: back to the one it was on
+    // (if that has gone too, the refresh that follows says so).
+    history.replaceState(null, '', `#${encodeURIComponent(back)}`);
+    switchTo(back);
+    return;
+  }
+  if (live.root !== S.root) {
+    // The session asked for has gone, or none was yet: the one the reply
+    // holds instead (the newest), if it's one to show. Nothing of the old
+    // one's (not its timeline to step through either, while the new one comes).
     forgetLoads();
-    S.root = rootFromHash() || visibleRoots()[0] || null;
+    const tree = live.root;
+    S.root = tree && (tree === asked || visibleRoots().includes(tree)) ? tree : null;
     S.selected = S.root;
     S.following = true;
     S.shown = S.live;
@@ -324,7 +343,7 @@ function goTo(pos) {
   const cache = S.cache;
   fetchTimer = setTimeout(async () => {
     try {
-      const graph = await source.graph(id);
+      const graph = await source.graph(id, S.root);
       cache.set(id, graph);
       if (seq !== S.seq) return;
       S.shown = graph;
@@ -339,9 +358,14 @@ function goLive() {
   goTo(S.stops.length - 1);
 }
 
+/** Shows the tree under `id`, if the live graph has it (it may have gone since the list was drawn). */
 function selectRoot(id) {
-  // Not a session the live graph has (it may have gone since the list was drawn).
-  if (id === S.root || !S.live || !S.live.nodes[id]) return;
+  if (known(id)) switchTo(id);
+}
+
+/** Shows the tree under `id`: live, until its timeline comes. */
+function switchTo(id) {
+  if (id === S.root) return;
   forgetLoads();
   S.root = id;
   S.selected = id;
@@ -360,16 +384,22 @@ function selectNode(id) {
   renderView();
 }
 
-function rootFromHash() {
-  const id = decodeURIComponent(location.hash.slice(1));
-  return id && S.live && S.live.nodes[id] ? id : null;
+/** The node named in the address (`#<id>`), whether or not it exists. */
+function hashId() {
+  return decodeURIComponent(location.hash.slice(1)) || null;
 }
+
+/** Whether `id` is a session in the live graph, or a node it has (of its tree, or one it refers to). */
+function known(id) {
+  return Boolean(S.live && nodeOf(S.live, id)) || Boolean(S.live && S.live.sessions[id]);
+}
+
 
 function visibleRoots() {
   if (!S.live) return [];
   const cutoff = nowMs() - RECENT_MS;
   return S.live.roots.filter(
-    (id) => S.showAll || id === S.root || new Date(S.live.nodes[id].last_event_at).getTime() >= cutoff,
+    (id) => S.showAll || id === S.root || new Date(S.live.sessions[id].last_event_at).getTime() >= cutoff,
   );
 }
 
@@ -419,16 +449,12 @@ function renderSessions() {
     return;
   }
   for (const id of roots) {
-    const root = S.live.nodes[id];
-    const nodes = subtree(S.live, id);
-    const agents = nodes.length - 1;
-    const needsYou = nodes.find((n) => n.state === 'input_required');
-    const deadlocked = nodes.some((n) => n.blocked && n.blocked.cycle);
-    const stuck = nodes.find((n) => n.stale);
-    const busy = nodes.some((n) => n.state === 'working');
+    // What's going on in the session's tree, worked out where the graph is.
+    const root = S.live.sessions[id];
+    const { agents, needs_you: needsYou, deadlocked, stuck, busy } = root;
     const dotState = needsYou ? 'input_required' : busy && root.state === 'idle' ? 'working' : root.state;
-    const done = root.tasks.length - root.open_tasks;
-    const meta = [root.provider, agents ? plural(agents, 'agent') : null, root.tasks.length ? `tasks ${done}/${root.tasks.length}` : null]
+    const done = root.tasks - root.open_tasks;
+    const meta = [root.provider, agents ? plural(agents, 'agent') : null, root.tasks ? `tasks ${done}/${root.tasks}` : null]
       .filter(Boolean)
       .join(' · ');
     list.append(
@@ -450,7 +476,7 @@ function renderSessions() {
             : deadlocked
               ? h('span', { class: 's-sub problem' }, 'Deadlocked: waiting on a session that waits on it')
               : stuck
-                ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck === root ? 'no activity' : nodeName(stuck)}`)
+                ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck.id === id ? 'no activity' : nodeName(stuck)}`)
                 : h('span', { class: 's-sub' }, root.headline || STATE_LABEL[root.state]),
           h('span', { class: 's-meta' }, meta),
         ),
@@ -491,7 +517,12 @@ function renderMain() {
 
   const graph = S.shown || S.live;
   const root = graph.nodes[S.root];
-  const liveRoot = S.live.nodes[S.root];
+  // Its summary until its tree comes.
+  const liveRoot = S.live.nodes[S.root] || S.live.sessions[S.root] || (S.live.others || {})[S.root];
+  if (!liveRoot) {
+    view.append(h('p', { class: 'empty-note' }, 'Loading…'));
+    return;
+  }
   const stop = S.stops[S.pos];
 
   view.append(
@@ -519,7 +550,8 @@ function renderMain() {
   );
 
   if (!root) {
-    view.append(h('p', { class: 'empty-note' }, 'This session hadn’t started yet at this point.'));
+    const note = S.following ? 'Loading…' : 'This session hadn’t started yet at this point.';
+    view.append(h('p', { class: 'empty-note' }, note));
     return;
   }
 
@@ -644,7 +676,7 @@ function blockedText(graph, b) {
   if (b.on.length) {
     const names = b.on
       .slice(0, 2)
-      .map((id) => nameOf(graph, id) + (graph.nodes[id] && graph.nodes[id].stale ? ' (looks stuck)' : ''));
+      .map((id) => nameOf(graph, id) + (nodeOf(graph, id) && nodeOf(graph, id).stale ? ' (looks stuck)' : ''));
     if (b.on.length > 2) names.push(`${b.on.length - 2} more`);
     parts.push(`Waiting on ${names.join(', ')}`);
   }
@@ -671,7 +703,13 @@ function renderDetail() {
     return;
   }
 
-  const link = (id) => (graph.nodes[id] ? h('button', { class: 'linkish', onclick: () => selectNode(id) }, nameOf(graph, id)) : short(id));
+  // A node of this tree is shown here; one outside it, by showing its own tree.
+  const link = (id) =>
+    graph.nodes[id]
+      ? h('button', { class: 'linkish', onclick: () => selectNode(id) }, nameOf(graph, id))
+      : nodeOf(graph, id)
+        ? h('button', { class: 'linkish', title: 'Show its own tree', onclick: () => switchTo(id) }, nameOf(graph, id))
+        : short(id);
 
   pane.append(
     h(
@@ -706,7 +744,7 @@ function renderDetail() {
           'ul',
           { class: 'list' },
           n.blocked.on.map((id) =>
-            h('li', null, h('span', { class: `dot ${(graph.nodes[id] || {}).state || 'idle'}` }), h('span', { class: 'grow' }, link(id))),
+            h('li', null, h('span', { class: `dot ${(nodeOf(graph, id) || {}).state || 'idle'}` }), h('span', { class: 'grow' }, link(id))),
           ),
           n.blocked.starting ? h('li', null, h('span', { class: 'grow sub' }, `${plural(n.blocked.starting, 'agent')} starting…`)) : null,
         ),
@@ -747,7 +785,7 @@ function renderDetail() {
             h(
               'li',
               null,
-              h('span', { class: `dot ${s.child && graph.nodes[s.child] ? graph.nodes[s.child].state : s.returned ? 'completed' : 'working'}` }),
+              h('span', { class: `dot ${s.child && nodeOf(graph, s.child) ? nodeOf(graph, s.child).state : s.returned ? 'completed' : 'working'}` }),
               h(
                 'span',
                 { class: 'grow' },
@@ -989,9 +1027,14 @@ function wire() {
     e.preventDefault();
   });
 
+  // Another node named in the address: its tree, whether or not this graph
+  // has it (if it doesn't exist, the refresh shows the newest session).
   window.addEventListener('hashchange', () => {
-    const id = rootFromHash();
-    if (id) selectRoot(id);
+    const id = hashId();
+    if (!id || id === S.root) return;
+    // Not one this graph has: if it doesn't exist, come back here.
+    S.returnTo = known(id) ? null : S.root;
+    switchTo(id);
   });
 
   // Keep "2m ago" fresh.

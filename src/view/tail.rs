@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::event::Envelope;
 pub use crate::timeline::Timed;
@@ -13,8 +14,10 @@ pub struct Tail {
     dir: PathBuf,
     /// Bytes consumed so far from each file; always at a line boundary.
     offsets: BTreeMap<PathBuf, u64>,
-    /// Every event, in the order the reducer applies them.
-    pub events: Vec<Timed>,
+    /// Every event, in the order the reducer applies them. Shared, so a
+    /// request can take them without copying, and work without the lock;
+    /// changing them then makes a copy.
+    pub events: Arc<Vec<Timed>>,
     /// Lines that weren't valid events.
     pub skipped: usize,
 }
@@ -24,7 +27,7 @@ impl Tail {
         Tail {
             dir: dir.to_path_buf(),
             offsets: BTreeMap::new(),
-            events: Vec::new(),
+            events: Arc::new(Vec::new()),
             skipped: 0,
         }
     }
@@ -41,7 +44,7 @@ impl Tail {
             .any(|(path, &offset)| sizes.get(path).is_none_or(|&size| size < offset));
         if rewritten {
             self.offsets.clear();
-            self.events.clear();
+            self.events = Arc::new(Vec::new());
             self.skipped = 0;
         }
 
@@ -57,9 +60,10 @@ impl Tail {
         }
 
         if !added.is_empty() {
-            self.events.extend(added.into_iter().map(Timed::new));
+            let events = Arc::make_mut(&mut self.events);
+            events.extend(added.into_iter().map(Timed::new));
             // Nearly always already in order, which this sort handles in linear time.
-            crate::timeline::sort(&mut self.events);
+            crate::timeline::sort(events);
             return Ok(true);
         }
         Ok(rewritten)

@@ -40,6 +40,8 @@ export function loadViewer(t, source, { hash = "", path = "", fetch, EventSource
       subscribe() {},
       timeline: async () => ({ stops: [] }),
       ...source,
+      // Replies as the server's do: the tree asked for (see `asServer`).
+      ...(source.graph ? { graph: async (until, root) => asServer(await source.graph(until, root), root) } : {}),
     };
   window.eval(
     `${app}\nwindow.__viewer = { S, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll };`,
@@ -78,14 +80,95 @@ export function node(id, fields = {}) {
   };
 }
 
-/** A graph of `nodes`, rooted at those without a parent. */
+/** What names a node and how it's doing: `timeline::Brief`. */
+function brief(n) {
+  const { id, kind, provider, parent, title, cwd, agent_type, attention, state, stale } = n;
+  return { id, kind, provider, parent, title, cwd, agent_type, attention, state, stale };
+}
+
+/**
+ * `g` (from `graph`) as the server replies to a request for `root`'s tree:
+ * `root` echoed (or the newest session, if it's not in the graph), `nodes`
+ * that tree, and `others` what names the nodes it refers to. Done to `g`
+ * itself, so tests can compare what the page holds with what they gave it;
+ * all its nodes are kept in `g.all`.
+ */
+export function asServer(g, root) {
+  if (g.others && !g.all) return g; // already a server's reply
+  g.all ??= g.nodes;
+  const tree = root && g.all[root] ? root : g.roots[0] || null;
+  const nodes = {};
+  const queue = tree ? [tree] : [];
+  while (queue.length) {
+    const n = g.all[queue.shift()];
+    if (!n || nodes[n.id]) continue;
+    nodes[n.id] = n;
+    queue.push(...n.children);
+  }
+  const others = {};
+  for (const n of Object.values(nodes)) {
+    const referred = [
+      ...((n.blocked && n.blocked.on) || []),
+      ...n.messages.map((m) => m.peer),
+      n.parent,
+    ];
+    for (const id of referred) if (id && !nodes[id] && g.all[id]) others[id] = brief(g.all[id]);
+  }
+  return Object.assign(g, { root: tree, nodes, others });
+}
+
+/**
+ * A graph of `nodes`, rooted at those without a parent: every node, and a
+ * summary of each session with just what the server's has
+ * (`timeline::SessionSummary`). The harness hands it to the page as the
+ * server would (`asServer`).
+ */
 export function graph(nodes, fields = {}) {
   const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const roots = nodes.filter((n) => !n.parent || !byId[n.parent]).map((n) => n.id);
+  const tree = (id) => {
+    const out = [];
+    const queue = [id];
+    while (queue.length) {
+      const n = byId[queue.shift()];
+      if (!n || out.includes(n)) continue;
+      out.push(n);
+      queue.push(...n.children);
+    }
+    return out;
+  };
+  const sessions = Object.fromEntries(
+    roots.map((id) => {
+      const root = byId[id];
+      const all = tree(id);
+      const first = (f) => {
+        const n = all.find(f);
+        return n ? brief(n) : null;
+      };
+      return [
+        id,
+        {
+          ...brief(root),
+          last_event_at: root.last_event_at,
+          started_at: root.started_at,
+          headline: root.headline,
+          tasks: root.tasks.length,
+          open_tasks: root.open_tasks,
+          agents: all.length - 1,
+          needs_you: first((n) => n.state === "input_required"),
+          deadlocked: all.some((n) => n.blocked && n.blocked.cycle),
+          stuck: first((n) => n.stale),
+          busy: all.some((n) => n.state === "working"),
+        },
+      ];
+    }),
+  );
   return {
     at: null,
     events: nodes.length,
     nodes: byId,
-    roots: nodes.filter((n) => !n.parent).map((n) => n.id),
+    roots,
+    sessions,
     ...fields,
   };
 }

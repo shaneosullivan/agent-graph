@@ -13,9 +13,10 @@
 //!
 //! Requests are JSON:
 //!
-//! - `{"op": "graph", "env": "site", "until": …, "now_ms": …, "stale_minutes": …}`:
-//!   the graph now, or as of event `until`. `env` says where it's being shown
-//!   (`"site"` or `"local"`, see `timeline::Environment`) and is required.
+//! - `{"op": "graph", "env": "site", "root": …, "until": …, "now_ms": …, "stale_minutes": …}`:
+//!   the graph now, or as of event `until`: every session's summary, and the
+//!   tree under `root`. `env` says where it's being shown (`"site"` or
+//!   `"local"`, see `timeline::Environment`) and is required.
 //! - `{"op": "timeline", "root": …, "now_ms": …, "stale_minutes": …}`
 //! - `{"op": "info"}`
 
@@ -124,6 +125,9 @@ enum Request {
         /// Where the graph is being shown.
         env: Environment,
         until: Option<String>,
+        /// The session whose tree to send (every session is summarised).
+        #[serde(default)]
+        root: Option<String>,
         #[serde(default)]
         now_ms: Option<f64>,
         #[serde(default = "default_stale")]
@@ -155,11 +159,13 @@ pub fn answer(request: &str) -> String {
             Request::Graph {
                 env,
                 until,
+                root,
                 now_ms,
                 stale_minutes,
             } => timeline::graph(
                 &log.events,
                 until.as_deref(),
+                root.as_deref(),
                 now(&log, now_ms),
                 minutes(stale_minutes),
                 env,
@@ -230,13 +236,16 @@ mod tests {
         assert_eq!(append_text(LINES), 2);
         assert_eq!(append_text(LINES), 0, "same events again");
 
-        let graph: serde_json::Value =
-            serde_json::from_str(&answer(r#"{"op":"graph","env":"site"}"#)).unwrap();
+        let graph: serde_json::Value = serde_json::from_str(&answer(
+            r#"{"op":"graph","env":"site","root":"claude-code:s"}"#,
+        ))
+        .unwrap();
         assert_eq!(graph["nodes"]["claude-code:s"]["state"], "working");
+        assert_eq!(graph["sessions"]["claude-code:s"]["state"], "working");
         assert_eq!(graph["events"], 2);
 
         let past: serde_json::Value = serde_json::from_str(&answer(
-            r#"{"op":"graph","env":"site","until":"01K0000000000000000000000A"}"#,
+            r#"{"op":"graph","env":"site","root":"claude-code:s","until":"01K0000000000000000000000A"}"#,
         ))
         .unwrap();
         assert_eq!(past["nodes"]["claude-code:s"]["state"], "idle");
@@ -267,7 +276,8 @@ mod tests {
             "nothing to open on the site"
         );
         assert_eq!(
-            graph(r#"{"op":"graph","env":"local"}"#)["open"]["claude-code:s"]["app"],
+            graph(r#"{"op":"graph","env":"local","root":"claude-code:s"}"#)["open"]["claude-code:s"]
+                ["app"],
             "Claude Code"
         );
         assert_eq!(graph(r#"{"op":"graph"}"#)["status"], 400, "env is required");

@@ -463,9 +463,10 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 **One implementation, again.** The site's viewer is the same page as `agent-graph view` (`app.js`, `app.css`, and the markup from `index.html`):
 - `app.js` reads through a small data-source interface. By default that's the local server's API.
 - On the site, `site-source.js` supplies it instead. It fetches the log's text, then computes graphs and timelines in the browser with the Rust reducer compiled to WebAssembly (the `wasm/` crate: 300 KB, 100 KB gzipped).
+- A graph request names the node being shown: the reply carries its tree (and says whose it is: the most recent session's, if none is named or it doesn't exist), what names the nodes it refers to outside it (what it's waiting on, its messages' peers, its root's parent), and a summary of every session for the sidebar; not every node of every session, which a long history makes slow to send and take in. A node outside the tree is shown by switching to its own, and so is one named in the address (if it doesn't exist, the page goes back to where it was). The local server works each reply out from a snapshot of the events, without holding them locked.
 - Graph requests say where they'll be shown: `timeline::graph` takes an `Environment`, and the WebAssembly `graph` request requires `"env"`. Only `"local"` lists the sessions that can be reopened; the site sends `"site"`, and its data source has no `open` either, so the Resume button never appears there.
 - The crate builds without its CLI dependencies (`--no-default-features`), and the WebAssembly boundary is plain bytes in memory, with no binding generator.
-- `site/scripts/sync-viewer.mjs` copies the viewer and the `.wasm` into the site, and CI checks the copies are current.
+- `site/scripts/sync-viewer.mjs` copies the viewer and the `.wasm` into the site, and CI checks the copies are current (the `.wasm` by a record of the crate's files it was compiled from, and the crates it used).
 
 **The protocol** (`src/remote.rs`, `site/app/api/logs/`) is designed so the site does as little work as possible per update:
 

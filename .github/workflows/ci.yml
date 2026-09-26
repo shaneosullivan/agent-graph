@@ -36,6 +36,8 @@ jobs:
       # The site's copy of the viewer must match the crate's.
       - run: node site/scripts/sync-viewer.mjs
       - run: git diff --exit-code -- site/public/viewer/app.js site/public/viewer/app.css site/lib/viewer-shell.ts
+      # And its WebAssembly must be built from the Rust as it is now.
+      - run: node site/scripts/sync-viewer.mjs --check-wasm
 
   site:
     runs-on: ubuntu-latest

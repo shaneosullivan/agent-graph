@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { graph, loadViewer, node, until } from "./viewer-harness.mjs";
+import { asServer, graph, loadViewer, node, until } from "./viewer-harness.mjs";
 
 test("R3: a tree with a loop in it is drawn once, and the page keeps working", async (t) => {
   const a = node("x:a", { children: ["x:b"] });
@@ -26,7 +26,7 @@ test("R7: the local page takes its key from the link, keeps it, and sends it", a
       ? { stops: [] }
       : String(url).startsWith("/api/info")
         ? { now_ms: Date.now(), events_dir: "x" }
-        : g;
+        : asServer(g, new URL(String(url), "http://x").searchParams.get("root"));
     return { ok: true, status: 200, json: async () => body, text: async () => "", blob: async () => ({}) };
   };
   class EventSource {
@@ -43,6 +43,11 @@ test("R7: the local page takes its key from the link, keeps it, and sends it", a
   assert.equal(window.localStorage.getItem("agentGraphKey"), "k3y");
   assert.ok(requests.length > 0);
   for (const r of requests) assert.equal(r.key, "k3y", r.url);
+  // R23: it asks for the tree of the session it shows.
+  assert.ok(
+    requests.some((r) => r.url === "/api/graph?root=x%3Aa"),
+    requests.map((r) => r.url).join(", "),
+  );
   assert.deepEqual(streams, ["/api/stream?key=k3y"]);
 
   // Saving an image fetches it with the key as a header: the key is never
@@ -434,4 +439,240 @@ test("R21: a session's controls start afresh when it's chosen", async (t) => {
   hold.resolve();
   await until(() => v.S.stops.length === 3);
   assert.equal($("#step-count").textContent, "Step 3 of 3");
+});
+
+/** A source of `nodes` (sent as the server would), recording what it was asked for. */
+function treeSource(nodes, stops = stopsOf(["e1", "e2"])) {
+  const whole = graph(nodes);
+  const asked = [];
+  return {
+    asked,
+    source: {
+      graph: async (until, root) => {
+        asked.push({ until, root });
+        return { ...whole, all: whole.nodes, at: until || null };
+      },
+      timeline: async () => ({ stops }),
+    },
+  };
+}
+
+test("R23: the page asks for the tree it shows, and lists the others from their summaries", async (t) => {
+  const a = node("x:a", { cwd: "/w/a" });
+  const b = node("x:b", { cwd: "/w/b", children: ["x:b/c"] });
+  const c = node("x:b/c", { parent: "x:b", agent_type: "Explore", state: "input_required", attention: "May I?" });
+  const { asked, source } = treeSource([a, b, c]);
+  const window = loadViewer(t, source, { hash: "#x:a" });
+  const v = window.__viewer;
+  const doc = window.document;
+  await until(() => v.S.stops.length === 2);
+  assert.deepEqual({ ...asked[0] }, { until: null, root: "x:a" }, "the session in the address");
+
+  // x:b's tree isn't here, but the list says what's going on in it.
+  assert.equal(v.S.live.nodes["x:b"], undefined);
+  const items = [...doc.querySelectorAll("#session-list .session")];
+  assert.equal(items.length, 2);
+  const itemB = items.find((i) => i.textContent.includes("b"));
+  assert.match(itemB.textContent, /Needs you: May I\?/);
+  assert.match(itemB.textContent, /1 agent/);
+
+  // Choosing it shows what its summary says while its tree comes...
+  itemB.click();
+  assert.match(doc.querySelector("#view h1").textContent, /b/);
+  assert.equal(doc.querySelector("#view .empty-note").textContent, "Loading…");
+  // ...and asks for its tree; steps ask for it too.
+  await until(() => v.S.root === "x:b" && v.S.live.nodes["x:b/c"]);
+  assert.deepEqual({ ...asked.at(-1) }, { until: null, root: "x:b" });
+  v.goTo(0);
+  await until(() => asked.at(-1).until === "e1");
+  assert.deepEqual({ ...asked.at(-1) }, { until: "e1", root: "x:b" });
+  await until(() => doc.querySelectorAll("#view .node").length === 2);
+});
+
+test("R23: with no session named, one request brings the newest session's tree", async (t) => {
+  const { asked, source } = treeSource([node("x:a")]);
+  const window = loadViewer(t, source);
+  const v = window.__viewer;
+  await until(() => v.S.root === "x:a" && window.document.querySelectorAll("#view .node").length === 1);
+  assert.deepEqual(
+    asked.map((r) => ({ ...r })),
+    [{ until: null, root: null }],
+  );
+});
+
+/** x:a waits on x:c, a session of its own, and on its agent x:c/d. */
+function waitingOnAnother() {
+  const wait = (on) => ({ wait_id: on, on, open: true, spawn: false, started_at: "2026-09-25T10:00:00.000Z" });
+  const a = node("x:a", {
+    waits: [wait("x:c"), wait("x:c/d")],
+    blocked: { on: ["x:c", "x:c/d"], starting: 0, nodes: 2, open_tasks: 0, cycle: false },
+  });
+  const c = node("x:c", { cwd: "/w/c", children: ["x:c/d"] });
+  const d = node("x:c/d", { parent: "x:c", agent_type: "Explore", background: true, stale: true });
+  // A session of its own, unrelated.
+  const z = node("x:z", { children: ["x:z/q"] });
+  const q = node("x:z/q", { parent: "x:z", agent_type: "Plan" });
+  return [a, c, d, z, q];
+}
+
+test("R23: a node outside the tree is named, and opening it shows its own tree", async (t) => {
+  const { asked, source } = treeSource(waitingOnAnother());
+  let hold = null;
+  const held = {
+    ...source,
+    graph: async (until, root) => {
+      const g = source.graph(until, root);
+      if (hold && root === "x:c/d") await hold.promise;
+      return g;
+    },
+  };
+  const window = loadViewer(t, held, { hash: "#x:a" });
+  const v = window.__viewer;
+  const doc = window.document;
+  await until(() => v.S.stops.length === 2);
+  assert.equal(v.S.live.nodes["x:c"], undefined, "not x:a's tree");
+  assert.equal(v.S.live.others["x:c"].state, "working", "only what names it");
+  // How it's doing, from what names it.
+  assert.match(doc.querySelector("#view .node-blocked").textContent, /\(looks stuck\)/);
+
+  const links = () => [...doc.querySelectorAll("#detail button.linkish")];
+  // An agent of the other session (not in the sessions list): its own tree.
+  const agent = links().find((b) => b.textContent.startsWith("Explore"));
+  assert.ok(agent, doc.querySelector("#detail").textContent);
+  assert.ok(agent.closest("li").querySelector(".dot.working"), "its state");
+  hold = deferred();
+  agent.click();
+  // Named at once, while its tree comes.
+  assert.match(doc.querySelector("#view h1").textContent, /^Explore/);
+  hold.resolve();
+  hold = null;
+  await until(() => v.S.root === "x:c/d" && v.S.live.root === "x:c/d");
+  assert.deepEqual({ ...asked.at(-1) }, { until: null, root: "x:c/d" });
+
+  // The other session itself.
+  v.selectRoot("x:a");
+  await until(() => v.S.root === "x:a" && v.S.live.root === "x:a" && links().length);
+  links()
+    .find((b) => b.textContent === "c")
+    .click();
+  await until(() => v.S.root === "x:c" && v.S.live.nodes["x:c/d"]);
+  assert.deepEqual({ ...asked.at(-1) }, { until: null, root: "x:c" });
+});
+
+test("R23: an address naming a node this graph doesn't have shows its tree", async (t) => {
+  const { source } = treeSource(waitingOnAnother());
+  const window = loadViewer(t, source, { hash: "#x:a" });
+  const v = window.__viewer;
+  await until(() => v.S.stops.length === 2);
+  assert.equal(v.S.live.nodes["x:z/q"] || v.S.live.others["x:z/q"], undefined);
+  window.location.hash = "#x:z/q";
+  await until(() => v.S.root === "x:z/q" && v.S.live.root === "x:z/q");
+  assert.equal(window.document.querySelectorAll("#view .node").length, 1);
+});
+
+test("R23: an address naming a node that doesn't exist goes back to where it was", async (t) => {
+  // The newest session (the one a reply falls back to) refers to neither.
+  const [a, c, d, z, q] = waitingOnAnother();
+  const { source } = treeSource([z, q, a, c, d]);
+  const window = loadViewer(t, source, { hash: "#x:c" });
+  const v = window.__viewer;
+  await until(() => v.S.stops.length === 2 && v.S.root === "x:c");
+  window.location.hash = "#x:typo";
+  await until(() => v.S.root === "x:c" && v.S.live.root === "x:c" && window.location.hash === "#x%3Ac");
+  await settle();
+  assert.equal(v.S.root, "x:c", "not the newest session");
+
+  // From an agent of a session that isn't the newest, too.
+  window.location.hash = "#x:c/d";
+  await until(() => v.S.root === "x:c/d" && v.S.live.root === "x:c/d");
+  window.location.hash = "#x:typo";
+  await until(() => v.S.root === "x:c/d" && v.S.live.root === "x:c/d" && window.location.hash === "#x%3Ac%2Fd");
+  await settle();
+  assert.equal(v.S.root, "x:c/d");
+});
+
+test("R23: at a past step, a node outside the tree still opens its own tree", async (t) => {
+  const [waiting, ...rest] = waitingOnAnother();
+  const window = loadViewer(
+    t,
+    {
+      // Waiting on x:c/d only at e1: the live graph doesn't have it.
+      graph: async (at) => graph(at === "e1" ? [waiting, ...rest] : [node("x:a"), ...rest]),
+      timeline: async () => ({ stops: stopsOf(["e1", "e2"]) }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const doc = window.document;
+  await until(() => v.S.stops.length === 2);
+  assert.equal(v.S.live.others["x:c/d"], undefined);
+  v.goTo(0);
+  await until(() => [...doc.querySelectorAll("#detail button.linkish")].some((b) => b.textContent.startsWith("Explore")));
+  [...doc.querySelectorAll("#detail button.linkish")].find((b) => b.textContent.startsWith("Explore")).click();
+  await until(() => v.S.root === "x:c/d" && v.S.live.root === "x:c/d");
+});
+
+test("R23: an old session named in the address is shown", async (t) => {
+  const old = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
+  const { source } = treeSource([node("x:a", { last_event_at: old }), node("x:b")]);
+  const window = loadViewer(t, source, { hash: "#x:a" });
+  await until(() => window.document.querySelectorAll("#view .node").length === 1);
+  assert.equal(window.__viewer.S.root, "x:a");
+});
+
+test("R23: a refresh overtaken while its graph comes shows nothing of it", async (t) => {
+  const { source } = treeSource(waitingOnAnother());
+  let hold = null;
+  const held = {
+    ...source,
+    graph: async (until, root) => {
+      const g = source.graph(until, root);
+      if (hold && !until) await hold.promise;
+      return g;
+    },
+  };
+  const window = loadViewer(t, held, { hash: "#x:a" });
+  const v = window.__viewer;
+  await until(() => v.S.stops.length === 2);
+
+  hold = deferred();
+  v.scheduleRefresh();
+  await settle();
+  v.selectRoot("x:c");
+  const release = hold;
+  hold = null;
+  release.resolve();
+  await settle();
+  // Not x:a's tree taken for x:c's (which would send the page back to x:a).
+  assert.equal(v.S.root, "x:c");
+  await until(() => v.S.live.root === "x:c" && v.S.stops.length === 2);
+  assert.equal(v.S.root, "x:c");
+});
+
+test("R23: a node of the tree that hadn't started at a step says so", async (t) => {
+  const a = node("x:a", { children: ["x:a/b"] });
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore" });
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => (at === "e1" ? graph([node("x:a")]) : graph([a, b])),
+      timeline: async () => ({ stops: stopsOf(["e1", "e2"]) }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  await until(() => v.S.stops.length === 2);
+  v.selectNode("x:a/b");
+  v.goTo(0);
+  await until(() => v.S.shown && v.S.shown.at === null && !v.S.shown.nodes["x:a/b"]);
+  assert.match(window.document.querySelector("#detail").textContent, /hadn’t started yet/);
+});
+
+test("R23: with no session named and none recent, none is shown", async (t) => {
+  const old = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
+  const { source } = treeSource([node("x:a", { last_event_at: old })]);
+  const window = loadViewer(t, source);
+  await until(() => window.document.querySelector("#view h2"));
+  assert.equal(window.__viewer.S.root, null);
+  assert.equal(window.document.querySelector("#view h2").textContent, "Nothing in the last 24 hours");
 });

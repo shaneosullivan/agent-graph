@@ -150,7 +150,7 @@ Status is updated as each is done.
 - **Where:** `src/timeline.rs`, `src/view/mod.rs`, `src/view/assets/app.js`
 - **Problem:** Each request replays all events and returns every node of every session, with the events lock held; with a large history each step takes about half a second locally and freezes the site's page.
 - **Fix:** send only the selected session's tree (plus a summary of the others), and compute outside the lock.
-- **Status:** open
+- **Status:** fixed. A graph reply (`timeline::graph`) now carries the tree under the node asked for (`root`, echoed; if none is asked for or it isn't in the graph, the most recently active session's, so the page never needs a second request), `others`: only what names the nodes the tree refers to outside it (what it's waiting on, its messages' peers, the children its requests started when R54 has put them elsewhere, its root's parent), and a summary of every session (`sessions`: what names it, its state, tasks, how many agents, the first node needing you or looking stuck, whether it's deadlocked or busy) for the sidebar. The page asks for the node it shows, judges a reply by the tree it says it holds, ignores one overtaken by a change of session, lists sessions from their summaries, and shows a node outside the tree by switching to its own (at any step), as it does for one named in the address (going back to where it was if that doesn't exist). The local server keeps its events behind an `Arc`, so a request takes a snapshot under the lock and works out its reply without it (and so do `/api/open` and images). The site's WebAssembly, which hadn't been rebuilt since R14, is rebuilt (without the build machine's paths in it), and now records what it was built from (the crate's files the build compiled, from its dep-info; the crates it used, with their versions and features; and its build profile), which CI checks (`sync-viewer.mjs --check-wasm`), so a change to the reducer can't reach the site unbuilt, and a change to only the CLI doesn't need a build. Still to do: R55 (the snapshot is copied when events arrive), R56 (each refresh reduces twice). Tests: `requests_are_worked_out_without_holding_the_events` (src/view/mod.rs), `a_graph_carries_one_tree_and_a_summary_of_every_session`, `only_the_trees_sessions_can_be_opened`, `a_child_claimed_from_outside_the_tree_is_named` (src/timeline.rs), "the site's WebAssembly sends one tree, and every session's summary" (site/tests/wasm.test.mjs), and in site/tests/viewer.test.mjs (whose stubs now reply as the server does: `asServer`) "R23: the page asks for the tree it shows, and lists the others from their summaries", "…with no session named, one request brings the newest session's tree", "…a node outside the tree is named, and opening it shows its own tree", "…an address naming a node this graph doesn't have shows its tree", "…an address naming a node that doesn't exist goes back to where it was", "…at a past step, a node outside the tree still opens its own tree", "…an old session named in the address is shown", "…a refresh overtaken while its graph comes shows nothing of it", "…a node of the tree that hadn't started at a step says so", "…with no session named and none recent, none is shown", and the R7 test's request for the tree. Reviewed (three rounds).
 
 ### R24. A shell-launched session can be paired with another program's request, for good
 - **Where:** `src/reducer.rs` (`bind_session_by_guess`)
@@ -293,4 +293,16 @@ Status is updated as each is done.
 - **Where:** `src/reducer.rs` (`bind`)
 - **Problem:** Found reviewing R22. `spawned_by` holds only a call id, not the node that made the request, so when `spawn.returned` names a child already bound to a request with the same call id in another session, `bind` doesn't undo the first binding, and both requests claim the child. Unlikely (call ids are almost always unique), but possible.
 - **Fix:** record the requester with the call id, and compare both.
+- **Status:** open
+
+### R55. A poll copies the whole event log while a request holds a snapshot
+- **Where:** `src/view/tail.rs`
+- **Problem:** Found reviewing R23. The events are an `Arc<Vec<Timed>>`; when a poll finds new ones while a request still holds a snapshot, `Arc::make_mut` copies every event, under the lock (about 12 ms, release, for 32,800 events), and holds a third copy of the log meanwhile.
+- **Fix:** keep each event behind its own `Arc` (`Vec<Arc<Timed>>`), so the copy is of pointers.
+- **Status:** open
+
+### R56. Each refresh reduces the history twice, on the site in the page's main thread
+- **Where:** `src/view/assets/app.js` (`refresh`), `site/public/viewer/site-source.js`
+- **Problem:** Found reviewing R23. A refresh asks for the graph and then the timeline, and each reduces every event; on the site, that's in the page's main thread (about 130 ms each for 32,800 events), so the page stalls on busy logs.
+- **Fix:** one request for both (reducing once), and run the WebAssembly in a Worker on the site.
 - **Status:** open

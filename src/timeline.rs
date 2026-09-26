@@ -64,12 +64,107 @@ struct GraphResponse<'a> {
     at: Option<&'a str>,
     /// How many events went into it.
     events: usize,
-    #[serde(flatten)]
-    graph: Graph,
-    /// Sessions that can be reopened, by node id. Only ever filled in for
+    /// Every session with no parent in the graph, most recently active first.
+    roots: &'a [String],
+    /// What the sessions list shows of each of `roots`.
+    sessions: BTreeMap<&'a str, SessionSummary<'a>>,
+    /// The node whose tree `nodes` holds: the one asked for, or if that
+    /// isn't in the graph (or none was), the most recently active session.
+    root: Option<&'a str>,
+    /// Every node of that tree: not every node of every session, which a
+    /// long history makes slow to send and to take in.
+    nodes: BTreeMap<&'a str, &'a Node>,
+    /// The nodes outside it that it refers to (what it waits on, say): only
+    /// what names them and how they're doing.
+    others: BTreeMap<&'a str, Brief<'a>>,
+    /// Which of `nodes` can be reopened. Only ever filled in for
     /// `Environment::Local`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    open: BTreeMap<String, Open>,
+    open: BTreeMap<&'a str, Open>,
+}
+
+/// What names a node (as the page does), and how it's doing.
+#[derive(Serialize)]
+struct Brief<'a> {
+    id: &'a str,
+    kind: NodeKind,
+    provider: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_type: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attention: Option<&'a str>,
+    state: State,
+    stale: bool,
+}
+
+impl<'a> Brief<'a> {
+    fn of(n: &'a Node) -> Brief<'a> {
+        Brief {
+            id: &n.id,
+            kind: n.kind,
+            provider: &n.provider,
+            parent: n.parent.as_deref(),
+            title: n.title.as_deref(),
+            cwd: n.cwd.as_deref(),
+            agent_type: n.agent_type.as_deref(),
+            attention: n.attention.as_deref(),
+            state: n.state,
+            stale: n.stale,
+        }
+    }
+}
+
+/// A session as the list shows it: itself, and what's going on in its tree.
+#[derive(Serialize)]
+struct SessionSummary<'a> {
+    #[serde(flatten)]
+    session: Brief<'a>,
+    last_event_at: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    headline: Option<&'a str>,
+    /// Its own tasks, and how many are still open.
+    tasks: usize,
+    open_tasks: usize,
+    /// How many nodes are under it.
+    agents: usize,
+    /// The first node in its tree that needs you.
+    needs_you: Option<Brief<'a>>,
+    /// Something in its tree waits on something that waits on it.
+    deadlocked: bool,
+    /// The first node in its tree that looks stuck.
+    stuck: Option<Brief<'a>>,
+    /// Something in its tree is working.
+    busy: bool,
+}
+
+impl<'a> SessionSummary<'a> {
+    fn of(graph: &'a Graph, root: &'a Node) -> SessionSummary<'a> {
+        let tree = tree_order(graph, &root.id);
+        let first = |f: &dyn Fn(&Node) -> bool| tree.iter().copied().find(|n| f(n)).map(Brief::of);
+        SessionSummary {
+            session: Brief::of(root),
+            last_event_at: &root.last_event_at,
+            started_at: root.started_at.as_deref(),
+            headline: root.headline.as_deref(),
+            tasks: root.tasks.len(),
+            open_tasks: root.open_tasks,
+            agents: tree.len() - 1,
+            needs_you: first(&|n| n.state == State::InputRequired),
+            deadlocked: tree
+                .iter()
+                .any(|n| n.blocked.as_ref().is_some_and(|b| b.cycle)),
+            stuck: first(&|n| n.stale),
+            busy: tree.iter().any(|n| n.state == State::Working),
+        }
+    }
 }
 
 /// The graph after every event up to and including `until` (or all of them,
@@ -90,23 +185,43 @@ pub fn graph_at(
     Ok((reduce(slice, now, stale_after), slice.len(), now))
 }
 
-/// `graph_at` as JSON, for a page in `env`.
+/// `graph_at` as JSON, for a page in `env`: every session's summary, and
+/// the tree under `root` (or, if it's not given or not in the graph, under
+/// the most recently active session).
 pub fn graph(
     events: &[Timed],
     until: Option<&str>,
+    root: Option<&str>,
     now: SystemTime,
     stale_after: Duration,
     env: Environment,
 ) -> Result<String, ApiError> {
     let (graph, count, _) = graph_at(events, until, now, stale_after)?;
+    let sessions = graph
+        .roots
+        .iter()
+        .filter_map(|id| graph.nodes.get(id))
+        .map(|n| (n.id.as_str(), SessionSummary::of(&graph, n)))
+        .collect();
+    let root = root
+        .filter(|id| graph.nodes.contains_key(*id))
+        .or(graph.roots.first().map(String::as_str));
+    let nodes: BTreeMap<&str, &Node> = root
+        .map(|root| {
+            tree_order(&graph, root)
+                .into_iter()
+                .map(|n| (n.id.as_str(), n))
+                .collect()
+        })
+        .unwrap_or_default();
+    let others = neighbours(&graph, &nodes);
     let open = match env {
-        Environment::Local => graph
-            .nodes
+        Environment::Local => nodes
             .values()
             .filter_map(|n| {
                 let r = resume::resume(n)?;
                 Some((
-                    n.id.clone(),
+                    n.id.as_str(),
                     Open {
                         app: r.app,
                         copy: r.copy,
@@ -119,9 +234,58 @@ pub fn graph(
     Ok(to_json(&GraphResponse {
         at: until,
         events: count,
-        graph,
+        roots: &graph.roots,
+        sessions,
+        root: root
+            .and_then(|id| graph.nodes.get(id))
+            .map(|n| n.id.as_str()),
+        nodes,
+        others,
         open,
     }))
+}
+
+/// The nodes of the tree under `root`, in the order the page walks it
+/// (breadth first).
+fn tree_order<'a>(graph: &'a Graph, root: &str) -> Vec<&'a Node> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    let mut queue = VecDeque::from([root]);
+    while let Some(id) = queue.pop_front() {
+        if let Some(node) = graph.nodes.get(id) {
+            if seen.insert(node.id.as_str()) {
+                out.push(node);
+                queue.extend(node.children.iter().map(String::as_str));
+            }
+        }
+    }
+    out
+}
+
+/// The nodes outside `tree` that the page shows it referring to: what it's
+/// waiting on (possibly in other sessions), the peers of its messages, the
+/// children its requests started (normally under it, but see R54), and the
+/// parent of its root.
+fn neighbours<'a>(
+    graph: &'a Graph,
+    tree: &BTreeMap<&str, &'a Node>,
+) -> BTreeMap<&'a str, Brief<'a>> {
+    let mut out = BTreeMap::new();
+    for node in tree.values() {
+        let referred = node
+            .blocked
+            .iter()
+            .flat_map(|b| b.on.iter().map(String::as_str))
+            .chain(node.messages.iter().map(|m| m.peer.as_str()))
+            .chain(node.spawns.iter().filter_map(|s| s.child.as_deref()))
+            .chain(node.parent.as_deref());
+        for id in referred.filter(|id| !tree.contains_key(id)) {
+            if let Some(n) = graph.nodes.get(id) {
+                out.insert(n.id.as_str(), Brief::of(n));
+            }
+        }
+    }
+    out
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -492,7 +656,15 @@ mod tests {
         // Stop 6 is the Explore agent starting: the session is blocked on it.
         let at = &events[6].event.id;
         let json: Value = serde_json::from_str(
-            &graph(&events, Some(at), SystemTime::now(), STALE, LOCAL).unwrap(),
+            &graph(
+                &events,
+                Some(at),
+                Some(SESSION),
+                SystemTime::now(),
+                STALE,
+                LOCAL,
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(json["at"], at.as_str());
@@ -504,9 +676,18 @@ mod tests {
             "not started yet"
         );
 
-        let live: Value =
-            serde_json::from_str(&graph(&events, None, SystemTime::now(), STALE, LOCAL).unwrap())
-                .unwrap();
+        let live: Value = serde_json::from_str(
+            &graph(
+                &events,
+                None,
+                Some(SESSION),
+                SystemTime::now(),
+                STALE,
+                LOCAL,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(live["at"], Value::Null);
         assert_eq!(live["nodes"][SESSION]["state"], "completed");
     }
@@ -515,8 +696,10 @@ mod tests {
     fn only_a_local_page_can_open_sessions() {
         let events = fixture_events();
         let at = |env| -> Value {
-            serde_json::from_str(&graph(&events, None, SystemTime::now(), STALE, env).unwrap())
-                .unwrap()
+            serde_json::from_str(
+                &graph(&events, None, Some(SESSION), SystemTime::now(), STALE, env).unwrap(),
+            )
+            .unwrap()
         };
         let local = at(Environment::Local);
         let open = local["open"].as_object().unwrap();
@@ -534,9 +717,18 @@ mod tests {
 
         // Still running: open a copy, not a second process on it.
         let running = &events[..events.len() - 1];
-        let json: Value =
-            serde_json::from_str(&graph(running, None, SystemTime::now(), STALE, LOCAL).unwrap())
-                .unwrap();
+        let json: Value = serde_json::from_str(
+            &graph(
+                running,
+                None,
+                Some(SESSION),
+                SystemTime::now(),
+                STALE,
+                LOCAL,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(json["open"][SESSION]["copy"], true);
     }
 
@@ -544,18 +736,180 @@ mod tests {
     fn a_session_id_that_is_not_plain_is_never_offered() {
         let line = r#"{"v":1,"id":"01K0000000000000000000000A","ts":"2026-09-25T10:00:00.000Z","type":"session.started","node":"claude-code:--dangerously-skip-permissions","source":{"provider":"claude-code"},"data":{"cwd":"/w/app"}}"#;
         let events = vec![Timed::new(serde_json::from_str(line).unwrap())];
-        let json: Value =
-            serde_json::from_str(&graph(&events, None, SystemTime::now(), STALE, LOCAL).unwrap())
-                .unwrap();
+        let root = "claude-code:--dangerously-skip-permissions";
+        let json: Value = serde_json::from_str(
+            &graph(&events, None, Some(root), SystemTime::now(), STALE, LOCAL).unwrap(),
+        )
+        .unwrap();
         assert_eq!(json["nodes"].as_object().unwrap().len(), 1);
         assert!(json.get("open").is_none());
+    }
+
+    fn events_of(lines: &[(&str, &str, &str)]) -> Vec<Timed> {
+        let mut events: Vec<Timed> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, (node, kind, data))| {
+                let line = format!(
+                    r#"{{"v":1,"id":"01K{i:023}","ts":"2026-09-25T10:00:{i:02}.000Z","type":"{kind}","node":"{node}","data":{data}}}"#
+                );
+                Timed::new(serde_json::from_str(&line).unwrap())
+            })
+            .collect();
+        sort(&mut events);
+        events
+    }
+
+    /// R23: a graph carries the tree it was asked for, what names the nodes
+    /// it refers to outside it (not them whole), and a summary of every
+    /// session for the list, rather than every node of every session.
+    #[test]
+    fn a_graph_carries_one_tree_and_a_summary_of_every_session() {
+        let events = events_of(&[
+            ("x:a", "session.started", r#"{"cwd":"/w/a"}"#),
+            ("x:a/b", "agent.spawned", r#"{"agent_type":"Explore"}"#),
+            (
+                "x:a/b",
+                "status",
+                r#"{"state":"input_required","summary":"May I run it?"}"#,
+            ),
+            ("x:c", "session.started", r#"{"title":"The other one"}"#),
+            ("x:e", "session.started", "{}"),
+            ("x:c", "wait.started", r#"{"wait_id":"w","on":"x:e"}"#),
+            ("x:e", "status", r#"{"state":"working"}"#),
+            ("x:e", "wait.started", r#"{"wait_id":"v","on":"x:c"}"#),
+            ("x:c", "wait.started", r#"{"wait_id":"u","on":"x:a/b"}"#),
+            (
+                "x:c",
+                "message.sent",
+                r#"{"message_id":"m","to":"x:a","summary":"hello"}"#,
+            ),
+        ]);
+        let at = |root: Option<&str>| -> Value {
+            serde_json::from_str(
+                &graph(&events, None, root, SystemTime::now(), STALE, LOCAL).unwrap(),
+            )
+            .unwrap()
+        };
+        let keys = |v: &Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
+
+        let c = at(Some("x:c"));
+        assert_eq!(c["root"], "x:c");
+        assert_eq!(keys(&c["nodes"]), ["x:c"], "x:c's tree");
+        // What it waits on (an agent of x:a's, and x:e), and its message's
+        // peer: named, not whole.
+        assert_eq!(keys(&c["others"]), ["x:a", "x:a/b", "x:e"]);
+        assert_eq!(c["others"]["x:e"]["state"], "working");
+        assert!(c["others"]["x:a"].get("messages").is_none(), "not whole");
+        assert_eq!(keys(&c["sessions"]), ["x:a", "x:c", "x:e"]);
+        assert_eq!(c["roots"].as_array().unwrap().len(), 3);
+        let a = &c["sessions"]["x:a"];
+        assert_eq!(a["cwd"], "/w/a");
+        assert_eq!(a["agents"], 1);
+        assert_eq!(a["busy"], false);
+        assert_eq!(a["needs_you"]["id"], "x:a/b");
+        assert_eq!(a["needs_you"]["attention"], "May I run it?");
+        assert_eq!(a["needs_you"]["agent_type"], "Explore");
+        assert_eq!(c["sessions"]["x:c"]["title"], "The other one");
+        assert!(c["sessions"]["x:c"]["needs_you"].is_null());
+        assert_eq!(c["sessions"]["x:e"]["busy"], true);
+        assert_eq!(
+            c["sessions"]["x:c"]["deadlocked"], true,
+            "x:c and x:e wait on each other"
+        );
+        assert_eq!(c["sessions"]["x:a"]["deadlocked"], false);
+
+        // An agent's tree, with its parent named.
+        let b = at(Some("x:a/b"));
+        assert_eq!(keys(&b["nodes"]), ["x:a/b"]);
+        assert!(
+            keys(&b["others"]).contains(&"x:a".to_string()),
+            "its parent"
+        );
+
+        // What's in the tree isn't named again.
+        for g in [&c, &b, &at(Some("x:a"))] {
+            let nodes = keys(&g["nodes"]);
+            assert!(keys(&g["others"]).iter().all(|k| !nodes.contains(k)), "{g}");
+        }
+
+        // None asked for, or one not in the graph: the most recently active session's.
+        let newest = c["roots"][0].as_str().unwrap().to_string();
+        for asked in [None, Some("x:nope")] {
+            let g = at(asked);
+            assert_eq!(g["root"], newest.as_str());
+            assert!(keys(&g["nodes"]).contains(&newest));
+        }
+    }
+
+    /// R23: only the tree's sessions are offered to reopen.
+    #[test]
+    fn only_the_trees_sessions_can_be_opened() {
+        let started = |id: &str| {
+            let n = &id[id.len() - 1..];
+            format!(
+                r#"{{"v":1,"id":"01K0000000000000000000000{n}","ts":"2026-09-25T10:00:0{n}.000Z","type":"session.started","node":"claude-code:{id}","source":{{"provider":"claude-code"}},"data":{{"cwd":"/w/app"}}}}"#
+            )
+        };
+        let one = "0d0e0f10-aaaa-4bbb-8ccc-000000000001";
+        let two = "0d0e0f10-aaaa-4bbb-8ccc-000000000002";
+        let mut events: Vec<Timed> = [one, two]
+            .iter()
+            .map(|id| Timed::new(serde_json::from_str(&started(id)).unwrap()))
+            .collect();
+        sort(&mut events);
+        let root = format!("claude-code:{one}");
+        let json: Value = serde_json::from_str(
+            &graph(&events, None, Some(&root), SystemTime::now(), STALE, LOCAL).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json["open"].as_object().unwrap().keys().collect::<Vec<_>>(),
+            [&root]
+        );
+    }
+
+    /// R23 (and R54): a child another session's request also claims is
+    /// named, though it's in that session's tree.
+    #[test]
+    fn a_child_claimed_from_outside_the_tree_is_named() {
+        let events = events_of(&[
+            ("x:s", "session.started", "{}"),
+            // In the background, so x:s isn't waiting on it: only its
+            // request refers to it.
+            (
+                "x:s",
+                "spawn.requested",
+                r#"{"call_id":"c","kind":"agent","background":true}"#,
+            ),
+            ("x:s/a", "agent.spawned", "{}"),
+            ("x:t", "session.started", "{}"),
+            (
+                "x:t",
+                "spawn.requested",
+                r#"{"call_id":"c","kind":"agent"}"#,
+            ),
+            (
+                "x:t",
+                "spawn.returned",
+                r#"{"call_id":"c","child":"x:s/a"}"#,
+            ),
+        ]);
+        let json: Value = serde_json::from_str(
+            &graph(&events, None, Some("x:s"), SystemTime::now(), STALE, LOCAL).unwrap(),
+        )
+        .unwrap();
+        let spawn = &json["nodes"]["x:s"]["spawns"][0];
+        let child = spawn["child"].as_str().unwrap();
+        assert!(json["nodes"].get(child).is_none(), "moved to x:t's tree");
+        assert!(json["others"].get(child).is_some(), "but named");
     }
 
     #[test]
     fn unknown_ids_are_not_found() {
         let events = fixture_events();
         assert!(matches!(
-            graph(&events, Some("nope"), SystemTime::now(), STALE, LOCAL),
+            graph(&events, Some("nope"), None, SystemTime::now(), STALE, LOCAL),
             Err(ApiError::NotFound(_))
         ));
         assert!(matches!(

@@ -111,7 +111,7 @@ fn graph_and_timeline_endpoints() {
 
     // Step back to the moment the Explore agent started.
     let id = stops[6]["id"].as_str().unwrap();
-    let (status, _, body) = get(port, &format!("/api/graph?until={id}"), &host);
+    let (status, _, body) = get(port, &format!("/api/graph?until={id}&root={root}"), &host);
     assert_eq!(status, 200);
     let past: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -251,7 +251,11 @@ fn opens_a_session_only_for_the_viewers_own_page() {
     let own = format!("http://localhost:{port}");
 
     // The graph offers it...
-    let (_, _, body) = get(port, "/api/graph", &format!("localhost:{port}"));
+    let (_, _, body) = get(
+        port,
+        &format!("/api/graph?root=claude-code%3A{id}"),
+        &format!("localhost:{port}"),
+    );
     let graph: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
         graph["open"][format!("claude-code:{id}")],

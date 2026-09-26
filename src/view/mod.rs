@@ -219,6 +219,11 @@ impl Shared {
         Ok(())
     }
 
+    /// The events as they are now: a snapshot, worked on without the lock.
+    fn events(&self) -> Arc<Vec<Timed>> {
+        self.tail.lock().expect("tail lock").events.clone()
+    }
+
     /// Waits until the version moves past `seen`, or `timeout` passes.
     fn wait(&self, seen: u64, timeout: Duration) -> u64 {
         let version = self.version.lock().expect("version lock");
@@ -294,28 +299,15 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
             &[],
             APP_JS.as_bytes(),
         ),
-        "/api/graph" => {
-            let result = {
-                let tail = shared.tail.lock().expect("tail lock");
-                api::graph(
-                    &tail.events,
-                    req.param("until"),
-                    crate::clock::now(),
-                    shared.stale_after,
-                    Environment::Local,
-                )
-            };
-            json(stream, result)
-        }
+        "/api/graph" => json(
+            stream,
+            graph_json(shared, req.param("until"), req.param("root")),
+        ),
         "/api/timeline" => {
             let Some(root) = req.param("root") else {
                 return respond(stream, 404, "text/plain", &[], b"missing root");
             };
-            let result = {
-                let tail = shared.tail.lock().expect("tail lock");
-                api::timeline(&tail.events, root, crate::clock::now(), shared.stale_after)
-            };
-            json(stream, result)
+            json(stream, timeline_json(shared, root))
         }
         "/api/image.png" | "/api/image.svg" => {
             let Some(root) = req.param("root") else {
@@ -326,8 +318,7 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
                 Some("dark") => crate::image::Theme::Dark,
                 _ => crate::image::Theme::Light,
             };
-            // Render outside the lock; only the events are needed from it.
-            let events = shared.tail.lock().expect("tail lock").events.clone();
+            let events = shared.events();
             let (kind, disposition) = if svg {
                 ("image/svg+xml", "attachment; filename=\"agent-graph.svg\"")
             } else {
@@ -380,6 +371,32 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
     }
 }
 
+/// `GET /api/graph`'s reply.
+fn graph_json(
+    shared: &Shared,
+    until: Option<&str>,
+    root: Option<&str>,
+) -> Result<String, ApiError> {
+    api::graph(
+        &shared.events(),
+        until,
+        root,
+        crate::clock::now(),
+        shared.stale_after,
+        Environment::Local,
+    )
+}
+
+/// `GET /api/timeline`'s reply.
+fn timeline_json(shared: &Shared, root: &str) -> Result<String, ApiError> {
+    api::timeline(
+        &shared.events(),
+        root,
+        crate::clock::now(),
+        shared.stale_after,
+    )
+}
+
 /// `POST /api/open?node=<id>`: reopens a session in its agent, in a new
 /// terminal window. Only the node id comes from the page; the command is
 /// worked out from the log. Replies `{"ok": true, "command": …}`, or
@@ -395,13 +412,11 @@ fn open_session(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::
         )
     };
     let id = req.param("node").unwrap_or_default();
-    let (found, transcript) = {
-        let tail = shared.tail.lock().expect("tail lock");
-        let found = api::graph_at(&tail.events, None, crate::clock::now(), shared.stale_after)
-            .ok()
-            .and_then(|(graph, _, _)| graph.nodes.get(id).and_then(resume::resume));
-        (found, transcript_of(&tail.events, id))
-    };
+    let events = shared.events();
+    let found = api::graph_at(&events, None, crate::clock::now(), shared.stale_after)
+        .ok()
+        .and_then(|(graph, _, _)| graph.nodes.get(id).and_then(resume::resume));
+    let transcript = transcript_of(&events, id);
     let Some(r) = found else {
         let error = "That can't be opened: only sessions whose agent can resume them can.";
         return reply(stream, 404, serde_json::json!({ "error": error }));
@@ -584,6 +599,67 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(connections.load(Ordering::SeqCst), 0);
+    }
+
+    /// R23: the events are only locked to take a snapshot: graphs and
+    /// timelines are worked out without holding them, so a long history
+    /// doesn't hold up new events (or other requests).
+    #[test]
+    fn requests_are_worked_out_without_holding_the_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = String::new();
+        for s in 0..3000 {
+            for (n, kind) in ["session.started", "session.ended"].iter().enumerate() {
+                let i = 2 * s + n;
+                log += &format!(
+                    r#"{{"v":1,"id":"01K{i:023}","ts":"2026-09-25T10:{:02}:{:02}.{:03}Z","type":"{kind}","node":"x:s{s}","data":{{}}}}"#,
+                    i / 60_000 % 60,
+                    i / 1000 % 60,
+                    i % 1000
+                );
+                log.push('\n');
+            }
+        }
+        std::fs::write(dir.path().join("x.jsonl"), log).unwrap();
+        let shared = Arc::new(Shared {
+            tail: Mutex::new(Tail::new(dir.path())),
+            version: Mutex::new(0),
+            changed: Condvar::new(),
+            stale_after: Duration::from_secs(600),
+            port: 7777,
+            events_dir: dir.path().to_path_buf(),
+            launch: |_| Ok(()),
+            key: "k".into(),
+            connections: AtomicUsize::new(0),
+        });
+        shared.poll().unwrap();
+        assert_eq!(shared.events().len(), 6000);
+
+        type Work = fn(&Shared) -> Result<String, ApiError>;
+        let works: [(&str, Work); 2] = [
+            ("graph", |s| graph_json(s, None, Some("x:s0"))),
+            ("timeline", |s| timeline_json(s, "x:s0")),
+        ];
+        for (name, work) in works {
+            let busy = {
+                let shared = shared.clone();
+                thread::spawn(move || work(&shared).unwrap())
+            };
+            let (mut free, mut held) = (0u32, 0u32);
+            while !busy.is_finished() {
+                match shared.tail.try_lock() {
+                    Ok(_) => free += 1,
+                    Err(_) => held += 1,
+                }
+                thread::yield_now();
+            }
+            busy.join().unwrap();
+            assert!(
+                held * 10 <= free + held,
+                "{name}: the events were locked for {held} of {} looks",
+                free + held
+            );
+        }
     }
 
     #[test]

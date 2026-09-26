@@ -1,0 +1,44 @@
+{
+  "files": [
+    "build.rs",
+    "docs/cli-help.json",
+    "src/adapter/claude_code.rs",
+    "src/adapter/mod.rs",
+    "src/adapter/shell.rs",
+    "src/clock.rs",
+    "src/event.rs",
+    "src/lib.rs",
+    "src/link.rs",
+    "src/paths.rs",
+    "src/reducer.rs",
+    "src/render.rs",
+    "src/resume.rs",
+    "src/store.rs",
+    "src/timeline.rs",
+    "wasm/src/lib.rs"
+  ],
+  "crates": [
+    "agent-graph v0.1.0",
+    "agent-graph-wasm v0.1.0",
+    "equivalent v1.0.2",
+    "hashbrown v0.17.1",
+    "humantime v2.4.0",
+    "indexmap v2.14.2 default,std",
+    "itoa v1.0.18",
+    "memchr v2.8.3 alloc,std",
+    "proc-macro2 v1.0.107 proc-macro",
+    "quote v1.0.47 proc-macro",
+    "serde v1.0.229 default,derive,serde_derive,std",
+    "serde_core v1.0.229 result,std",
+    "serde_derive v1.0.229 default",
+    "serde_json v1.0.151 default,indexmap,preserve_order,std",
+    "syn v3.0.6 clone-impls,derive,parsing,printing,proc-macro",
+    "unicode-ident v1.0.26",
+    "zmij v1.0.23"
+  ],
+  "profiles": [
+    "[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true",
+    "[profile.wasm]\ninherits = \"release\"\nopt-level = \"z\"\nlto = true\npanic = \"abort\""
+  ],
+  "hash": "2949e8da54e83871cff53622038910a16f1d7354e3ae0251fb8f5484f63f14e6"
+}
