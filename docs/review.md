@@ -174,7 +174,7 @@ Status is updated as each is done.
 - **Where:** `src/emit.rs` (`to_line`)
 - **Problem:** A list over 4 KB (about 18 ordinary items) becomes an `unknown` event, so the task list and headline go stale.
 - **Fix:** shrink it (shorter text, then fewer items, marked) so it keeps its type.
-- **Status:** open
+- **Status:** fixed, keeping it whole instead: a list is one piece of state, which splitting it into several events would show as many steps on the timeline (and a partial list at each), so its line may take `MAX_TASKS_LINE` (16 KB, about a hundred ordinary items; other events keep `MAX_LINE`, 4 KB), and past that `to_line` cuts its items' text shorter, in turn (`TASK_TEXT_CUTS`: 200, 80, 40, 20 characters, then 1), leaving ids and statuses whole, and the first item in progress, which is the headline, no shorter than 200. A list that doesn't fit even so (more than about 240 items) is still recorded as `unknown`. The cap is kept small because a todo tool sends its whole list at every change: working through a 240-item list writes about 7.5 MB, well within the site's 64 MiB per log, and a 16 KB line is well within what the uploader sends in a chunk (256 KB) and the site accepts (512 KB). Tests: `long_task_lists_are_kept_whole`, `events_too_long_even_shortened_are_recorded_as_unknown` (src/emit.rs). Reviewed (four rounds; the first design, splitting a list into several events, was dropped).
 
 ### R28. A status sorted after `session.ended` brings the session back to life
 - **Where:** `src/reducer.rs`

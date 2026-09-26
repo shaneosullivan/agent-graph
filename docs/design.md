@@ -67,7 +67,7 @@ All of this ships as one binary, `agent-graph`, with these subcommands:
 Many sessions write at the same time. If they all rewrite one `state.json`, two writes that overlap will lose one of them. Instead:
 
 - Each session appends events to **its own file**: `~/.agent-graph/events/<provider>-<session_id>.jsonl`. Subagent events go in their parent session's file.
-- Each event is one line, written with a single `write()` to a file opened `O_APPEND`. Lines are capped at 4 KB, and longer text is cut down. On local filesystems, appends this small don't interleave, so no locks are needed.
+- Each event is one line, and a hook's lines are written with a single `write()` to a file opened `O_APPEND`, which on local filesystems lands whole at the end of the file, so no locks are needed. Lines are capped at 4 KB, and longer text is cut down, except a task list's: a list is one piece of state, kept whole in one event, so its line may take 16 KB (about a hundred ordinary items), and past that its items' text is cut shorter (to 200, 80, 40, 20 characters, then 1), never their ids or statuses, nor the first item in progress (the headline) below 200. Only a list of more than about 240 items is too long even so. Not much more room than that: a todo tool sends its whole list at every change, so working through a 240-item list writes about 7.5 MB.
 - The current state is rebuilt by a **reducer** that replays every file. `agent-graph snapshot --json` gives simple consumers the whole graph, but that's always generated output.
 - The log also gives us message history and a timeline for free.
 

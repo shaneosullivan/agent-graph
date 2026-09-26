@@ -18,12 +18,21 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::adapter::{self, Capture, Draft};
-use crate::event::{Envelope, Payload, SCHEMA_VERSION, Source, truncate_strings};
+use crate::event::{Envelope, Payload, SCHEMA_VERSION, Source, truncate_chars, truncate_strings};
 use crate::{link, paths, process, store};
 
-/// Longest line we write. Small appends stay atomic, and one huge label
+/// Longest line we write (but see `MAX_TASKS_LINE`): one huge label
 /// shouldn't bloat the log.
 pub const MAX_LINE: usize = 4096;
+
+/// Longest line for a task list. A list is one piece of state, so it's kept
+/// whole, in one event (one step on the timeline, with the right counts),
+/// with more room, and past that with its items' text cut shorter. Not much
+/// more, though: a todo tool sends its whole list at every change.
+pub const MAX_TASKS_LINE: usize = 16 * 1024;
+
+/// How short a task list's text is cut, in turn, until the list fits.
+const TASK_TEXT_CUTS: &[usize] = &[200, 80, 40, 20, 1];
 
 /// The emit entry point. Never returns, and always exits 0.
 pub fn run_and_exit(args: &[OsString]) -> ! {
@@ -163,24 +172,59 @@ pub fn stamp(drafts: Vec<Draft>, source: &Source, now: SystemTime) -> Vec<Envelo
         .collect()
 }
 
-/// Serializes an event as one line of at most `MAX_LINE` bytes, shortening
-/// its strings, or dropping its data, if it's too long.
+/// Serializes an event as one line of at most `MAX_LINE` bytes (a task
+/// list, `MAX_TASKS_LINE`), shortening long strings if it has to.
 pub fn to_line(event: &Envelope) -> String {
     let line = serde_json::to_string(event).unwrap_or_default();
-    if line.len() <= MAX_LINE {
+    let tasks = event.kind == "tasks.updated";
+    let max = if tasks { MAX_TASKS_LINE } else { MAX_LINE };
+    if line.len() <= max {
         return line;
     }
     let mut event = event.clone();
-    truncate_strings(&mut event.data, 200);
-    let line = serde_json::to_string(&event).unwrap_or_default();
-    if line.len() <= MAX_LINE {
-        return line;
+    if tasks {
+        for &cut in TASK_TEXT_CUTS {
+            truncate_task_text(&mut event.data, cut);
+            let line = serde_json::to_string(&event).unwrap_or_default();
+            if line.len() <= max {
+                return line;
+            }
+        }
+    } else {
+        truncate_strings(&mut event.data, 200);
+        let line = serde_json::to_string(&event).unwrap_or_default();
+        if line.len() <= max {
+            return line;
+        }
     }
     // Without its data the event no longer matches its type, so record it as
     // unknown rather than as a malformed event of that type.
     event.data = serde_json::json!({ "truncated": true, "type": event.kind });
     event.kind = "unknown".to_string();
     serde_json::to_string(&event).unwrap_or_default()
+}
+
+/// Cuts the text of each item in a task list's `data` to `max` characters,
+/// leaving ids and statuses as they are, and the first item in progress
+/// (the headline) no shorter than the first cut.
+fn truncate_task_text(data: &mut Value, max: usize) {
+    let Some(items) = data.get_mut("items").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let mut headline = true;
+    for item in items {
+        let current = item.get("status").and_then(Value::as_str) == Some("in_progress");
+        let max = if current && std::mem::take(&mut headline) {
+            max.max(TASK_TEXT_CUTS[0])
+        } else {
+            max
+        };
+        for key in ["text", "active_text"] {
+            if let Some(Value::String(text)) = item.get_mut(key) {
+                *text = truncate_chars(text, max);
+            }
+        }
+    }
 }
 
 fn write_raw(root: &Path, key: &str, input: &str) -> Result<(), String> {
@@ -234,7 +278,7 @@ fn log_error(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{Payload, State, Status};
+    use crate::event::{Payload, State, Status, TaskItem, TaskStatus, TasksUpdated};
 
     #[test]
     fn provider_arg_forms() {
@@ -296,5 +340,147 @@ mod tests {
         let line = to_line(event);
         assert!(line.len() <= MAX_LINE);
         assert!(line.contains('…'));
+    }
+
+    #[test]
+    fn events_too_long_even_shortened_are_recorded_as_unknown() {
+        let draft = Draft::new(
+            "x:1",
+            Payload::Status(Status {
+                state: State::Idle,
+                summary: None,
+            }),
+        );
+        let source = Source {
+            provider: "x".into(),
+            provider_version: None,
+            adapter: None,
+        };
+        let mut event = stamp(vec![draft], &source, SystemTime::now()).remove(0);
+        event.data["many"] = serde_json::json!(vec!["x"; 2000]);
+        let line: Value = serde_json::from_str(&to_line(&event)).unwrap();
+        assert_eq!(line["type"], "unknown");
+        assert_eq!(
+            line["data"],
+            serde_json::json!({ "truncated": true, "type": "status" })
+        );
+        assert_eq!(line["id"], event.id.as_str());
+    }
+
+    /// R27: a task list too long for a line isn't dropped. It's one piece of
+    /// state, so it stays one event (one step on the timeline, with the
+    /// right counts) with more room, and past that its items' text is cut
+    /// shorter, never their ids or statuses, nor what the headline shows.
+    #[test]
+    fn long_task_lists_are_kept_whole() {
+        // `n` items, the middle one in progress.
+        let list = |n: usize, text: usize| -> Vec<TaskItem> {
+            (0..n)
+                .map(|i| TaskItem {
+                    id: format!("{i:04}-{}", "i".repeat(25)),
+                    text: format!("{i} {}", "t".repeat(text)),
+                    active_text: Some(format!("{i} {}", "a".repeat(text))),
+                    status: match i {
+                        _ if i == n / 2 => TaskStatus::InProgress,
+                        _ if i % 2 == 0 => TaskStatus::Completed,
+                        _ => TaskStatus::Pending,
+                    },
+                })
+                .collect()
+        };
+        let source = Source {
+            provider: "x".into(),
+            provider_version: None,
+            adapter: None,
+        };
+        let now = SystemTime::now();
+        let line_of = |items: &[TaskItem]| {
+            let list = Payload::TasksUpdated(TasksUpdated {
+                items: items.to_vec(),
+            });
+            let events = stamp(vec![Draft::new("x:1", list)], &source, now);
+            assert_eq!(events.len(), 1);
+            to_line(&events[0])
+        };
+        let items_of = |line: &str| -> Vec<TaskItem> {
+            let event: Envelope = serde_json::from_str(line).unwrap();
+            assert_eq!(event.kind, "tasks.updated");
+            serde_json::from_value::<TasksUpdated>(event.data)
+                .unwrap()
+                .items
+        };
+
+        // Sixty ordinary items: too long for `MAX_LINE`, and kept as they are.
+        let items = list(60, 60);
+        let line = line_of(&items);
+        assert!(line.len() > MAX_LINE && line.len() <= MAX_TASKS_LINE);
+        assert_eq!(items_of(&line), items);
+
+        // Longer lists, or longer text: every item, with its id and status,
+        // and its text cut, but only as far as it has to be, and the one in
+        // progress no shorter than a label.
+        for (n, text, cut) in [
+            (25, 1000, 200),
+            (50, 200, 80),
+            (80, 200, 40),
+            (110, 200, 20),
+            (150, 30, 1),
+        ] {
+            let items = list(n, text);
+            let line = line_of(&items);
+            assert!(line.len() <= MAX_TASKS_LINE);
+            let got = items_of(&line);
+            assert_eq!(got.len(), items.len());
+            for (got, want) in got.iter().zip(&items) {
+                assert_eq!((&got.id, got.status), (&want.id, want.status));
+                let cut = match want.status {
+                    TaskStatus::InProgress => cut.max(200),
+                    _ => cut,
+                };
+                for (got, want) in [
+                    (&got.text, &want.text),
+                    (
+                        got.active_text.as_ref().unwrap(),
+                        want.active_text.as_ref().unwrap(),
+                    ),
+                ] {
+                    assert_eq!(got, &truncate_chars(want, cut), "{n} items of {text}");
+                }
+            }
+        }
+
+        // However far the rest is cut, the headline is whole.
+        let items = list(150, 30);
+        let event: Envelope = serde_json::from_str(&line_of(&items)).unwrap();
+        let graph = crate::reducer::reduce(
+            vec![event],
+            &crate::reducer::Options {
+                now,
+                stale_after: std::time::Duration::from_secs(600),
+            },
+        );
+        let pending = items
+            .iter()
+            .filter(|t| t.status == TaskStatus::Pending)
+            .count();
+        let current = items[75].active_text.as_deref().unwrap();
+        assert_eq!(
+            graph.nodes["x:1"].headline,
+            Some(format!("{current} (+{pending} pending)"))
+        );
+
+        // Only the first in progress is the headline: the rest are cut too.
+        let mut items = list(50, 200);
+        for item in &mut items {
+            item.status = TaskStatus::InProgress;
+        }
+        let got = items_of(&line_of(&items));
+        assert_eq!(got[0].text, truncate_chars(&items[0].text, 200));
+        assert!(got[1..].iter().all(|t| t.text.chars().count() < 200));
+
+        // Beyond every cut (more than about 240 items), it's recorded as
+        // unknown.
+        let line: Value = serde_json::from_str(&line_of(&list(5000, 10))).unwrap();
+        assert_eq!(line["type"], "unknown");
     }
 }
