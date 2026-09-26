@@ -208,6 +208,55 @@ fn snapshot_draws_the_session_as_an_image() {
 }
 
 #[test]
+fn a_snapshot_never_replaces_one_from_the_same_second() {
+    let home = tempfile::tempdir().unwrap();
+    for payload in fixture("claude-code/session.jsonl").iter().take(14) {
+        emit(
+            home.path(),
+            &["--provider", "claude-code"],
+            &payload.to_string(),
+            &[],
+        );
+    }
+    // Snapshots already taken this second and the next few (the name only
+    // has seconds, so a second snapshot in time would have the same one).
+    let images = home.path().join("images");
+    std::fs::create_dir_all(&images).unwrap();
+    let now = std::time::SystemTime::now();
+    let earlier: Vec<_> = (0..5)
+        .map(|s| {
+            let stamp = humantime::format_rfc3339_seconds(now + std::time::Duration::from_secs(s))
+                .to_string()
+                .replace(['-', ':'], "")
+                .replace('T', "-")
+                .trim_end_matches('Z')
+                .to_string();
+            let path = images.join(format!("agent-graph-{stamp}.png"));
+            std::fs::write(&path, "an earlier snapshot").unwrap();
+            path
+        })
+        .collect();
+
+    let out = bin()
+        .args(["snapshot", "--session", "5f2c"])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for path in &earlier {
+        assert_eq!(read(path), "an earlier snapshot");
+    }
+    let path = String::from_utf8(out.stdout).unwrap();
+    let png = std::fs::read(path.trim()).unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+}
+
+#[test]
 fn install_and_uninstall_project_settings() {
     let project = tempfile::tempdir().unwrap();
     let settings = project.path().join(".claude/settings.json");
