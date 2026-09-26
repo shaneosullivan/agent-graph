@@ -4,7 +4,8 @@
 //! This reads commands the way a shell roughly would: it splits them into
 //! simple commands at `;`, `&&`, `||`, `|`, `&` and newlines, outside quotes
 //! and comments, reading groups `( … )` and command substitutions as commands
-//! of their own, then looks at the program each one runs, past variable
+//! of their own (and a `&` as putting the whole list before it in the
+//! background), then looks at the program each one runs, past variable
 //! assignments and wrappers like `env`, `nohup` or `timeout`.
 //! It's a heuristic: a script that starts an agent inside itself isn't seen,
 //! though the agent still links itself to the session (see `link`).
@@ -395,6 +396,14 @@ fn takes_value(option: &str, values: &[&str]) -> bool {
         .is_some_and(|(i, c)| i + c.len_utf8() == letters.len())
 }
 
+/// Whether `word` is `NAME=` or `NAME+=`, so a `(` right after it starts
+/// an array's values (`arr=(a b)`), not a group.
+fn assigns_array(word: &str) -> bool {
+    word.strip_suffix('=')
+        .map(|name| name.strip_suffix('+').unwrap_or(name))
+        .is_some_and(|name| is_assignment(&format!("{name}=")))
+}
+
 fn is_assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(name, _)| {
         !name.is_empty()
@@ -462,8 +471,9 @@ fn skip_arithmetic(chars: &mut std::iter::Peekable<std::str::Chars>, word: &mut 
     }
 }
 
-/// What opened a level of a command: a group of commands, `( … )`, or a
-/// command substitution, `$( … )` or backticks.
+/// What opened a level of a command: a group of commands, `( … )`, a
+/// command substitution, `$( … )` or backticks, or an array's values,
+/// `NAME=( … )`, which aren't commands (though substitutions in them are).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Opened {
     #[default]
@@ -471,7 +481,13 @@ enum Opened {
     Group,
     Substitution,
     Backticks,
+    Array,
 }
+
+/// Compound commands, which a `&` after them puts in the background whole,
+/// and the words that end them.
+const COMPOUND_OPEN: &[&str] = &["{", "if", "while", "until", "for", "select", "case"];
+const COMPOUND_CLOSE: &[&str] = &["}", "fi", "done", "esac"];
 
 /// The simple command being read at one level: the top, or inside a group
 /// or substitution, after which the command around it carries on.
@@ -490,6 +506,12 @@ struct Level {
     braces: usize,
     /// Where this level's commands start in the output.
     start: usize,
+    /// Where the list being read (the commands a `&` would put in the
+    /// background) starts in the output.
+    list: usize,
+    /// For each compound command open at this level (`{ … }`, `if … fi`,
+    /// …), where the list it's part of starts.
+    compounds: Vec<usize>,
 }
 
 impl Level {
@@ -498,13 +520,21 @@ impl Level {
             return;
         }
         let word = std::mem::take(&mut self.word);
-        if self.lead == self.words.len() {
+        if self.lead == self.words.len() && self.opened != Opened::Array {
             // `function NAME` comes before a function's body, as keywords do.
             let name = self.lead > 0 && self.words[self.lead - 1] == "function";
             match word.as_str() {
                 "case" => self.cases += 1,
                 "esac" => self.cases = self.cases.saturating_sub(1),
                 _ => {}
+            }
+            // A compound command is one command of the list it's in.
+            if COMPOUND_OPEN.contains(&word.as_str()) {
+                self.compounds.push(self.list);
+            } else if COMPOUND_CLOSE.contains(&word.as_str()) {
+                if let Some(list) = self.compounds.pop() {
+                    self.list = list;
+                }
             }
             if name || word == "function" || KEYWORDS.contains(&word.as_str()) {
                 self.lead += 1;
@@ -514,12 +544,20 @@ impl Level {
         self.in_word = false;
     }
 
-    fn end_command(&mut self, out: &mut Vec<(Vec<String>, bool)>, background: bool) {
+    fn end_command(&mut self, out: &mut Vec<Vec<String>>) {
         self.end_word();
-        if !self.words.is_empty() {
-            out.push((std::mem::take(&mut self.words), background));
+        if self.opened == Opened::Array {
+            self.words.clear();
+        } else if !self.words.is_empty() {
+            out.push(std::mem::take(&mut self.words));
         }
         self.lead = 0;
+    }
+
+    /// Ends the command, and the list it's in.
+    fn end_list(&mut self, out: &mut Vec<Vec<String>>) {
+        self.end_command(out);
+        self.list = out.len();
     }
 
     /// Whether what's been read of this command is a function's name, so
@@ -544,6 +582,7 @@ fn open(level: &mut Level, around: &mut Vec<Level>, opened: Opened, start: usize
     let inner = Level {
         opened,
         start,
+        list: start,
         ..Level::default()
     };
     around.push(std::mem::replace(level, inner));
@@ -551,8 +590,8 @@ fn open(level: &mut Level, around: &mut Vec<Level>, opened: Opened, start: usize
 
 /// Ends a group or substitution, and carries on with the command around
 /// it, where a substitution is (part of) a word.
-fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<(Vec<String>, bool)>) {
-    level.end_command(out, false);
+fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<Vec<String>>) {
+    level.end_command(out);
     let opened = level.opened;
     let empty = out.len() == level.start;
     let Some(outer) = around.pop() else {
@@ -575,7 +614,9 @@ fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<(Vec<String>,
 /// each with whether it's put in the background, in the order the shell
 /// runs them (a substitution before the command it's in).
 fn split(command: &str) -> Vec<(Vec<String>, bool)> {
-    let mut out: Vec<(Vec<String>, bool)> = Vec::new();
+    let mut out: Vec<Vec<String>> = Vec::new();
+    // The runs of `out` put in the background, as (start, end).
+    let mut jobs: Vec<(usize, usize)> = Vec::new();
     let mut chars = command.chars().peekable();
     let mut single = false;
     let mut cur = Level::default();
@@ -736,7 +777,7 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
             }
             ' ' | '\t' | '\r' => cur.end_word(),
             '\n' => {
-                cur.end_command(&mut out, false);
+                cur.end_list(&mut out);
                 for (delimiter, tabs) in heredocs.drain(..) {
                     loop {
                         let line: String = chars.by_ref().take_while(|c| *c != '\n').collect();
@@ -764,31 +805,42 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                 skip_arithmetic(&mut chars, &mut cur.word);
                 cur.in_word = true;
             }
+            '(' if cur.in_word && assigns_array(&cur.word) => {
+                open(&mut cur, &mut around, Opened::Array, out.len());
+            }
             '(' => open(&mut cur, &mut around, Opened::Group, out.len()),
             ')' => {
                 cur.end_word();
                 // Unless it ends a `case` pattern.
-                if cur.cases == 0 && matches!(cur.opened, Opened::Group | Opened::Substitution) {
+                if cur.cases == 0
+                    && matches!(
+                        cur.opened,
+                        Opened::Group | Opened::Substitution | Opened::Array
+                    )
+                {
                     close(&mut cur, &mut around, &mut out);
                 } else {
-                    cur.end_command(&mut out, false);
+                    cur.end_list(&mut out);
                 }
             }
-            ';' => cur.end_command(&mut out, false),
+            ';' => cur.end_list(&mut out),
             '|' => {
                 chars.next_if_eq(&'|');
-                cur.end_command(&mut out, false);
+                cur.end_command(&mut out);
             }
-            // `2>&1` and `&>` redirect: the `&` is part of the word.
-            '&' if cur.word.ends_with('>') || chars.peek() == Some(&'>') => {
+            // `2>&1`, `&>` and `<&3` redirect: the `&` is part of the word.
+            '&' if cur.word.ends_with(['>', '<']) || chars.peek() == Some(&'>') => {
                 cur.word.push(c);
                 cur.in_word = true;
             }
+            // `&&` runs the next command after this one.
+            '&' if chars.next_if_eq(&'&').is_some() => cur.end_command(&mut out),
+            // A lone `&` puts the list before it in the background, with
+            // any groups and substitutions in it.
             '&' => {
-                // `&&` runs the next command after this one; a lone `&` puts
-                // this one in the background.
-                let background = chars.next_if_eq(&'&').is_none();
-                cur.end_command(&mut out, background);
+                cur.end_command(&mut out);
+                jobs.push((cur.list, out.len()));
+                cur.list = out.len();
             }
             _ => {
                 cur.word.push(c);
@@ -800,8 +852,21 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
     while !around.is_empty() {
         close(&mut cur, &mut around, &mut out);
     }
-    cur.end_command(&mut out, false);
-    out
+    cur.end_command(&mut out);
+    // Which commands are in a job: a count of the jobs each starts and ends.
+    let mut edges = vec![0i64; out.len() + 1];
+    for (start, end) in jobs {
+        edges[start] += 1;
+        edges[end] -= 1;
+    }
+    let mut inside = 0;
+    out.into_iter()
+        .zip(edges)
+        .map(|(words, edge)| {
+            inside += edge;
+            (words, inside > 0)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1022,7 +1087,10 @@ mod tests {
         // But not what only looks like it: a command substitution, or
         // subshells, of commands.
         assert_eq!(launch("out=$((cd sub && codex exec x) 2>&1)"), fg("codex"));
-        assert_eq!(launch("((cd a && claude -p hi) &)"), fg("claude"));
+        assert_eq!(
+            launch("((cd a && claude -p hi) &)"),
+            Some(("claude".into(), true))
+        );
         assert_eq!(launch("n=$(( $(claude -p count) + 1 ))"), fg("claude"));
         assert_eq!(
             launch("echo \"$(( (2+1) << 1 ))\"\ncodex exec x"),
@@ -1280,6 +1348,38 @@ mod tests {
             assert_eq!(launch(&command), None, "{then:?}");
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// R58: a `&` puts the whole list before it in the background, groups
+    /// and all; `<&` is a redirection, and `NAME=(…)` an array's values.
+    #[test]
+    fn a_background_list_is_all_in_the_background() {
+        let bg = |program: &str| Some((program.to_string(), true));
+        assert_eq!(launch("(cd x && codex exec y) &"), bg("codex"));
+        assert_eq!(launch("{ codex exec y; } &"), bg("codex"));
+        assert_eq!(launch("claude -p a && echo done &"), bg("claude"));
+        assert_eq!(launch("claude -p a | tee log &"), bg("claude"));
+        assert_eq!(launch("echo \"$(claude -p a)\" &"), bg("claude"));
+        assert_eq!(
+            launch("while read f; do claude -p \"$f\"; done < list &"),
+            bg("claude")
+        );
+        assert_eq!(launch("if true; then codex exec x; fi &"), bg("codex"));
+        assert_eq!(launch("cd x && { claude -p a; } > log &"), bg("claude"));
+        // Only the list the `&` ends: not one before it, nor one after.
+        assert_eq!(launch("claude -p a; echo &"), fg("claude"));
+        assert_eq!(launch("claude -p a\necho &"), fg("claude"));
+        assert_eq!(launch("echo & claude -p a"), fg("claude"));
+        assert_eq!(launch("{ claude -p a; echo & }"), fg("claude"));
+        assert_eq!(launch("(claude -p a; echo &)"), fg("claude"));
+        // `<&` duplicates a file descriptor: nothing goes in the background.
+        assert_eq!(launch("claude -p a 0<&3"), fg("claude"));
+        assert_eq!(launch("claude -p a <&- ; echo"), fg("claude"));
+        // An array's values aren't commands, but a substitution in them is.
+        assert_eq!(launch("arr=(claude codex)"), None);
+        assert_eq!(launch("arr+=(claude)\ncodex exec x"), fg("codex"));
+        assert_eq!(launch("local arr=(\n  claude\n)"), None);
+        assert_eq!(launch("arr=(\"$(claude -p a)\" b)"), fg("claude"));
     }
 
     #[test]
