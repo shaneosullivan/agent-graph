@@ -252,6 +252,9 @@ pub struct Launch {
     /// It's put in the background with `&`, and not waited for later (with
     /// `wait`), so the shell doesn't wait for it.
     pub background: bool,
+    /// It's `agent-graph run -- X`: the session it starts is the run's,
+    /// named for the run (or for X's wrapper), not for X.
+    pub run: bool,
 }
 
 /// The first agent session `command` starts, if any. `extra` adds programs
@@ -259,10 +262,11 @@ pub struct Launch {
 pub fn agent_launch(command: &str, extra: &[String]) -> Option<Launch> {
     let commands = split(command);
     commands.iter().find_map(|(words, background)| {
-        let program = session_program(words, extra)?;
+        let (program, run) = session_program(words, extra)?;
         Some(Launch {
             program,
             background: *background,
+            run,
         })
     })
 }
@@ -278,8 +282,9 @@ pub fn extra_commands(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// The program a simple command runs, if it starts an agent session.
-fn session_program(words: &[String], extra: &[String]) -> Option<String> {
+/// The program a simple command runs, if it starts an agent session, and
+/// whether it's through `agent-graph run`.
+fn session_program(words: &[String], extra: &[String]) -> Option<(String, bool)> {
     let mut rest = skip_prefixes(words);
     let first_word = rest.first()?;
     // `agent-graph run [--name N] -- X …` starts X, linked to us.
@@ -290,7 +295,7 @@ fn session_program(words: &[String], extra: &[String]) -> Option<String> {
         let dashes = rest.iter().position(|w| w == "--")?;
         rest = skip_prefixes(&rest[dashes + 1..]);
         let wrapped = program_name(rest.first()?);
-        return (!wrapped.is_empty()).then_some(wrapped);
+        return (!wrapped.is_empty()).then_some((wrapped, true));
     }
     let program = named(first_word, AGENT_COMMANDS)
         .map(str::to_string)
@@ -318,7 +323,7 @@ fn session_program(words: &[String], extra: &[String]) -> Option<String> {
         .iter()
         .find(|(p, _)| *p == program)
         .is_some_and(|(_, subs)| !first.is_some_and(|f| subs.contains(&f)));
-    (!asks_about_itself && !manages && !not_a_session).then_some(program)
+    (!asks_about_itself && !manages && !not_a_session).then_some((program, false))
 }
 
 /// Which of `names` `word` runs, if any: by its exact name, or for a Windows
@@ -1010,6 +1015,26 @@ mod tests {
         );
         assert_eq!(launch("agent-graph tree"), None);
         assert_eq!(launch("agent-graph run"), None);
+    }
+
+    /// R57: a launch through `agent-graph run` says so: its session is the
+    /// run, named for it (or for the wrapper it was given), not the program.
+    #[test]
+    fn runs_say_they_are_runs() {
+        let run = |command: &str| agent_launch(command, &[]).map(|l| (l.program, l.run));
+        assert_eq!(
+            run("agent-graph run --name workers -- npx codex exec x &"),
+            Some(("codex".into(), true))
+        );
+        assert_eq!(
+            run("nohup agent-graph run -- ./w.sh"),
+            Some(("w.sh".into(), true))
+        );
+        assert_eq!(run("codex exec x"), Some(("codex".into(), false)));
+        assert_eq!(
+            run("agent-graph tree; claude -p hi"),
+            Some(("claude".into(), false))
+        );
     }
 
     #[test]

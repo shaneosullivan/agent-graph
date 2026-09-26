@@ -176,7 +176,8 @@
         "kind": { "enum": ["agent", "session"] },
         "agent_type": { "type": "string" },
         "purpose": { "type": "string" },
-        "background": { "type": "boolean" }
+        "background": { "type": "boolean" },
+        "run": { "type": "boolean", "description": "The session is started through agent-graph run, so it's named for the run, not the program: only a run's session answers it, and a run's session only answers such a request." }
       }
     },
     "spawn.returned": {
