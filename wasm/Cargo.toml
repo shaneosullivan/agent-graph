@@ -5,6 +5,10 @@ edition = "2024"
 description = "Agent Graph's reducer and timeline for the browser, as WebAssembly"
 publish = false
 
+# Built for the site, not released as a program.
+[package.metadata.dist]
+dist = false
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

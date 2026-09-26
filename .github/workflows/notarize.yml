@@ -1,0 +1,88 @@
+# Notarizes the macOS binaries dist built and signed (release.yml runs this
+# as a publish job, before it announces the release).
+#
+# A bare command-line binary can't have a ticket stapled to it, so nothing
+# is repackaged: Apple records the notarization against each binary's code
+# signature, and Gatekeeper looks it up online when a downloaded copy first
+# runs. The tarballs, their checksums and the Homebrew formula stay as built.
+#
+# Secrets:
+#   APPLE_ID                     the Apple ID of the developer account
+#   APPLE_APP_SPECIFIC_PASSWORD  an app-specific password for it
+#                                (appleid.apple.com → Sign-In and Security)
+# and the CODESIGN_* secrets dist signs with (see README.md, Releasing).
+
+name: Notarize
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  notarize:
+    runs-on: macos-14
+    env:
+      TEAM_ID: 42W7HQVGCS
+    steps:
+      - name: Fetch the macOS builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-build-local-*apple-darwin
+          path: dist
+          merge-multiple: true
+      - name: Check each binary is signed for notarization
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(dist/*-apple-darwin.tar.xz)
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "No macOS builds to notarize." >&2
+            exit 1
+          fi
+          mkdir -p notarize
+          for archive in "${archives[@]}"; do
+            name=$(basename "$archive" .tar.xz)
+            mkdir -p "unpacked/$name"
+            tar -xf "$archive" -C "unpacked/$name"
+            bin=$(find "unpacked/$name" -type f -name agent-graph | head -n 1)
+            codesign --verify --strict --verbose=2 "$bin"
+            # Apple refuses a binary without the hardened runtime, or signed
+            # with anything but a Developer ID.
+            info=$(codesign -dvv "$bin" 2>&1)
+            grep -q 'flags=.*runtime' <<<"$info" || { echo "$bin: no hardened runtime" >&2; exit 1; }
+            grep -q "Authority=Developer ID Application:.*($TEAM_ID)" <<<"$info" || {
+              echo "$bin: not signed with the Developer ID for $TEAM_ID" >&2
+              exit 1
+            }
+            ditto -c -k --keepParent "$bin" "notarize/$name.zip"
+          done
+      - name: Notarize
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for zip in notarize/*.zip; do
+            echo "Submitting $zip"
+            result=$(xcrun notarytool submit "$zip" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$TEAM_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --wait --output-format json)
+            echo "$result"
+            status=$(jq -r .status <<<"$result")
+            if [ "$status" != "Accepted" ]; then
+              id=$(jq -r .id <<<"$result")
+              xcrun notarytool log "$id" \
+                --apple-id "$APPLE_ID" \
+                --team-id "$TEAM_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" || true
+              echo "$zip: notarization $status" >&2
+              exit 1
+            fi
+          done

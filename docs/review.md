@@ -332,3 +332,8 @@ Status is updated as each is done.
 - **Problem:** Found reviewing R26. Bash ends a heredoc inside `$( … )` (or backticks) at a line that's the delimiter followed by the `)` (or backtick) that closes it; the splitter only ends one at a line that's the delimiter alone, so the rest of the command is taken as the body.
 - **Fix:** inside a substitution, end the body at the delimiter followed by its closing `)` or backtick, and read on from there.
 - **Status:** open
+
+### R61. Upgrading through a package manager breaks the hooks
+- **Where:** `src/install.rs` (`default_command`)
+- **Problem:** Found setting up packaged releases. Hooks in your own settings run this copy by its full path, and on Linux that's the file a link leads to: under Homebrew, `Cellar/agent-graph/<version>/bin/agent-graph`, which the next upgrade removes, so every hook fails until `install` is run again. On macOS it's whatever path it was run by, which can be the same.
+- **Status:** fixed. When the `agent-graph` on PATH is this copy, the hooks name it by that path (Homebrew's `bin`, WinGet's `Links`), which upgrades keep; otherwise this copy's own path, as before. Test: `user_hooks_name_the_link_on_path_not_the_versioned_file` (tests/cli.rs).

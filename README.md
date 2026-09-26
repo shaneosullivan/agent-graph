@@ -8,11 +8,18 @@ See [docs/idea.md](docs/idea.md) for the goal and [docs/design.md](docs/design.m
 
 ## Install
 
-Requires Rust (stable).
+Pick one:
 
-```bash
-cargo install --path .
-```
+| | Command |
+|---|---|
+| macOS (Homebrew, also on Linux) | `brew install shaneosullivan/tap/agent-graph` |
+| macOS and Linux | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.sh \| sh` |
+| Windows | `winget install ShaneOSullivan.AgentGraph` |
+| Windows (PowerShell) | `powershell -ExecutionPolicy Bypass -c "irm https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.ps1 \| iex"` |
+| Anywhere with Node | `npm install -g agent-graph` |
+| From source (Rust stable) | `cargo install --path .` |
+
+Then:
 
 ```bash
 agent-graph install claude-code
@@ -94,6 +101,10 @@ Events live in `~/.agent-graph/events/`, one JSON Lines file per session. The fo
 | `AGENT_GRAPH_AGENT_COMMANDS` | More programs (comma separated) that start an agent session when an agent runs them from its shell (wrappers that start Claude Code, say): any session started from that shell may be the one they started |
 
 A session passes its identity to anything it starts through `AGENT_GRAPH_PARENT` and a W3C `TRACEPARENT` in its shell's environment, so a session started from another links itself under it. When those are missing, it's matched by process instead.
+
+## Release
+
+Push a version tag (`git tag v0.1.0 && git push origin v0.1.0`) and [dist](https://axodotdev.github.io/cargo-dist/) builds, signs and publishes the binaries for every platform. See [docs/release.md](docs/release.md) for what's published where, the macOS notarization, and the one-time setup.
 
 ## Develop
 

@@ -558,7 +558,8 @@ Viewers can step through the log exactly as they can locally, over its recent hi
   - linked sessions (`tests/sessions.rs`), and `emit` and `run` through the real binary;
   - the example logs (`examples/`): 23 sessions of normal work and edge cases, with a test per scenario.
 - **Distribution:**
-  - For now, `cargo install --path .`. Prebuilt binaries per platform and package managers (Homebrew, winget/Scoop) come later.
+  - Prebuilt binaries per platform, built and published by `dist` on each version tag: Homebrew (a tap), shell and PowerShell installers, npm, and winget (docs/release.md). The macOS binaries are signed and notarized; the Windows ones aren't signed yet.
+  - Hooks name the program by the path it's reached by on PATH when that's this copy (Homebrew's `bin`, WinGet's `Links`), not the versioned folder a package manager keeps it in, which an upgrade removes.
   - `agent-graph install claude-code` safely merges hook config into the provider's settings (§5.2). Other providers' installers come with their adapters.
   - Possibly a Claude Code plugin and a Codex plugin that ship the hooks.
 
