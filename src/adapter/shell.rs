@@ -526,7 +526,8 @@ struct Level {
     /// How many of `compounds` are functions' bodies, which run only when
     /// the function is called.
     functions: usize,
-    /// A function's name has just been read, so a `{` starts its body.
+    /// A function's name has just been read, so a compound command (`{ … }`,
+    /// `if … fi`, …) starts its body.
     defines: bool,
     /// The runs of the output this level's shell has put in the background
     /// (as `(start, end)`) and not yet waited for.
@@ -560,7 +561,7 @@ impl Level {
         if (self.lead == self.words.len() || ends_case) && self.opened != Opened::Array {
             // `function NAME` comes before a function's body, as keywords do.
             let name = self.lead > 0 && self.words[self.lead - 1] == "function";
-            let body = std::mem::take(&mut self.defines) && word == "{";
+            let body = std::mem::take(&mut self.defines) && COMPOUND_OPEN.contains(&word.as_str());
             match word.as_str() {
                 "case" => self.cases += 1,
                 "esac" => self.cases = self.cases.saturating_sub(1),
@@ -1571,6 +1572,9 @@ mod tests {
             "claude -p a & f() { wait; }",
             "claude -p a & function f { wait; }",
             "claude -p a & function f() {\n  wait\n}",
+            // Any compound command can be a function's body.
+            "claude -p a & f() if true; then wait; fi",
+            "claude -p a & f() while false; do wait; done",
         ] {
             assert_eq!(launch(command), bg("claude"), "{command:?}");
         }
