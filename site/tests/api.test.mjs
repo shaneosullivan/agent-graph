@@ -288,6 +288,23 @@ test("a trimmed log can go on past the size limit", async () => {
   assert.equal((await append(log.id, past + 1000, line(4), log.writeToken)).status, 413);
 });
 
+// R44: the limit is on the bytes stored, not the offsets used: chunks that
+// overlap (each at its own offset, a byte apart) are each stored in full,
+// so they count in full.
+test("overlapping chunks count towards the size limit", { timeout: 120_000 }, async () => {
+  const log = await create(line(1));
+  const big = `${"x".repeat(512 * 1024 - 1)}\n`;
+  // 127 of them and the first line fit in 64 MiB; one more doesn't.
+  for (let i = 1; i <= 127; i++) assert.equal((await append(log.id, i, big, log.writeToken)).status, 204, `chunk ${i}`);
+  const full = await append(log.id, 128, big, log.writeToken);
+  assert.equal(full.status, 413);
+  assert.match(await full.text(), /full/);
+  assert.equal((await append(log.id, 127, big, log.writeToken)).status, 204, "a retry is still accepted");
+  // Trimming makes room again.
+  assert.equal((await trim(log.id, 100, log.writeToken)).status, 204);
+  assert.equal((await append(log.id, 128, big, log.writeToken)).status, 204);
+});
+
 // Stored as sent, so chunks' offsets stay true: a byte-order mark at a
 // chunk's start (Windows PowerShell writes them) is kept.
 test("a chunk is stored as it was sent, a byte-order mark and all", async () => {

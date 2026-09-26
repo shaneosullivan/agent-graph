@@ -20,7 +20,12 @@ export async function bodyText(req: Request): Promise<string> {
   return new TextDecoder("utf-8", { ignoreBOM: true }).decode(await req.arrayBuffer());
 }
 
-/** The largest a log may grow, judged from the offset of each append. */
+/**
+ * The most text a log may store: counted as its chunks are stored and
+ * trimmed (lib/store.ts), so a live share that trims its start can go on
+ * for good, but chunks that overlap each count in full. Appends are also
+ * kept within this of where the log starts, judged from their offsets.
+ */
 export const MAX_LOG_BYTES = 64 * 1024 * 1024;
 
 /** Chunks returned per content request; the viewer asks again for more. */
