@@ -1,15 +1,45 @@
-// site-source.js, the page's data source on the site, in jsdom: it reads a
-// log's chunks from the API and hands them to the site's WebAssembly.
+// site-source.js, the page's data source on the site, in jsdom, and the
+// worker it starts (site-worker.js): the worker reads a log's chunks from the
+// API and hands them to the site's WebAssembly.
 // npm run test:unit
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import vm from "node:vm";
 import { deflateRawSync } from "node:zlib";
 import { JSDOM } from "jsdom";
 
 const source = readFileSync(new URL("../public/viewer/site-source.js", import.meta.url), "utf8");
+const worker = readFileSync(new URL("../public/viewer/site-worker.js", import.meta.url), "utf8");
 const wasm = readFileSync(new URL("../public/viewer/agent_graph.wasm", import.meta.url));
+
+/**
+ * A stand-in for the browser's `Worker` (jsdom has none): runs
+ * site-worker.js in a context of its own, with `fetch`, and passes messages
+ * both ways as a real one does, copied, and later. Each one started is
+ * recorded in `started`.
+ */
+function workerClass(fetch, started) {
+  return class Worker {
+    constructor(url) {
+      started.push(url);
+      const scope = vm.createContext({
+        fetch,
+        WebAssembly,
+        TextEncoder,
+        TextDecoder,
+        postMessage: (data) => setTimeout(() => this.onmessage({ data: structuredClone(data) })),
+      });
+      scope.self = scope;
+      vm.runInContext(worker, scope);
+      this.scope = scope;
+    }
+    postMessage(data) {
+      setTimeout(() => this.scope.onmessage({ data: structuredClone(data) }));
+    }
+  };
+}
 
 const line = (n, node, type, data = {}) =>
   JSON.stringify({ v: 1, id: `01K${String(n).padStart(23, "0")}`, ts: `2026-09-25T10:00:0${n}.000Z`, type, node, data }) +
@@ -63,8 +93,9 @@ const bytes = (text) => Buffer.byteLength(text);
 /**
  * Loads site-source.js for a live log whose content reads are answered, in
  * turn, by `reads` (`{ text, first }`; each is served once, then empty
- * reads). Timers run a thousand times faster. Returns the window and the
- * `after` of every content read made.
+ * reads). Timers run a thousand times faster. Returns the window, the
+ * `after` of every content read made, the workers started, and what the
+ * page itself fetched or ran WebAssembly for (`page`).
  */
 function load(t, reads) {
   const dom = new JSDOM(
@@ -75,7 +106,7 @@ function load(t, reads) {
   t.after(() => window.close());
   const afters = [];
   const queue = [...reads];
-  window.fetch = async (url) => {
+  const fetch = async (url) => {
     if (url === "/viewer/agent_graph.wasm") return { arrayBuffer: async () => wasm };
     const after = new URL(url, "https://example.test").searchParams.get("after");
     afters.push(after);
@@ -88,10 +119,24 @@ function load(t, reads) {
     // browser's does.
     return new Response(read.text, { status: 200, headers: Object.fromEntries(headers) });
   };
+  // The worker fetches and runs the WebAssembly; the page does neither.
+  const started = [];
+  window.Worker = workerClass(fetch, started);
+  const page = { fetches: [], wasm: 0 };
+  window.fetch = async (url) => {
+    page.fetches.push(url);
+    return fetch(url);
+  };
+  window.WebAssembly = new Proxy(WebAssembly, {
+    get(target, key) {
+      page.wasm++;
+      return target[key];
+    },
+  });
   const setTimeout = window.setTimeout.bind(window);
   window.setTimeout = (fn, ms) => setTimeout(fn, ms / 1000);
   window.eval(source);
-  return { window, afters };
+  return { window, afters, started, page };
 }
 
 async function until(check, ms = 3000) {
@@ -185,4 +230,24 @@ test("reads that follow on are kept", async (t) => {
   await changed;
   assert.deepEqual(Object.keys((await src.graph()).sessions).sort(), ["x:a", "x:b"]);
   assert.equal(afters[1], key(bytes(first) - 1));
+});
+
+// R56: reducing a long log takes a while; the page stays responsive meanwhile.
+test("the log is read and reduced in a worker, and the graph now brings its timeline", async (t) => {
+  const text = line(1, "x:a", "session.started") + line(2, "x:a", "status", { state: "working" });
+  const { window, started, page } = load(t, [{ text, first: 0 }]);
+  const src = await until(() => window.agentGraphSource);
+  assert.deepEqual(started, ["/viewer/site-worker.js"]);
+  const g = await src.graph(null, "x:a");
+  assert.equal(g.root, "x:a");
+  assert.deepEqual(
+    g.stops.map((s) => s.label),
+    ["Session started", "Session is working"],
+  );
+  assert.equal(src.timeline, undefined, "no second request to make");
+  const step = await src.graph(g.stops[0].id, "x:a");
+  assert.equal(step.nodes["x:a"].state, "idle");
+  await assert.rejects(src.graph("nope", "x:a"), /404/);
+  assert.equal((await src.info()).where, null);
+  assert.deepEqual(page, { fetches: [], wasm: 0 }, "none of it in the page");
 });

@@ -160,7 +160,9 @@ async function getJSON(url) {
 const source = window.agentGraphSource || {
   /**
    * The graph now, or as of event `until`: a summary of every session
-   * (`sessions`), and the nodes of the tree under `root` (`nodes`).
+   * (`sessions`), and the nodes of the tree under `root` (`nodes`). The
+   * graph now also has every stop in that tree's timeline (`stops`), worked
+   * out with it, so a refresh is one request.
    */
   graph: (until, root) => {
     const params = new URLSearchParams();
@@ -169,8 +171,6 @@ const source = window.agentGraphSource || {
     const query = params.toString();
     return getJSON(`/api/graph${query ? `?${query}` : ''}`);
   },
-  /** Every stop in the timeline of the tree under `root`. */
-  timeline: (root) => getJSON(`/api/timeline?root=${encodeURIComponent(root)}`),
   /** `{ now_ms, where }`: the clock to measure "5m ago" by, and where events come from. */
   info: () => getJSON('/api/info').then((i) => ({ now_ms: i.now_ms, where: i.events_dir })),
   /** Calls `onChange()` when new events arrive and `onStatus(connected)` as the connection changes. */
@@ -298,7 +298,13 @@ async function refresh() {
   S.cache = new Map();
   const before = S.root;
   const asked = S.root || hashId();
-  const live = await source.graph(null, asked);
+  let live;
+  try {
+    live = await source.graph(null, asked);
+  } catch (e) {
+    if (S.root !== before) return; // no longer shown: nothing to say
+    throw e;
+  }
   // Another session was chosen meanwhile; the refresh that follows shows it.
   if (S.root !== before) return;
   S.live = live;
@@ -315,7 +321,7 @@ async function refresh() {
   if (live.root !== S.root) {
     // The session asked for has gone, or none was yet: the one the reply
     // holds instead (the newest), if it's one to show. Nothing of the old
-    // one's (not its timeline to step through either, while the new one comes).
+    // one's (not its timeline to step through either).
     forgetLoads();
     const tree = live.root;
     S.root = tree && (tree === asked || visibleRoots().includes(tree)) ? tree : null;
@@ -324,20 +330,11 @@ async function refresh() {
     S.shown = S.live;
     S.stops = [];
     S.pos = -1;
-    renderAll();
   }
-  const root = S.root;
-  let stops;
-  try {
-    stops = root ? (await source.timeline(root)).stops : [];
-  } catch (e) {
-    if (root !== S.root) return; // no longer shown: nothing to say
-    throw e;
-  }
-  // Another session was chosen meanwhile; the refresh that follows shows it.
-  if (root !== S.root) return;
+  // The timeline of the tree the reply holds, which is now the one shown.
+  const stops = S.root ? live.stops : [];
 
-  // Where the timeline is now, after the requests: it may have been moved.
+  // Where the timeline is now, after the request: it may have been moved.
   const old = S.stops;
   const currentId = old[S.pos] && old[S.pos].id;
   S.stops = stops;
