@@ -520,20 +520,29 @@ impl Reducer {
 
     /// Whether this is a state the reducer could have made, as far as what
     /// it relies on goes: each node under its own id, each request's call id
-    /// once per node, each child once under its parent, and indexes that name
-    /// only nodes there are. (A keyframe from a pasted log can say anything.)
+    /// once per node, each node with a parent once among its parent's
+    /// children and no other's (moving a node with no children doesn't look
+    /// for a cycle, which relies on that), and indexes that name only nodes
+    /// there are. (A keyframe from a pasted log can say anything.)
     fn check(&self) -> bool {
         let known = |id: &String| self.nodes.contains_key(id);
-        self.nodes.iter().all(|(id, node)| {
-            let mut calls = BTreeSet::new();
-            let mut children = BTreeSet::new();
-            *id == node.id
-                && node.spawns.iter().all(|s| calls.insert(&s.call_id))
-                && node.children.iter().all(|c| {
-                    children.insert(c)
-                        && self.nodes.get(c).and_then(|n| n.parent.as_ref()) == Some(id)
-                })
-        }) && self.processes.values().all(known)
+        // Each child listed names the node listing it as its parent, and
+        // once there, so it's listed only there: then as many are listed
+        // as have parents only if every node with a parent is.
+        let listed: usize = self.nodes.values().map(|n| n.children.len()).sum();
+        let parented = self.nodes.values().filter(|n| n.parent.is_some()).count();
+        listed == parented
+            && self.nodes.iter().all(|(id, node)| {
+                let mut calls = BTreeSet::new();
+                let mut children = BTreeSet::new();
+                *id == node.id
+                    && node.spawns.iter().all(|s| calls.insert(&s.call_id))
+                    && node.children.iter().all(|c| {
+                        children.insert(c)
+                            && self.nodes.get(c).and_then(|n| n.parent.as_ref()) == Some(id)
+                    })
+            })
+            && self.processes.values().all(known)
             && self.requesters.values().flatten().all(known)
             && self
                 .unpaired_runs
