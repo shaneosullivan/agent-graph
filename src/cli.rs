@@ -401,6 +401,27 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
         };
         if let Some(existing) = existing {
             let ours = existing.as_deref().is_some_and(slash::bytes_are_ours);
+            // There's nowhere uncommitted for a project's command, so
+            // --scope local uses the project's folder too, where a
+            // committed one is the project's (--scope project).
+            let projects = (!opts.add && ours && scope == Scope::Local)
+                .then(|| match committed(&cwd, &file.path) {
+                    Ok(false) => None,
+                    Ok(true) => Some(format!(
+                        "Left the {} command ({}) alone: it's committed, so it's the \
+                         project's. Remove it with --scope project.",
+                        file.invoke,
+                        file.path.display()
+                    )),
+                    Err(err) => Some(format!(
+                        "Left the {} command ({}) alone: git couldn't say whether it's \
+                         committed, as the project's would be. If it isn't, remove it \
+                         with --scope project. What git said:\n{err}",
+                        file.invoke,
+                        file.path.display()
+                    )),
+                })
+                .flatten();
             match (opts.add, existing.as_deref()) {
                 (true, Some(_)) if !ours => notes.push(format!(
                     "Left {} alone: it isn't one Agent Graph wrote.",
@@ -416,6 +437,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                     contents: Some(file.contents),
                     backup: None,
                 }),
+                (false, Some(_)) if projects.is_some() => notes.extend(projects),
                 (false, Some(_)) if ours => changes.push(Change {
                     summary: vec![format!(
                         "Removes the {} command: {}",
@@ -435,6 +457,11 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
         println!("{note}");
     }
     if changes.is_empty() {
+        // (Something was left alone, so it isn't "nothing installed".)
+        if notes.iter().any(|n| n.starts_with("Left ")) {
+            println!("Nothing else to do.");
+            return Ok(());
+        }
         println!(
             "Nothing to do: {}.",
             if opts.add {
@@ -591,6 +618,47 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
         summary,
         backup: existed.then(|| link.with_extension("json.agent-graph.bak")),
     }))
+}
+
+/// Whether `path` (in `dir`) is committed in the git repository `dir` is
+/// in: in its last commit, not just staged. Without git, outside a
+/// repository, or before its first commit, it isn't. An error says git
+/// couldn't tell (it refuses a repository someone else owns, say).
+fn committed(dir: &Path, path: &Path) -> Result<bool, String> {
+    let Ok(relative) = path.strip_prefix(dir) else {
+        return Ok(false);
+    };
+    let mut git = std::process::Command::new("git");
+    // The repository `dir` is in, not one the environment names (a git
+    // hook's, say).
+    for var in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+    ] {
+        git.env_remove(var);
+    }
+    let Ok(out) = git
+        .arg("-C")
+        .arg(dir)
+        .args(["ls-tree", "HEAD", "--"])
+        .arg(relative)
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .output()
+    else {
+        return Ok(false);
+    };
+    if out.status.success() {
+        return Ok(!out.stdout.is_empty());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    if err.contains("not a git repository") || err.contains("Not a valid object name HEAD") {
+        return Ok(false);
+    }
+    Err(err.trim().to_string())
 }
 
 fn apply(change: &Change) -> Result<(), String> {

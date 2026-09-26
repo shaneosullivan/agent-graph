@@ -44,5 +44,5 @@
     "[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true",
     "[profile.wasm]\ninherits = \"release\"\nopt-level = \"z\"\nlto = true\npanic = \"abort\""
   ],
-  "hash": "4e3e34415e319e27f0c983844150afc162cbcb4ce5fef0b628eff0141e79d260"
+  "hash": "709073c2626ba9540be722fed7767f45d6b56aa4ee891ba9be52d7358c233050"
 }

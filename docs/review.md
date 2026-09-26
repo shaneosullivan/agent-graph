@@ -191,7 +191,8 @@ Status is updated as each is done.
 
 ### R30. `uninstall --scope local` deletes the project's skill
 - **Where:** `src/slash.rs`, `src/cli.rs`
-- **Status:** open
+- **Problem:** There's nowhere uncommitted for a project's command, so `--scope local` puts it in the project's folder, like `--scope project`; uninstalling locally deleted the one the project had committed.
+- **Status:** fixed. Uninstalling with `--scope local` leaves the command if it's in the repository's last commit (`git ls-tree HEAD`, ignoring `GIT_DIR` and the like from the environment), and says to remove it with `--scope project`; if git can't tell (a repository someone else owns, say), it's kept too, with git's message. Staged, uncommitted, or outside a repository, it's removed. The final line no longer says nothing's installed when something was left alone. Help updated. Test: `local_uninstall_leaves_the_projects_committed_command` (tests/cli.rs). Reviewed (three rounds).
 
 ### R31. `snapshot --session X --out x.json` writes every session
 - **Where:** `src/cli.rs`

@@ -1006,3 +1006,114 @@ fn project_install_warns_when_agent_graph_isnt_on_path() {
         assert!(said.contains("isn't on your PATH"), "{said}");
     }
 }
+
+/// R30: with --scope local, the command still goes in the project's folder
+/// (there's nowhere else for it), which may be the project's own, committed
+/// one (--scope project): uninstalling locally leaves that one, and says so.
+#[test]
+fn local_uninstall_leaves_the_projects_committed_command() {
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let run = |program: &str, args: &[&str], env: &[(&str, &Path)]| {
+        let mut command = if program == "agent-graph" {
+            bin()
+        } else {
+            Command::new(program)
+        };
+        for var in GIT_REPO_VARS {
+            command.env_remove(var);
+        }
+        let out = command
+            .args(args)
+            .current_dir(project.path())
+            .env("HOME", home.path())
+            .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
+            .env("GIT_CONFIG_GLOBAL", home.path().join("gitconfig"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .envs(env.iter().copied())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{program} {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let git = |args: &[&str]| run("git", args, &[]);
+    let agent_graph = |args: &[&str], env: &[(&str, &Path)]| run("agent-graph", args, env);
+    let install = ["install", "claude-code", "--yes"];
+    let uninstall = ["uninstall", "claude-code", "--scope", "local", "--yes"];
+    let skill = project.path().join(".claude/skills/agent-graph/SKILL.md");
+
+    // Installed locally, and not committed (staged, say): uninstalling
+    // locally removes it.
+    git(&["init", "-q"]);
+    agent_graph(&[&install[..], &["--scope", "local"]].concat(), &[]);
+    assert!(skill.exists());
+    git(&["add", "."]);
+    agent_graph(&uninstall, &[]);
+    assert!(!skill.exists());
+
+    // The project's, committed: kept, whatever repository the environment
+    // names (a git hook's, say).
+    agent_graph(&[&install[..], &["--scope", "project"]].concat(), &[]);
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-qm",
+        "x",
+    ]);
+    git(&["init", "-q", other.path().to_str().unwrap()]);
+    let said = agent_graph(&uninstall, &[("GIT_DIR", &other.path().join(".git"))]);
+    assert!(skill.exists(), "the project's command is kept");
+    assert!(
+        said.contains("--scope project"),
+        "and says how to remove it: {said}"
+    );
+    assert!(
+        !said.contains("nothing of Agent Graph's is installed"),
+        "{said}"
+    );
+
+    // When git can't say (it refuses a repository someone else owns, say),
+    // it's kept, and says why.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let bin_dir = home.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let fake = bin_dir.join("git");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\necho 'fatal: detected dubious ownership in repository at /x' >&2\necho 'To add an exception for this directory, call:' >&2\necho '' >&2\necho '\tgit config --global --add safe.directory /x' >&2\nexit 128\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let said = agent_graph(&uninstall, &[("PATH", &bin_dir)]);
+        assert!(skill.exists(), "kept");
+        assert!(said.contains("dubious ownership"), "{said}");
+        assert!(
+            said.contains("--scope project"),
+            "says how to remove it: {said}"
+        );
+        assert!(
+            said.contains("safe.directory /x\n"),
+            "git's command, as it is: {said}"
+        );
+    }
+}
+
+/// Variables that point git at another repository.
+const GIT_REPO_VARS: [&str; 5] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+];
