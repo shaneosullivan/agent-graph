@@ -131,7 +131,17 @@ pub fn default_command(provider: &str) -> Result<String, String> {
 }
 
 /// Adds our hooks to Claude Code `settings`, replacing any earlier copy.
+/// `command` must contain `CLAUDE_CODE_MARKER`, which is how they're found
+/// again: otherwise each install would add them again, and uninstall
+/// would leave them.
 pub fn install_claude_code(settings: &mut Value, command: &str) -> Result<(), String> {
+    if !command.contains(CLAUDE_CODE_MARKER) {
+        return Err(format!(
+            "the hook command must contain `{CLAUDE_CODE_MARKER}`, which is how Agent Graph \
+             finds its hooks again (to replace or remove them), so nothing was changed: \
+             {command}"
+        ));
+    }
     uninstall_claude_code(settings)?;
     let hooks = hooks_object(settings)?;
     for spec in CLAUDE_CODE_HOOKS {
@@ -270,6 +280,28 @@ mod tests {
             "Agent|Task|AskUserQuestion|ExitPlanMode|Bash"
         );
         assert_eq!(our_events(&settings).len(), CLAUDE_CODE_HOOKS.len());
+    }
+
+    /// A command the hooks can't be found by again would be added again by
+    /// each install, and left by uninstall: it's refused.
+    #[test]
+    fn a_command_that_cant_be_found_again_is_refused() {
+        for command in ["my-wrapper", "agent-graph emit --provider=claude-code"] {
+            let mut settings = json!({ "model": "opus" });
+            let err = install_claude_code(&mut settings, command).unwrap_err();
+            assert!(err.contains(CLAUDE_CODE_MARKER), "{err}");
+            assert_eq!(settings, json!({ "model": "opus" }), "unchanged");
+        }
+        let mut settings = json!({});
+        install_claude_code(
+            &mut settings,
+            "nice -n 5 ag emit --provider claude-code --x",
+        )
+        .unwrap();
+        assert_eq!(
+            uninstall_claude_code(&mut settings).unwrap(),
+            CLAUDE_CODE_HOOKS.len()
+        );
     }
 
     #[test]

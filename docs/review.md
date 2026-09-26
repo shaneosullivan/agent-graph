@@ -186,7 +186,8 @@ Status is updated as each is done.
 
 ### R29. A `--command` without the usual form duplicates hooks and can't be uninstalled
 - **Where:** `src/install.rs`
-- **Status:** open
+- **Problem:** Agent Graph finds its hooks by `emit --provider claude-code` in their command; a `--command` without it was installed anyway, so each install added another set, and uninstall left them.
+- **Status:** fixed. `install_claude_code` refuses such a command before changing anything, and says why; the `--command` help says it must contain it. Test: `a_command_that_cant_be_found_again_is_refused` (src/install.rs). Reviewed.
 
 ### R30. `uninstall --scope local` deletes the project's skill
 - **Where:** `src/slash.rs`, `src/cli.rs`
