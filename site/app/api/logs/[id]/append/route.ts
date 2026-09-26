@@ -1,6 +1,6 @@
 import { bodyText, gone, ID_PATTERN, MAX_CHUNK_BYTES, MAX_LOG_BYTES } from "@/lib/config";
 import { canWrite } from "@/lib/crypto";
-import { appendChunk, ChunkTaken, firstChunkOffset, LogGone } from "@/lib/store";
+import { appendChunk, ChunkTaken, firstChunkOffset, LogFull, LogGone } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,15 +10,19 @@ export const dynamic = "force-dynamic";
  *
  * This is the hot path while `agent-graph watch-remote` runs, so it does as
  * little as possible:
- * - the size is checked from the header before the body is read;
- * - so is the log's: only past `MAX_LOG_BYTES` is its first chunk read, since
- *   what's stored is what counts, and a live share trims its start (though
- *   never all of it, nor adds before where it starts);
+ * - the size is checked from the header before the body is read, and as
+ *   it's read (it may have none);
+ * - so is where it goes: only past `MAX_LOG_BYTES` is the log's first chunk
+ *   read, to check it's within that of where the log now starts (a live
+ *   share trims its start, though never all of it, nor adds before where it
+ *   starts);
  * - the write token is checked by recomputing an HMAC, with no database read;
  * - the body is stored as it arrives (raw JSON Lines, never parsed);
- * - storing it is a single write of a new document keyed by the offset,
- *   with one read, that the log's still there (410 if it's been deleted:
- *   lib/cleanup.ts).
+ * - storing it is a single write of a new document keyed by the offset, in
+ *   a transaction with the log's metadata: it's read, that the log's still
+ *   there (410 if it's been deleted: lib/cleanup.ts), and its count of the
+ *   bytes it stores updated (413 past `MAX_LOG_BYTES`: that's what bounds
+ *   what a log stores, however its chunks overlap).
  *
  * A chunk never changes once stored (viewers don't read one twice): the same
  * bytes again (a retry) are accepted, different ones (or any, where the stored
@@ -42,16 +46,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });
   }
 
-  const text = await bodyText(req);
+  const text = await bodyText(req, MAX_CHUNK_BYTES);
+  if (text === null) return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });
   if (!text) return new Response(null, { status: 204 });
-  if (Buffer.byteLength(text) > MAX_CHUNK_BYTES) {
-    return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });
-  }
 
   try {
     await appendChunk(id, offset, text);
   } catch (err) {
     if (err instanceof LogGone) return gone();
+    if (err instanceof LogFull) return new Response("This log is full.", { status: 413 });
     if (err instanceof ChunkTaken) {
       return new Response("Other events are already stored at this offset.", { status: 409 });
     }
