@@ -564,12 +564,16 @@ function renderMain() {
   // Brought into view when what it stands for changes (the session, the
   // step, the node it touched); not whenever the tree is drawn again (a card
   // chosen, new events, the step's graph arriving), or it would undo the
-  // reader's scrolling.
+  // reader's scrolling. Only a card drawn counts as brought into view: one
+  // not in the graph still shown (its step's is on its way) is, once it is.
   const stop = S.stops[S.pos];
   const key = ringed ? `${S.root} ${stop && stop.id} ${ringed}` : null;
   const ring = view.querySelector('.node.current');
-  if (ring && key !== S.scrolledTo) ring.scrollIntoView({ block: 'nearest' });
-  S.scrolledTo = key;
+  if (!ringed) S.scrolledTo = null;
+  else if (ring) {
+    if (key !== S.scrolledTo) ring.scrollIntoView({ block: 'nearest' });
+    S.scrolledTo = key;
+  }
 }
 
 /**
