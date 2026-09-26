@@ -125,6 +125,10 @@ pub struct Spawn {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
     pub background: bool,
+    /// Whether it's for `agent-graph run`, if known (see
+    /// `SpawnRequested::run`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child: Option<String>,
     pub returned: bool,
@@ -775,6 +779,7 @@ impl Reducer {
                     agent_type: d.agent_type,
                     purpose: d.purpose,
                     background: d.background,
+                    run: d.run,
                     child: None,
                     returned: false,
                     requested_at: e.ts.clone(),
@@ -1140,6 +1145,15 @@ impl Reducer {
                     && (!s.background || within(&s.requested_at, started, BACKGROUND_START))
                     // Not one for an agent CLI it surely isn't running.
                     && s.agent_type.as_deref().is_none_or(|p| !surely_not(child_node, p))
+                    // A run's session is named for the run, so it's paired
+                    // with a request for a run, and only it is. A request
+                    // from before that was recorded: only if the run is
+                    // named for its program, as then.
+                    && match s.run {
+                        Some(run) => run == (child_node.provider == "run"),
+                        None => child_node.provider != "run"
+                            || s.agent_type.as_deref().is_some_and(|p| runs(child_node, p)),
+                    }
             })
             .map(|(id, s)| {
                 (
@@ -1474,8 +1488,9 @@ const PROVIDER_PROGRAMS: &[(&str, &[&str])] = &[("claude-code", &["claude"])];
 /// Whether session `node` surely isn't running `program`, the command a
 /// spawn request named: `node`'s provider is one whose CLIs are known, and
 /// `program` is another of the agent CLIs the shell adapter knows. Anything
-/// less certain (a wrapper, a command added by `AGENT_GRAPH_AGENT_COMMANDS`,
-/// an `agent-graph run`) might be it.
+/// less certain (a wrapper, a command added by `AGENT_GRAPH_AGENT_COMMANDS`)
+/// might be it. (An `agent-graph run` is paired only with a request for a
+/// run: see `bind_session_by_guess`.)
 fn surely_not(node: &Node, program: &str) -> bool {
     PROVIDER_PROGRAMS
         .iter()

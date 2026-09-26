@@ -14,13 +14,35 @@ export function gone(): Response {
 /**
  * A request's body, as text, exactly as it was sent: a byte-order mark at
  * its start is kept (`req.text()` drops one), so what's stored is the bytes
- * sent, and chunks' offsets stay true.
+ * sent, and chunks' offsets stay true. Null if it's more than `max` bytes:
+ * it's read as it arrives, and only that far (a body sent without a
+ * Content-Length could be any size).
  */
-export async function bodyText(req: Request): Promise<string> {
-  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(await req.arrayBuffer());
+export async function bodyText(req: Request, max: number): Promise<string | null> {
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  if (req.body) {
+    const reader = req.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      parts.push(value);
+    }
+  }
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(Buffer.concat(parts));
 }
 
-/** The largest a log may grow, judged from the offset of each append. */
+/**
+ * The most text a log may store: counted as its chunks are stored and
+ * trimmed (lib/store.ts), so a live share that trims its start can go on
+ * for good, but chunks that overlap each count in full. Appends are also
+ * kept within this of where the log starts, judged from their offsets.
+ */
 export const MAX_LOG_BYTES = 64 * 1024 * 1024;
 
 /** Chunks returned per content request; the viewer asks again for more. */
@@ -52,6 +74,30 @@ export const UNLOCKS_PER_LOG_AND_ADDRESS = 5;
 export const UNLOCKS_PER_LOG = 20;
 export const UNLOCKS_PER_ADDRESS = 30;
 export const UNLOCK_WINDOW_MS = 15 * 60 * 1000;
+/**
+ * The longest password, in bytes of UTF-8: a log is created with one only
+ * this long, so unlocking checks none longer. (The CLI refuses longer ones
+ * too; the upload page's field holds at most 200 characters.)
+ */
+export const MAX_PASSWORD_BYTES = 1024;
+
+/**
+ * The largest unlock body: `{"password": "…"}`, with room for a password of
+ * `MAX_PASSWORD_BYTES` written all in JSON escapes.
+ */
+export const UNLOCK_BODY_BYTES = 8 * 1024;
+/**
+ * scrypt runs allowed in each window (each is about 50 ms of the server's
+ * time), counting right passwords too, which the limits above don't: every
+ * password checked at a log from one address, and every run from one
+ * address, a password checked at any log or a log created with one.
+ * Generous: they're there to stop one address keeping the server busy, not
+ * to limit guesses. Per log first, so one log's viewers behind an address
+ * (or one viewer, unlocking it again and again) hold back only that log
+ * there; the per-address one is the bound on the server's time.
+ */
+export const SCRYPT_CHECKS_PER_LOG_AND_ADDRESS = 200;
+export const SCRYPT_RUNS_PER_ADDRESS = 2000;
 /** How long to wait when too many guesses arrive at once to count them. */
 export const UNLOCK_BUSY_SECONDS = 5;
 

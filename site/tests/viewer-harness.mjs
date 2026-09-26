@@ -32,19 +32,31 @@ export function loadViewer(t, source, { hash = "", path = "", fetch, EventSource
   // the given `fetch` and `EventSource`.
   if (fetch) window.fetch = fetch;
   if (EventSource) window.EventSource = EventSource;
-  if (source)
+  if (source) {
+    // The page doesn't ask for a timeline: the graph now carries it. A stub
+    // gives it as `timeline(root)`.
+    const { timeline = async () => ({ stops: [] }), ...rest } = source;
     window.agentGraphSource = {
       liveLabel: "Live",
       imageUrl: null,
       info: async () => ({ now_ms: Date.now(), where: "test" }),
       subscribe() {},
-      timeline: async () => ({ stops: [] }),
-      ...source,
-      // Replies as the server's do: the tree asked for (see `asServer`).
-      ...(source.graph ? { graph: async (until, root) => asServer(await source.graph(until, root), root) } : {}),
+      ...rest,
+      // Replies as the server's do: the tree asked for (see `asServer`),
+      // and for the graph now, its timeline.
+      ...(source.graph
+        ? {
+            graph: async (until, root) => {
+              const g = asServer(await source.graph(until, root), root);
+              if (!until) g.stops = g.root ? (await timeline(g.root)).stops : [];
+              return g;
+            },
+          }
+        : {}),
     };
+  }
   window.eval(
-    `${app}\nwindow.__viewer = { S, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll };`,
+    `${app}\nwindow.__viewer = { S, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, CACHED_STEPS };`,
   );
   return window;
 }

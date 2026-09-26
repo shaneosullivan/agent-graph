@@ -100,7 +100,28 @@ pub fn run(opts: Options) -> ExitCode {
         }),
     ));
     log.record(drafts);
-    ExitCode::from(u8::try_from(code).unwrap_or(1))
+    match exit_with(code, cfg!(windows)) {
+        Exit::Code(code) => ExitCode::from(code),
+        Exit::Raw(code) => std::process::exit(code),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Exit {
+    /// A code `ExitCode` can hold.
+    Code(u8),
+    /// One it can't, passed to the system as it is.
+    Raw(i32),
+}
+
+/// How to exit with the command's `code`. On Windows it's 32 bits (a crash
+/// is 0xC0000005, say), which only `process::exit` passes on whole.
+fn exit_with(code: i32, windows: bool) -> Exit {
+    match u8::try_from(code) {
+        Ok(code) => Exit::Code(code),
+        Err(_) if windows => Exit::Raw(code),
+        Err(_) => Exit::Code(1),
+    }
 }
 
 /// Where the node's events go. Recording is best effort: the command runs
@@ -290,6 +311,21 @@ mod signals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R50: Windows exit codes are 32 bits (a crash is 0xC0000005, say),
+    /// and `run` exits with the command's, whatever it is.
+    #[test]
+    fn windows_exit_codes_pass_through_whole() {
+        assert_eq!(exit_with(0, true), Exit::Code(0));
+        assert_eq!(exit_with(255, true), Exit::Code(255));
+        assert_eq!(exit_with(256, true), Exit::Raw(256));
+        assert_eq!(
+            exit_with(0xC000_0005_u32 as i32, true),
+            Exit::Raw(-1073741819)
+        );
+        // Elsewhere codes fit in a byte (a signal is 128 + its number).
+        assert_eq!(exit_with(130, false), Exit::Code(130));
+    }
 
     #[test]
     fn names_come_from_the_program() {

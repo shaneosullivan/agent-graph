@@ -715,3 +715,63 @@ fn an_expired_log_stops_the_share() {
     assert!(!status.success());
     assert!(stderr.contains("no new events for a week"), "{stderr}");
 }
+
+/// R46: the site accepts passwords of up to 1024 bytes (of UTF-8), and
+/// unlocks with no longer one; a longer one is refused before anything's
+/// sent, or saved.
+#[test]
+fn a_password_too_long_for_the_site_is_refused() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("events")).unwrap();
+    // 1025 bytes, in 513 characters.
+    let long = format!("--password={}", "é".repeat(512) + "x");
+    let err = watch(home.path(), port, &[&long], &[]);
+    assert!(err.contains("at most 1024 bytes"), "{err}");
+    let err = watch(home.path(), port, &[&long, "--save-default-password"], &[]);
+    assert!(err.contains("at most 1024 bytes"), "{err}");
+    assert!(!home.path().join("remote.json").exists(), "not saved");
+    assert!(
+        requests.recv_timeout(Duration::from_millis(300)).is_err(),
+        "nothing sent"
+    );
+
+    // 1024 is fine.
+    let err = watch(
+        home.path(),
+        port,
+        &[&format!("--password={}", "é".repeat(512))],
+        &[],
+    );
+    let create = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_else(|_| panic!("not shared: {err}"));
+    assert_eq!(create.path, "/api/logs");
+}
+
+/// R47: a redirect isn't followed. (One would carry the password header on
+/// to wherever it points, over plain HTTP too: only `Authorization` and
+/// cookies are dropped.) The site's API never redirects.
+#[test]
+fn a_redirect_is_not_followed() {
+    let (elsewhere, followed) = mock_site();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            read_request(&stream);
+            let reply = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{elsewhere}/api/logs\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = (&stream).write_all(reply.as_bytes());
+        }
+    });
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("events")).unwrap();
+    let err = watch(home.path(), port, &["--password=s3cret"], &[]);
+    assert!(err.contains("302"), "{err}");
+    assert!(
+        followed.recv_timeout(Duration::from_millis(300)).is_err(),
+        "followed the redirect"
+    );
+}

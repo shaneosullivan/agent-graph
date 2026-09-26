@@ -4,7 +4,8 @@
 //! This reads commands the way a shell roughly would: it splits them into
 //! simple commands at `;`, `&&`, `||`, `|`, `&` and newlines, outside quotes
 //! and comments, reading groups `( … )` and command substitutions as commands
-//! of their own, then looks at the program each one runs, past variable
+//! of their own (and a `&` as putting the whole list before it in the
+//! background), then looks at the program each one runs, past variable
 //! assignments and wrappers like `env`, `nohup` or `timeout`.
 //! It's a heuristic: a script that starts an agent inside itself isn't seen,
 //! though the agent still links itself to the session (see `link`).
@@ -248,8 +249,12 @@ const WRAPPER_VALUES: &[(&str, &[&str])] = &[
 pub struct Launch {
     /// The agent's program, e.g. `codex`. For `agent-graph run -- X`, X's.
     pub program: String,
-    /// It's put in the background with `&`, so the shell doesn't wait.
+    /// It's put in the background with `&`, and not waited for later (with
+    /// `wait`), so the shell doesn't wait for it.
     pub background: bool,
+    /// It's `agent-graph run -- X`: the session it starts is the run's,
+    /// named for the run (or for X's wrapper), not for X.
+    pub run: bool,
 }
 
 /// The first agent session `command` starts, if any. `extra` adds programs
@@ -257,10 +262,11 @@ pub struct Launch {
 pub fn agent_launch(command: &str, extra: &[String]) -> Option<Launch> {
     let commands = split(command);
     commands.iter().find_map(|(words, background)| {
-        let program = session_program(words, extra)?;
+        let (program, run) = session_program(words, extra)?;
         Some(Launch {
             program,
             background: *background,
+            run,
         })
     })
 }
@@ -276,8 +282,9 @@ pub fn extra_commands(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// The program a simple command runs, if it starts an agent session.
-fn session_program(words: &[String], extra: &[String]) -> Option<String> {
+/// The program a simple command runs, if it starts an agent session, and
+/// whether it's through `agent-graph run`.
+fn session_program(words: &[String], extra: &[String]) -> Option<(String, bool)> {
     let mut rest = skip_prefixes(words);
     let first_word = rest.first()?;
     // `agent-graph run [--name N] -- X …` starts X, linked to us.
@@ -288,7 +295,7 @@ fn session_program(words: &[String], extra: &[String]) -> Option<String> {
         let dashes = rest.iter().position(|w| w == "--")?;
         rest = skip_prefixes(&rest[dashes + 1..]);
         let wrapped = program_name(rest.first()?);
-        return (!wrapped.is_empty()).then_some(wrapped);
+        return (!wrapped.is_empty()).then_some((wrapped, true));
     }
     let program = named(first_word, AGENT_COMMANDS)
         .map(str::to_string)
@@ -316,7 +323,7 @@ fn session_program(words: &[String], extra: &[String]) -> Option<String> {
         .iter()
         .find(|(p, _)| *p == program)
         .is_some_and(|(_, subs)| !first.is_some_and(|f| subs.contains(&f)));
-    (!asks_about_itself && !manages && !not_a_session).then_some(program)
+    (!asks_about_itself && !manages && !not_a_session).then_some((program, false))
 }
 
 /// Which of `names` `word` runs, if any: by its exact name, or for a Windows
@@ -395,6 +402,14 @@ fn takes_value(option: &str, values: &[&str]) -> bool {
         .is_some_and(|(i, c)| i + c.len_utf8() == letters.len())
 }
 
+/// Whether `word` is `NAME=` or `NAME+=`, so a `(` right after it starts
+/// an array's values (`arr=(a b)`), not a group.
+fn assigns_array(word: &str) -> bool {
+    word.strip_suffix('=')
+        .map(|name| name.strip_suffix('+').unwrap_or(name))
+        .is_some_and(|name| is_assignment(&format!("{name}=")))
+}
+
 fn is_assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(name, _)| {
         !name.is_empty()
@@ -462,8 +477,9 @@ fn skip_arithmetic(chars: &mut std::iter::Peekable<std::str::Chars>, word: &mut 
     }
 }
 
-/// What opened a level of a command: a group of commands, `( … )`, or a
-/// command substitution, `$( … )` or backticks.
+/// What opened a level of a command: a group of commands, `( … )`, a
+/// command substitution, `$( … )` or backticks, or an array's values,
+/// `NAME=( … )`, which aren't commands (though substitutions in them are).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Opened {
     #[default]
@@ -471,7 +487,13 @@ enum Opened {
     Group,
     Substitution,
     Backticks,
+    Array,
 }
+
+/// Compound commands, which a `&` after them puts in the background whole,
+/// and the words that end them.
+const COMPOUND_OPEN: &[&str] = &["{", "if", "while", "until", "for", "select", "case"];
+const COMPOUND_CLOSE: &[&str] = &["}", "fi", "done", "esac"];
 
 /// The simple command being read at one level: the top, or inside a group
 /// or substitution, after which the command around it carries on.
@@ -484,12 +506,39 @@ struct Level {
     double: bool,
     /// How many of `words` are keywords before the command's first word.
     lead: usize,
-    /// `case`s open at this level, whose patterns end with a `)` of their own.
+    /// `case`s open at this level.
     cases: usize,
+    /// While a `case` pattern is read (after `in`, or a branch's `;;`), where
+    /// it starts in `words`: it's text to match, not a command, and ends
+    /// with a `)` of its own.
+    pattern: Option<usize>,
     /// `${`s open in `word`.
     braces: usize,
     /// Where this level's commands start in the output.
     start: usize,
+    /// Where the list being read (the commands a `&` would put in the
+    /// background) starts in the output.
+    list: usize,
+    /// For each compound command open at this level (`{ … }`, `if … fi`,
+    /// …), where the list it's part of starts, and whether it's a
+    /// function's body.
+    compounds: Vec<(usize, bool)>,
+    /// How many of `compounds` are functions' bodies, which run only when
+    /// the function is called.
+    functions: usize,
+    /// A function's name has just been read, so a compound command (`{ … }`,
+    /// `if … fi`, …) starts its body.
+    defines: bool,
+    /// The runs of the output this level's shell has put in the background
+    /// (as `(start, end)`) and not yet waited for.
+    jobs: Vec<(usize, usize)>,
+    /// The command being read follows a `|`, in a pipeline.
+    piped: bool,
+    /// The pipeline being read waits (`wait`), and so does the list, before
+    /// it: they take back this shell's jobs when the list ends, unless a
+    /// `&` puts it in the background.
+    pipeline_waits: bool,
+    list_waits: bool,
 }
 
 impl Level {
@@ -498,28 +547,95 @@ impl Level {
             return;
         }
         let word = std::mem::take(&mut self.word);
-        if self.lead == self.words.len() {
+        self.in_word = false;
+        // `esac` where a pattern would start ends the `case`; any other
+        // word there is (part of) the pattern.
+        let ends_case = self.pattern == Some(self.words.len()) && word == "esac";
+        if self.pattern.is_some() && !ends_case {
+            self.words.push(word);
+            return;
+        }
+        if ends_case {
+            self.pattern = None;
+        }
+        if (self.lead == self.words.len() || ends_case) && self.opened != Opened::Array {
             // `function NAME` comes before a function's body, as keywords do.
             let name = self.lead > 0 && self.words[self.lead - 1] == "function";
+            let body = std::mem::take(&mut self.defines) && COMPOUND_OPEN.contains(&word.as_str());
             match word.as_str() {
                 "case" => self.cases += 1,
                 "esac" => self.cases = self.cases.saturating_sub(1),
                 _ => {}
             }
+            // A compound command is one command of the list it's in.
+            if COMPOUND_OPEN.contains(&word.as_str()) {
+                self.compounds.push((self.list, body));
+                self.functions += usize::from(body);
+            } else if COMPOUND_CLOSE.contains(&word.as_str()) {
+                if let Some((list, body)) = self.compounds.pop() {
+                    self.list = list;
+                    self.functions -= usize::from(body);
+                }
+            }
             if name || word == "function" || KEYWORDS.contains(&word.as_str()) {
                 self.lead += 1;
             }
+            self.defines |= name;
         }
+        // `case WORD in`: its first pattern follows.
+        let patterns = word == "in"
+            && self.words.len() == self.lead + 2
+            && self.words[self.lead] == "case"
+            && self.opened != Opened::Array;
         self.words.push(word);
-        self.in_word = false;
+        if patterns {
+            self.pattern = Some(self.words.len());
+        }
     }
 
-    fn end_command(&mut self, out: &mut Vec<(Vec<String>, bool)>, background: bool) {
+    fn end_command(&mut self, out: &mut Vec<Vec<String>>) {
         self.end_word();
-        if !self.words.is_empty() {
-            out.push((std::mem::take(&mut self.words), background));
+        // What's read of a pattern isn't a command, and the pattern goes on
+        // (a newline can come before it, and `|` between its alternatives).
+        if let Some(start) = self.pattern {
+            self.words.truncate(start);
+            self.pattern = Some(0);
         }
+        if self.opened == Opened::Array {
+            self.words.clear();
+        } else if !self.words.is_empty() {
+            // `wait` waits for the jobs this shell started (`wait $pid`, for
+            // one of them), so they're not in the background after all;
+            // `wait -n`, for only the first to finish. Not in a pipeline (a
+            // subshell), nor in a function's body.
+            let program = skip_prefixes(&self.words);
+            if program.first().is_some_and(|p| p == "wait")
+                && !program.iter().any(|a| a == "-n")
+                && !self.piped
+                && self.functions == 0
+            {
+                self.pipeline_waits = true;
+            }
+            out.push(std::mem::take(&mut self.words));
+        }
+        self.piped = false;
         self.lead = 0;
+    }
+
+    /// Ends the command, and the list it's in, where a `wait` in it takes
+    /// back this shell's jobs.
+    fn end_list(&mut self, out: &mut Vec<Vec<String>>) {
+        self.end_command(out);
+        self.list = out.len();
+        if std::mem::take(&mut self.pipeline_waits) | std::mem::take(&mut self.list_waits) {
+            self.jobs.clear();
+        }
+    }
+
+    /// Ends the command, and the pipeline it's in (`&&`, `||`).
+    fn end_pipeline(&mut self, out: &mut Vec<Vec<String>>) {
+        self.end_command(out);
+        self.list_waits |= std::mem::take(&mut self.pipeline_waits);
     }
 
     /// Whether what's been read of this command is a function's name, so
@@ -544,15 +660,24 @@ fn open(level: &mut Level, around: &mut Vec<Level>, opened: Opened, start: usize
     let inner = Level {
         opened,
         start,
+        list: start,
         ..Level::default()
     };
     around.push(std::mem::replace(level, inner));
 }
 
 /// Ends a group or substitution, and carries on with the command around
-/// it, where a substitution is (part of) a word.
-fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<(Vec<String>, bool)>) {
-    level.end_command(out, false);
+/// it, where a substitution is (part of) a word. The jobs it didn't wait for
+/// go to `kept`: they're its shell's, so the one around it can't wait for
+/// them.
+fn close(
+    level: &mut Level,
+    around: &mut Vec<Level>,
+    out: &mut Vec<Vec<String>>,
+    kept: &mut Vec<(usize, usize)>,
+) {
+    level.end_list(out);
+    kept.append(&mut level.jobs);
     let opened = level.opened;
     let empty = out.len() == level.start;
     let Some(outer) = around.pop() else {
@@ -564,6 +689,7 @@ fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<(Vec<String>,
     } else if empty && level.names_function() {
         // `NAME()` (or `function NAME()`) defines a function: that runs
         // nothing, and its body is a command of its own.
+        level.defines = true;
         level.words.clear();
         level.word.clear();
         level.in_word = false;
@@ -575,7 +701,10 @@ fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<(Vec<String>,
 /// each with whether it's put in the background, in the order the shell
 /// runs them (a substitution before the command it's in).
 fn split(command: &str) -> Vec<(Vec<String>, bool)> {
-    let mut out: Vec<(Vec<String>, bool)> = Vec::new();
+    let mut out: Vec<Vec<String>> = Vec::new();
+    // The runs of `out` put in the background, as (start, end), by shells
+    // that have ended without waiting for them.
+    let mut jobs: Vec<(usize, usize)> = Vec::new();
     let mut chars = command.chars().peekable();
     let mut single = false;
     let mut cur = Level::default();
@@ -664,7 +793,7 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                 open(&mut cur, &mut around, Opened::Substitution, out.len());
             }
             '`' if cur.opened == Opened::Backticks => {
-                close(&mut cur, &mut around, &mut out);
+                close(&mut cur, &mut around, &mut out, &mut jobs);
                 backticks -= 1;
             }
             '`' => {
@@ -736,9 +865,27 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
             }
             ' ' | '\t' | '\r' => cur.end_word(),
             '\n' => {
-                cur.end_command(&mut out, false);
-                for (delimiter, tabs) in heredocs.drain(..) {
+                cur.end_list(&mut out);
+                // In a substitution, a body can also end at a line that's
+                // WORD followed by the `)` (or backtick) that closes it,
+                // which is read on from there.
+                let closer = match cur.opened {
+                    Opened::Substitution => Some(')'),
+                    Opened::Backticks => Some('`'),
+                    _ => None,
+                };
+                'bodies: for (delimiter, tabs) in heredocs.drain(..) {
                     loop {
+                        if let Some(closer) = closer {
+                            let mut ahead = chars.clone();
+                            while tabs && ahead.next_if_eq(&'\t').is_some() {}
+                            if delimiter.chars().all(|d| ahead.next() == Some(d))
+                                && ahead.peek() == Some(&closer)
+                            {
+                                chars = ahead;
+                                break 'bodies;
+                            }
+                        }
                         let line: String = chars.by_ref().take_while(|c| *c != '\n').collect();
                         let line = line.trim_end_matches('\r');
                         let line = if tabs {
@@ -764,31 +911,64 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                 skip_arithmetic(&mut chars, &mut cur.word);
                 cur.in_word = true;
             }
+            // A `case` pattern can start with a `(` of its own.
+            '(' if !cur.in_word && cur.pattern == Some(cur.words.len()) => {}
+            '(' if cur.in_word && assigns_array(&cur.word) => {
+                open(&mut cur, &mut around, Opened::Array, out.len());
+            }
             '(' => open(&mut cur, &mut around, Opened::Group, out.len()),
             ')' => {
                 cur.end_word();
-                // Unless it ends a `case` pattern.
-                if cur.cases == 0 && matches!(cur.opened, Opened::Group | Opened::Substitution) {
-                    close(&mut cur, &mut around, &mut out);
+                if let Some(start) = cur.pattern.take() {
+                    // The end of a `case` pattern: its commands follow.
+                    cur.words.truncate(start);
+                    cur.end_list(&mut out);
+                } else if matches!(
+                    cur.opened,
+                    Opened::Group | Opened::Substitution | Opened::Array
+                ) {
+                    close(&mut cur, &mut around, &mut out, &mut jobs);
                 } else {
-                    cur.end_command(&mut out, false);
+                    cur.end_list(&mut out);
                 }
             }
-            ';' => cur.end_command(&mut out, false),
-            '|' => {
-                chars.next_if_eq(&'|');
-                cur.end_command(&mut out, false);
+            ';' => {
+                // `;;`, `;&` or `;;&` ends a `case` branch: another pattern
+                // (or `esac`) follows.
+                let branch = chars.next_if_eq(&';').is_some() | chars.next_if_eq(&'&').is_some();
+                cur.end_list(&mut out);
+                if branch && cur.cases > 0 {
+                    cur.pattern = Some(0);
+                }
             }
-            // `2>&1` and `&>` redirect: the `&` is part of the word.
-            '&' if cur.word.ends_with('>') || chars.peek() == Some(&'>') => {
+            '|' => {
+                // `||`, or `|&` (which pipes standard error too): not a `&`.
+                if chars.next_if_eq(&'|').is_some() {
+                    cur.end_pipeline(&mut out);
+                } else {
+                    chars.next_if_eq(&'&');
+                    // A `wait` in a pipeline runs in a subshell of its own.
+                    cur.end_command(&mut out);
+                    cur.pipeline_waits = false;
+                    cur.piped = true;
+                }
+            }
+            // `2>&1`, `&>` and `<&3` redirect: the `&` is part of the word.
+            '&' if cur.word.ends_with(['>', '<']) || chars.peek() == Some(&'>') => {
                 cur.word.push(c);
                 cur.in_word = true;
             }
+            // `&&` runs the next command after this one.
+            '&' if chars.next_if_eq(&'&').is_some() => cur.end_pipeline(&mut out),
+            // A lone `&` puts the list before it in the background, with
+            // any groups and substitutions in it.
             '&' => {
-                // `&&` runs the next command after this one; a lone `&` puts
-                // this one in the background.
-                let background = chars.next_if_eq(&'&').is_none();
-                cur.end_command(&mut out, background);
+                cur.end_command(&mut out);
+                cur.jobs.push((cur.list, out.len()));
+                cur.list = out.len();
+                // A `wait` in it runs in the background, waiting for nothing.
+                cur.pipeline_waits = false;
+                cur.list_waits = false;
             }
             _ => {
                 cur.word.push(c);
@@ -798,10 +978,24 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
     }
     // What isn't closed ends here.
     while !around.is_empty() {
-        close(&mut cur, &mut around, &mut out);
+        close(&mut cur, &mut around, &mut out, &mut jobs);
     }
-    cur.end_command(&mut out, false);
-    out
+    cur.end_list(&mut out);
+    jobs.append(&mut cur.jobs);
+    // Which commands are in a job: a count of the jobs each starts and ends.
+    let mut edges = vec![0i64; out.len() + 1];
+    for (start, end) in jobs {
+        edges[start] += 1;
+        edges[end] -= 1;
+    }
+    let mut inside = 0;
+    out.into_iter()
+        .zip(edges)
+        .map(|(words, edge)| {
+            inside += edge;
+            (words, inside > 0)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -867,6 +1061,26 @@ mod tests {
         );
         assert_eq!(launch("agent-graph tree"), None);
         assert_eq!(launch("agent-graph run"), None);
+    }
+
+    /// R57: a launch through `agent-graph run` says so: its session is the
+    /// run, named for it (or for the wrapper it was given), not the program.
+    #[test]
+    fn runs_say_they_are_runs() {
+        let run = |command: &str| agent_launch(command, &[]).map(|l| (l.program, l.run));
+        assert_eq!(
+            run("agent-graph run --name workers -- npx codex exec x &"),
+            Some(("codex".into(), true))
+        );
+        assert_eq!(
+            run("nohup agent-graph run -- ./w.sh"),
+            Some(("w.sh".into(), true))
+        );
+        assert_eq!(run("codex exec x"), Some(("codex".into(), false)));
+        assert_eq!(
+            run("agent-graph tree; claude -p hi"),
+            Some(("claude".into(), false))
+        );
     }
 
     #[test]
@@ -1022,7 +1236,10 @@ mod tests {
         // But not what only looks like it: a command substitution, or
         // subshells, of commands.
         assert_eq!(launch("out=$((cd sub && codex exec x) 2>&1)"), fg("codex"));
-        assert_eq!(launch("((cd a && claude -p hi) &)"), fg("claude"));
+        assert_eq!(
+            launch("((cd a && claude -p hi) &)"),
+            Some(("claude".into(), true))
+        );
         assert_eq!(launch("n=$(( $(claude -p count) + 1 ))"), fg("claude"));
         assert_eq!(
             launch("echo \"$(( (2+1) << 1 ))\"\ncodex exec x"),
@@ -1280,6 +1497,161 @@ mod tests {
             assert_eq!(launch(&command), None, "{then:?}");
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// R58: a `&` puts the whole list before it in the background, groups
+    /// and all; `<&` is a redirection, and `NAME=(…)` an array's values.
+    #[test]
+    fn a_background_list_is_all_in_the_background() {
+        let bg = |program: &str| Some((program.to_string(), true));
+        assert_eq!(launch("(cd x && codex exec y) &"), bg("codex"));
+        assert_eq!(launch("{ codex exec y; } &"), bg("codex"));
+        assert_eq!(launch("claude -p a && echo done &"), bg("claude"));
+        assert_eq!(launch("claude -p a | tee log &"), bg("claude"));
+        assert_eq!(launch("echo \"$(claude -p a)\" &"), bg("claude"));
+        assert_eq!(
+            launch("while read f; do claude -p \"$f\"; done < list &"),
+            bg("claude")
+        );
+        assert_eq!(launch("if true; then codex exec x; fi &"), bg("codex"));
+        assert_eq!(launch("cd x && { claude -p a; } > log &"), bg("claude"));
+        // Only the list the `&` ends: not one before it, nor one after.
+        assert_eq!(launch("claude -p a; echo &"), fg("claude"));
+        assert_eq!(launch("claude -p a\necho &"), fg("claude"));
+        assert_eq!(launch("echo & claude -p a"), fg("claude"));
+        assert_eq!(launch("{ claude -p a; echo & }"), fg("claude"));
+        assert_eq!(launch("(claude -p a; echo &)"), fg("claude"));
+        // `<&` duplicates a file descriptor: nothing goes in the background.
+        assert_eq!(launch("claude -p a 0<&3"), fg("claude"));
+        assert_eq!(launch("claude -p a <&- ; echo"), fg("claude"));
+        // Nor does `|&`, which pipes standard error too.
+        assert_eq!(launch("claude -p a |& tee log"), fg("claude"));
+        assert_eq!(launch("claude -p a |& tee log; echo"), fg("claude"));
+        assert_eq!(launch("claude -p a |& tee log &"), bg("claude"));
+        // An array's values aren't commands, but a substitution in them is.
+        assert_eq!(launch("arr=(claude codex)"), None);
+        assert_eq!(launch("arr+=(claude)\ncodex exec x"), fg("codex"));
+        assert_eq!(launch("local arr=(\n  claude\n)"), None);
+        assert_eq!(launch("arr=(\"$(claude -p a)\" b)"), fg("claude"));
+    }
+
+    /// R42: jobs the command then waits for (`wait`) aren't in the
+    /// background: the shell, and the call that ran it, waits for them.
+    #[test]
+    fn jobs_waited_for_arent_in_the_background() {
+        let bg = |program: &str| Some((program.to_string(), true));
+        assert_eq!(launch("claude -p a & claude -p b & wait"), fg("claude"));
+        assert_eq!(
+            launch("for f in *.md; do claude -p \"$f\" & done; wait"),
+            fg("claude")
+        );
+        assert_eq!(
+            launch("codex exec a > a.log 2>&1 &\npid=$!\necho started\nwait $pid"),
+            fg("codex")
+        );
+        assert_eq!(
+            launch("{ codex exec a & }; if true; then wait; fi"),
+            fg("codex")
+        );
+        // Only jobs started before it, by the same shell (a subshell's jobs
+        // aren't its parent's, nor the other way round)...
+        assert_eq!(launch("wait; claude -p a &"), bg("claude"));
+        assert_eq!(launch("(claude -p a &); wait"), bg("claude"));
+        assert_eq!(launch("claude -p a & (wait)"), bg("claude"));
+        assert_eq!(launch("claude -p a & x=$(wait)"), bg("claude"));
+        // ...and not `wait -n`, which waits for only one of them.
+        assert_eq!(launch("claude -p a & claude -p b & wait -n"), bg("claude"));
+        assert_eq!(launch("echo wait & claude -p a &"), bg("claude"));
+        // Only a `wait` the shell itself runs: not one in a pipeline (a
+        // subshell), one put in the background, or a function's body.
+        for command in [
+            "claude -p a & wait | cat",
+            "claude -p a & cat | wait",
+            "claude -p a & wait &",
+            "claude -p a & wait && echo done &",
+            "claude -p a & f() { wait; }",
+            "claude -p a & function f { wait; }",
+            "claude -p a & function f() {\n  wait\n}",
+            // Any compound command can be a function's body.
+            "claude -p a & f() if true; then wait; fi",
+            "claude -p a & f() while false; do wait; done",
+        ] {
+            assert_eq!(launch(command), bg("claude"), "{command:?}");
+        }
+        // But one after a pipeline, or after the function's body, does.
+        assert_eq!(launch("claude -p a & echo | cat; wait"), fg("claude"));
+        assert_eq!(launch("claude -p a & f() { :; }; wait"), fg("claude"));
+        assert_eq!(launch("claude -p a & wait && echo done"), fg("claude"));
+    }
+
+    /// R59: a `case` pattern is text to match, not a command, whichever
+    /// pattern it is, and however it's written.
+    #[test]
+    fn case_patterns_arent_commands() {
+        for command in [
+            "case $a in claude) echo 1;; codex) echo 2;; esac",
+            "case $a in\n  claude) echo 1 ;;\n  codex)\n    echo 2\n    ;;\nesac",
+            "case $a in claude|codex) echo 1;; esac",
+            "case $a in x) echo;; claude | codex) echo 1;; esac",
+            "case $a in (claude) echo 1;; (codex) echo 2;; esac",
+            "case $a in a) echo 1;& codex) echo 2;;& claude) echo 3;; esac",
+            "case $a in\ncodex) ;;\nesac",
+            "case $a in esac; codex exec x",
+        ] {
+            let expected = command
+                .ends_with("codex exec x")
+                .then(|| fg("codex"))
+                .flatten();
+            assert_eq!(launch(command), expected, "{command:?}");
+        }
+        // What a pattern runs is still a command, and so is what follows.
+        assert_eq!(
+            launch("case $1 in a) echo;; b) claude -p hi;; esac"),
+            fg("claude")
+        );
+        assert_eq!(
+            launch("case $1 in a) (cd x; codex exec y) ;; esac"),
+            fg("codex")
+        );
+        assert_eq!(
+            launch("case $1 in a) echo;; esac; claude -p hi"),
+            fg("claude")
+        );
+        assert_eq!(
+            launch("x=$(case $1 in a) echo;; codex) echo;; esac); claude -p hi"),
+            fg("claude")
+        );
+        // `in` is only a `case`'s.
+        assert_eq!(
+            launch("for x in claude; do codex exec x; done"),
+            fg("codex")
+        );
+        assert_eq!(launch("echo case x in; codex exec x"), fg("codex"));
+    }
+
+    /// R60: in a substitution, a heredoc's body can end at its WORD followed
+    /// by the `)` (or backtick) that closes the substitution, as bash reads
+    /// it; the command goes on from there.
+    #[test]
+    fn a_heredoc_can_end_with_its_substitution() {
+        assert_eq!(
+            launch("x=$(cat <<EOF\nhi\nEOF)\nclaude -p \"$x\""),
+            fg("claude")
+        );
+        let commit = "git commit -m \"$(cat <<'EOF'\nFix it\nEOF)\" && codex exec x";
+        assert_eq!(launch(commit), fg("codex"));
+        assert_eq!(launch("y=`cat <<EOF\nhi\nEOF`; claude -p hi"), fg("claude"));
+        assert_eq!(
+            launch("z=\"$(cat <<-EOF\n\tclaude -p hi\n\tEOF)\"; codex exec x"),
+            fg("codex")
+        );
+        // The body up to there is still text...
+        assert_eq!(launch("x=$(cat <<EOF\nclaude -p hi\nEOF)"), None);
+        // ...and only its own closer ends it there: not outside a
+        // substitution, nor with anything else after WORD.
+        assert_eq!(launch("cat <<EOF\nEOF)\nclaude -p hi\nEOF"), None);
+        assert_eq!(launch("x=$(cat <<EOF\nEOF;\nclaude -p hi\nEOF\n)"), None);
+        assert_eq!(launch("x=`cat <<EOF\nEOF)\nclaude -p hi\nEOF\n`"), None);
     }
 
     #[test]

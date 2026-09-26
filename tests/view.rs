@@ -91,7 +91,7 @@ fn refuses_other_host_names() {
 }
 
 #[test]
-fn graph_and_timeline_endpoints() {
+fn the_graph_endpoint_carries_the_timeline() {
     let dir = tempfile::tempdir().unwrap();
     let port = start(dir.path(), 9);
     let host = format!("localhost:{port}");
@@ -102,11 +102,13 @@ fn graph_and_timeline_endpoints() {
     assert_eq!(graph["events"], 9);
     assert_eq!(graph["roots"][0], SESSION);
 
+    // R56: the graph now comes with its tree's timeline.
     let root = SESSION.replace(':', "%3A");
-    let (status, _, body) = get(port, &format!("/api/timeline?root={root}"), &host);
+    let (status, _, body) = get(port, &format!("/api/graph?root={root}"), &host);
     assert_eq!(status, 200);
-    let timeline: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let stops = timeline["stops"].as_array().unwrap();
+    let graph: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(graph["root"], SESSION);
+    let stops = graph["stops"].as_array().unwrap();
     assert_eq!(stops.len(), 9);
 
     // Step back to the moment the Explore agent started.
@@ -118,9 +120,9 @@ fn graph_and_timeline_endpoints() {
         past["nodes"][SESSION]["blocked"]["on"][0],
         format!("{SESSION}/a1f00d")
     );
+    assert!(past.get("stops").is_none(), "a step's is the same timeline");
 
     assert_eq!(get(port, "/api/graph?until=nope", &host).0, 404);
-    assert_eq!(get(port, "/api/timeline?root=x%3Anope", &host).0, 404);
 }
 
 #[test]
@@ -376,7 +378,6 @@ fn nothing_private_is_served_without_the_viewers_key() {
         for path in [
             "/api/graph",
             "/api/info",
-            "/api/timeline?root=x",
             "/api/stream",
             "/api/image.svg?root=x",
         ] {

@@ -125,11 +125,11 @@ test("a log isn't stored under its id, and its chunks are ciphertext", { skip, t
   await store.appendChunk(id, Buffer.byteLength(text), text);
 
   const stored = await doc.get();
-  assert.deepEqual(Object.keys(stored.data()).sort(), ["createdAt", "mac", "source"]);
+  assert.deepEqual(Object.keys(stored.data()).sort(), ["createdAt", "mac", "source", "stored"]);
   const chunks = await doc.collection("chunks").get();
   assert.equal(chunks.size, 2);
   for (const chunk of chunks.docs) {
-    assert.deepEqual(Object.keys(chunk.data()).sort(), ["e", "t"], "ciphertext, and when it was written");
+    assert.deepEqual(Object.keys(chunk.data()).sort(), ["e", "n", "t"], "ciphertext, its length, and when it was written");
     assert.ok(Math.abs(chunk.get("t").toMillis() - Date.now()) < 60_000);
     assert.ok(!Buffer.from(chunk.get("e")).includes(Buffer.from("recognisable")));
   }
@@ -171,24 +171,23 @@ test("trimming more chunks than a batch holds deletes them all", { skip, timeout
   const id = newId();
   await store.createLog(id, { source: "watch" }, "");
   const count = 620;
-  await Promise.all(Array.from({ length: count }, (_, i) => store.appendChunk(id, i * 10, `{"n":${i}}\n`)));
+  // (One at a time: each counts what the log stores, so appends at once
+  // wait for each other.)
+  for (let i = 0; i < count; i++) await store.appendChunk(id, i * 10, `{"n":${i}}\n`);
   // Newest first: a reader starting from the first chunk left never starts
   // partway through what's being deleted.
-  const { WriteBatch } = await import("firebase-admin/firestore");
-  const { delete: remove, commit } = WriteBatch.prototype;
+  const { Transaction } = await import("firebase-admin/firestore");
+  const { delete: remove } = Transaction.prototype;
   const batches = [];
-  WriteBatch.prototype.delete = function (ref) {
-    (this.keys ??= []).push(ref.id);
+  Transaction.prototype.delete = function (ref) {
+    if (!batches.includes(this.keys)) batches.push((this.keys = []));
+    this.keys.push(ref.id);
     return remove.call(this, ref);
-  };
-  WriteBatch.prototype.commit = function () {
-    batches.push(this.keys ?? []);
-    return commit.call(this);
   };
   try {
     assert.equal(await store.trimLog(id, 600 * 10), 600);
   } finally {
-    Object.assign(WriteBatch.prototype, { delete: remove, commit });
+    Object.assign(Transaction.prototype, { delete: remove });
   }
   const key = (i) => store.chunkKey(i * 10);
   assert.deepEqual(
@@ -200,6 +199,40 @@ test("trimming more chunks than a batch holds deletes them all", { skip, timeout
   );
   assert.equal(await store.firstChunkOffset(id), 6000);
   assert.equal((await store.readChunks(id, "")).first, store.chunkKey(6000));
+});
+
+// R44: a log's count of what it stores goes up with each chunk stored
+// (once, however often it's sent) and down with each one trimmed (once,
+// however many trims delete it at once), so it bounds what's stored.
+test("a log counts what it stores, and trimming gives it back", { skip, timeout: 60_000 }, async () => {
+  const { MAX_LOG_BYTES } = await import("../lib/config.ts");
+  const store = await import("../lib/store.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const { storageId } = await import("../lib/encryption.ts");
+  const id = newId();
+  const log = firestore().collection("logs").doc(storageId(id));
+  const stored = async () => (await log.get()).get("stored");
+
+  await store.createLog(id, { source: "watch" }, "AA\n");
+  assert.equal(await stored(), 3);
+  await store.appendChunk(id, 3, "BBBB\n");
+  await store.appendChunk(id, 3, "BBBB\n");
+  // Overlapping: counted in full.
+  await store.appendChunk(id, 4, "CCCCCC\n");
+  assert.equal(await stored(), 3 + 5 + 7);
+
+  await Promise.all([store.trimLog(id, 4), store.trimLog(id, 4)]);
+  assert.equal(await stored(), 7, "each chunk given back once");
+
+  // Full: refused, but for a retry of what's stored.
+  await log.update({ stored: MAX_LOG_BYTES - 1 });
+  await store.appendChunk(id, 11, "D\n").then(
+    () => assert.fail("stored past the limit"),
+    (err) => assert.ok(err instanceof store.LogFull, String(err)),
+  );
+  await store.appendChunk(id, 4, "CCCCCC\n");
+  assert.equal(await stored(), MAX_LOG_BYTES - 1);
+  assert.equal((await store.readChunks(id, "")).text, "CCCCCC\n");
 });
 
 // Chunks are stored one after another; a gap means the log's start was
@@ -343,6 +376,44 @@ test("the migration copies logs, then deletes the old copies", { skip, timeout: 
   assert.equal((await store.readChunks(a.id, "")).text, a.chunks.join("") + late, "and it still reads the same");
   assert.equal((await store.readChunks(b.id, "")).text, b.chunks.join("") + more);
   assert.match((await migrate(["--delete-old"])).stdout, /Deleted the old copies of 0 logs\./);
+});
+
+// R44: a log's count of what it stores is exact across the migration: what
+// the old site stored, and what the new one added before the copy (not
+// counted then: the log had no count), are counted once it's copied, once
+// each, however often it's copied; and trims give back what they delete.
+test("the size count is exact across the migration", { skip, timeout: 60_000 }, async () => {
+  const store = await import("../lib/store.ts");
+  const a = await oldLog();
+  const big = (c) => `${c.repeat(10 * 1024 - 1)}\n`;
+  // What its chunks hold, all of them (a read stops at a gap).
+  const total = async () => {
+    const { decryptChunk, storageId } = await import("../lib/encryption.ts");
+    const { firestore } = await import("../lib/firebase.ts");
+    const chunks = await firestore().collection("logs").doc(storageId(a.id)).collection("chunks").get();
+    return chunks.docs.reduce((sum, doc) => sum + decryptChunk(a.id, doc.id, doc.get("e")).length, 0);
+  };
+  let offset = a.offset;
+  for (const c of ["a", "b"]) {
+    await store.appendChunk(a.id, offset, big(c));
+    offset += big(c).length;
+  }
+  const trimAt = a.offset + big("a").length;
+
+  assert.equal((await migrate()).status, 0);
+  assert.equal((await copyOf(a.id)).get("stored"), a.offset + 20 * 1024);
+  assert.equal((await migrate()).status, 0);
+  assert.equal((await copyOf(a.id)).get("stored"), a.offset + 20 * 1024, "copied again, counted once");
+
+  await store.appendChunk(a.id, offset, big("c"));
+  assert.equal((await copyOf(a.id)).get("stored"), await total());
+  await store.trimLog(a.id, trimAt);
+  assert.equal(await total(), 20 * 1024);
+  assert.equal((await copyOf(a.id)).get("stored"), 20 * 1024, "what's still there");
+  // Copying again brings back the old copy's chunk that was trimmed (a
+  // gap before the rest, which reads past it), and counts it.
+  assert.equal((await migrate()).status, 0);
+  assert.equal((await copyOf(a.id)).get("stored"), await total(), "and copying again keeps it exact");
 });
 
 test("the migration changes nothing with the wrong key, or none", { skip, timeout: 60_000 }, async () => {
@@ -558,6 +629,56 @@ test("guesses that can't be counted just now wait a moment", { skip, timeout: 60
   await bucket.update({ at: Timestamp.fromMillis(Date.now() - 60_000) });
   const later = await store.takeUnlockAttempt(id, anAddress());
   assert.ok(later.wait > 60, `full a while: ${later.wait}s`);
+});
+
+// R52: every scrypt run counts against its address (2000 a window): a
+// password checked, right or wrong, and a new log's hashed. Checks at a log
+// count against the log and address together too (200 a window), so one
+// log can't use up the address's. Neither is given back.
+test("scrypt runs are counted per address, and per log and address", { skip, timeout: 60_000 }, async () => {
+  const { Timestamp } = await import("firebase-admin/firestore");
+  const { SCRYPT_CHECKS_PER_LOG_AND_ADDRESS, SCRYPT_RUNS_PER_ADDRESS, UNLOCK_WINDOW_MS } = await import(
+    "../lib/config.ts"
+  );
+  const { addressKey } = await import("../lib/crypto.ts");
+  const { storageId } = await import("../lib/encryption.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const store = await import("../lib/store.ts");
+
+  const address = anAddress();
+  const id = newId();
+  const buckets = firestore().collection("unlock-attempts");
+  const runs = buckets.doc(`scrypt-${addressKey(address)}`);
+  const checks = buckets.doc(`checks-${addressKey(address, storageId(id))}`);
+  const right = await store.takeUnlockAttempt(id, address);
+  await store.giveBackUnlockAttempt(right.reservation);
+  assert.equal((await runs.get()).get("n"), 1, "a right guess still ran scrypt");
+  assert.equal((await checks.get()).get("n"), 1, "at this log");
+  assert.deepEqual(await store.takeScryptRun(address), {});
+  assert.equal((await runs.get()).get("n"), 2);
+
+  // A log's checks, full: only that log waits.
+  const long = Timestamp.fromMillis(Date.now() - 60_000);
+  await checks.update({ n: SCRYPT_CHECKS_PER_LOG_AND_ADDRESS, at: long });
+  const full = await store.takeUnlockAttempt(id, address);
+  assert.ok(full.wait > 60, `this log waits for the window: ${full.wait}s`);
+  assert.ok("reservation" in (await store.takeUnlockAttempt(newId(), address)), "another log doesn't");
+  assert.deepEqual(await store.takeScryptRun(address), {}, "nor does creating a log");
+  assert.ok("reservation" in (await store.takeUnlockAttempt(id, anAddress())), "nor another address");
+
+  // The address's runs, full: everything from it waits.
+  await runs.update({ n: SCRYPT_RUNS_PER_ADDRESS, at: long });
+  const created = await store.takeScryptRun(address);
+  assert.ok(created.wait > 60, `a new log's password waits for the window: ${created.wait}s`);
+  const guess = await store.takeUnlockAttempt(newId(), address);
+  assert.ok(guess.wait > 60, `so does a guess at any log: ${guess.wait}s`);
+  assert.equal((await runs.get()).get("n"), SCRYPT_RUNS_PER_ADDRESS, "refused runs aren't counted");
+  assert.deepEqual(await store.takeScryptRun(anAddress()), {}, "other addresses aren't affected");
+  assert.deepEqual(await store.takeScryptRun(null), {}, "without an address, not limited");
+
+  await runs.update({ since: Timestamp.fromMillis(Date.now() - UNLOCK_WINDOW_MS - 1000) });
+  assert.deepEqual(await store.takeScryptRun(address), {});
+  assert.equal((await runs.get()).get("n"), 1);
 });
 
 // Metadata can go (a log not in use is deleted): each instance's cache of it
