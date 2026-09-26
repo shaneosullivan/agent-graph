@@ -501,8 +501,12 @@ struct Level {
     double: bool,
     /// How many of `words` are keywords before the command's first word.
     lead: usize,
-    /// `case`s open at this level, whose patterns end with a `)` of their own.
+    /// `case`s open at this level.
     cases: usize,
+    /// While a `case` pattern is read (after `in`, or a branch's `;;`), where
+    /// it starts in `words`: it's text to match, not a command, and ends
+    /// with a `)` of its own.
+    pattern: Option<usize>,
     /// `${`s open in `word`.
     braces: usize,
     /// Where this level's commands start in the output.
@@ -524,7 +528,18 @@ impl Level {
             return;
         }
         let word = std::mem::take(&mut self.word);
-        if self.lead == self.words.len() && self.opened != Opened::Array {
+        self.in_word = false;
+        // `esac` where a pattern would start ends the `case`; any other
+        // word there is (part of) the pattern.
+        let ends_case = self.pattern == Some(self.words.len()) && word == "esac";
+        if self.pattern.is_some() && !ends_case {
+            self.words.push(word);
+            return;
+        }
+        if ends_case {
+            self.pattern = None;
+        }
+        if (self.lead == self.words.len() || ends_case) && self.opened != Opened::Array {
             // `function NAME` comes before a function's body, as keywords do.
             let name = self.lead > 0 && self.words[self.lead - 1] == "function";
             match word.as_str() {
@@ -544,12 +559,25 @@ impl Level {
                 self.lead += 1;
             }
         }
+        // `case WORD in`: its first pattern follows.
+        let patterns = word == "in"
+            && self.words.len() == self.lead + 2
+            && self.words[self.lead] == "case"
+            && self.opened != Opened::Array;
         self.words.push(word);
-        self.in_word = false;
+        if patterns {
+            self.pattern = Some(self.words.len());
+        }
     }
 
     fn end_command(&mut self, out: &mut Vec<Vec<String>>) {
         self.end_word();
+        // What's read of a pattern isn't a command, and the pattern goes on
+        // (a newline can come before it, and `|` between its alternatives).
+        if let Some(start) = self.pattern {
+            self.words.truncate(start);
+            self.pattern = Some(0);
+        }
         if self.opened == Opened::Array {
             self.words.clear();
         } else if !self.words.is_empty() {
@@ -825,25 +853,36 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                 skip_arithmetic(&mut chars, &mut cur.word);
                 cur.in_word = true;
             }
+            // A `case` pattern can start with a `(` of its own.
+            '(' if !cur.in_word && cur.pattern == Some(cur.words.len()) => {}
             '(' if cur.in_word && assigns_array(&cur.word) => {
                 open(&mut cur, &mut around, Opened::Array, out.len());
             }
             '(' => open(&mut cur, &mut around, Opened::Group, out.len()),
             ')' => {
                 cur.end_word();
-                // Unless it ends a `case` pattern.
-                if cur.cases == 0
-                    && matches!(
-                        cur.opened,
-                        Opened::Group | Opened::Substitution | Opened::Array
-                    )
-                {
+                if let Some(start) = cur.pattern.take() {
+                    // The end of a `case` pattern: its commands follow.
+                    cur.words.truncate(start);
+                    cur.end_list(&mut out);
+                } else if matches!(
+                    cur.opened,
+                    Opened::Group | Opened::Substitution | Opened::Array
+                ) {
                     close(&mut cur, &mut around, &mut out, &mut jobs);
                 } else {
                     cur.end_list(&mut out);
                 }
             }
-            ';' => cur.end_list(&mut out),
+            ';' => {
+                // `;;`, `;&` or `;;&` ends a `case` branch: another pattern
+                // (or `esac`) follows.
+                let branch = chars.next_if_eq(&';').is_some() | chars.next_if_eq(&'&').is_some();
+                cur.end_list(&mut out);
+                if branch && cur.cases > 0 {
+                    cur.pattern = Some(0);
+                }
+            }
             '|' => {
                 chars.next_if_eq(&'|');
                 cur.end_command(&mut out);
@@ -1430,6 +1469,51 @@ mod tests {
         // ...and not `wait -n`, which waits for only one of them.
         assert_eq!(launch("claude -p a & claude -p b & wait -n"), bg("claude"));
         assert_eq!(launch("echo wait & claude -p a &"), bg("claude"));
+    }
+
+    /// R59: a `case` pattern is text to match, not a command, whichever
+    /// pattern it is, and however it's written.
+    #[test]
+    fn case_patterns_arent_commands() {
+        for command in [
+            "case $a in claude) echo 1;; codex) echo 2;; esac",
+            "case $a in\n  claude) echo 1 ;;\n  codex)\n    echo 2\n    ;;\nesac",
+            "case $a in claude|codex) echo 1;; esac",
+            "case $a in x) echo;; claude | codex) echo 1;; esac",
+            "case $a in (claude) echo 1;; (codex) echo 2;; esac",
+            "case $a in a) echo 1;& codex) echo 2;;& claude) echo 3;; esac",
+            "case $a in\ncodex) ;;\nesac",
+            "case $a in esac; codex exec x",
+        ] {
+            let expected = command
+                .ends_with("codex exec x")
+                .then(|| fg("codex"))
+                .flatten();
+            assert_eq!(launch(command), expected, "{command:?}");
+        }
+        // What a pattern runs is still a command, and so is what follows.
+        assert_eq!(
+            launch("case $1 in a) echo;; b) claude -p hi;; esac"),
+            fg("claude")
+        );
+        assert_eq!(
+            launch("case $1 in a) (cd x; codex exec y) ;; esac"),
+            fg("codex")
+        );
+        assert_eq!(
+            launch("case $1 in a) echo;; esac; claude -p hi"),
+            fg("claude")
+        );
+        assert_eq!(
+            launch("x=$(case $1 in a) echo;; codex) echo;; esac); claude -p hi"),
+            fg("claude")
+        );
+        // `in` is only a `case`'s.
+        assert_eq!(
+            launch("for x in claude; do codex exec x; done"),
+            fg("codex")
+        );
+        assert_eq!(launch("echo case x in; codex exec x"), fg("codex"));
     }
 
     #[test]
