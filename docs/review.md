@@ -33,8 +33,8 @@ Status is updated as each is done.
 ### R4. A foreground spawn whose tool call fails stays "waiting" forever
 - **Where:** `src/reducer.rs`
 - **Problem:** A spawn's wait only closes on `spawn.returned`, which comes from `PostToolUse`, which Claude Code only fires on success. A failed or interrupted Agent/Bash call leaves the session "1 starting" forever, even after it goes idle or ends, and hides real staleness.
-- **Fix:** close a node's open spawn waits when it goes idle or ends; ignore waits of finished nodes.
-- **Status:** open
+- **Fix:** when a node goes idle or ends (including agents canceled with their session), every foreground call it made is over: its waits close and the requests can't be paired with a later child. A finished node is never blocked, and waiting on a session no longer counts what its finished agents were waiting for.
+- **Status:** fixed. Tests: `a_spawn_that_never_returns_stops_blocking_when_the_turn_ends`, `an_ended_session_is_never_blocked`, `a_dead_request_isnt_paired_with_a_later_child`, `a_canceled_agents_request_isnt_paired_after_a_resume`, `a_finished_agents_old_wait_isnt_counted` (tests/sessions.rs). Reviewed.
 
 ### R5. `install` overwrites a user's own command or skill file it can't read as UTF-8
 - **Where:** `src/cli.rs` (slash-command plan)

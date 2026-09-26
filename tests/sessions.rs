@@ -441,3 +441,186 @@ fn drawing_a_graph_with_a_loop_finishes() {
         )
     });
 }
+
+fn agent_call(session: &str, pre: bool, id: &str, agent_type: &str) -> Value {
+    hook(
+        session,
+        if pre { "PreToolUse" } else { "PostToolUse" },
+        json!({
+            "tool_name": "Agent",
+            "tool_use_id": id,
+            "tool_input": { "subagent_type": agent_type, "description": "Look around" },
+        }),
+    )
+}
+
+/// R4: Claude Code only reports a tool call's return when it succeeds. A
+/// failed or interrupted spawn must stop counting once the turn is over.
+#[test]
+fn a_spawn_that_never_returns_stops_blocking_when_the_turn_ends() {
+    let asked = claude(
+        0,
+        &[
+            hook("aaaa", "SessionStart", json!({})),
+            hook("aaaa", "UserPromptSubmit", json!({})),
+            // A bad agent type: no SubagentStart, no PostToolUse.
+            agent_call("aaaa", true, "toolu_bad", "Nope"),
+            bash("aaaa", true, "toolu_sh", "codex exec 'review'"),
+        ],
+    );
+    let g = graph(vec![asked.clone()]);
+    assert_eq!(g.nodes[A].blocked.as_ref().unwrap().starting, 2);
+
+    // The turn ends, and a new one starts and goes quiet for 45 minutes.
+    let later = vec![
+        claude(10, &[hook("aaaa", "Stop", json!({}))]),
+        claude(20, &[hook("aaaa", "UserPromptSubmit", json!({}))]),
+    ];
+    let events: Vec<Envelope> = [vec![asked.clone()], later.clone()].concat().concat();
+    let g = agent_graph::reducer::reduce(
+        events,
+        &agent_graph::reducer::Options {
+            now: t0() + Duration::from_secs(20 + 45 * 60),
+            stale_after: Duration::from_secs(30 * 60),
+        },
+    );
+    assert!(g.nodes[A].blocked.is_none(), "{:?}", g.nodes[A].blocked);
+    assert!(g.nodes[A].stale, "a quiet working session is flagged again");
+}
+
+/// R4: an ended session isn't waiting on anything.
+#[test]
+fn an_ended_session_is_never_blocked() {
+    let g = graph(vec![claude(
+        0,
+        &[
+            hook("aaaa", "SessionStart", json!({})),
+            agent_call("aaaa", true, "toolu_bad", "Nope"),
+            hook("aaaa", "SessionEnd", json!({})),
+        ],
+    )]);
+    assert_eq!(g.nodes[A].state, State::Completed);
+    assert!(g.nodes[A].blocked.is_none());
+}
+
+/// R4: a request whose call failed is over when the turn ends, so a later
+/// child (of the same kind, for the same program) pairs with the live one.
+#[test]
+fn a_dead_request_isnt_paired_with_a_later_child() {
+    // An agent of the same type.
+    let g = graph(vec![claude(
+        0,
+        &[
+            hook("aaaa", "SessionStart", json!({})),
+            hook("aaaa", "UserPromptSubmit", json!({})),
+            agent_call("aaaa", true, "toolu_dead", "Explore"),
+            hook("aaaa", "Stop", json!({})),
+            hook("aaaa", "UserPromptSubmit", json!({})),
+            agent_call("aaaa", true, "toolu_live", "Explore"),
+            hook(
+                "aaaa",
+                "SubagentStart",
+                json!({"agent_id": "ag2", "agent_type": "Explore"}),
+            ),
+        ],
+    )]);
+    let child = format!("{A}/ag2");
+    assert_eq!(g.nodes[&child].spawned_by.as_deref(), Some("toolu_live"));
+    assert_eq!(g.nodes[A].blocked.as_ref().unwrap().on, [child]);
+
+    // A session started from the shell, for the same program.
+    let g = graph(vec![
+        claude(
+            0,
+            &[
+                hook("aaaa", "SessionStart", json!({})),
+                hook("aaaa", "UserPromptSubmit", json!({})),
+                bash("aaaa", true, "toolu_dead", "claude -p 'first'"),
+                hook("aaaa", "Stop", json!({})),
+                hook("aaaa", "UserPromptSubmit", json!({})),
+                bash("aaaa", true, "toolu_live", "claude -p 'second'"),
+            ],
+        ),
+        vec![started(10, B, Some(A), None, &[])],
+    ]);
+    assert_eq!(g.nodes[B].spawned_by.as_deref(), Some("toolu_live"));
+    let blocked = g.nodes[A].blocked.as_ref().unwrap();
+    assert_eq!(
+        (blocked.on.as_slice(), blocked.starting),
+        ([B.to_string()].as_slice(), 0)
+    );
+}
+
+/// R4: when a session ends, the agents it cancels have no calls running
+/// either; a request one of them made isn't paired after a resume.
+#[test]
+fn a_canceled_agents_request_isnt_paired_after_a_resume() {
+    let mut in_agent = bash("aaaa", true, "toolu_agent", "claude -p 'from the agent'");
+    in_agent["agent_id"] = json!("agx");
+    let g = graph(vec![
+        claude(
+            0,
+            &[
+                hook("aaaa", "SessionStart", json!({})),
+                hook(
+                    "aaaa",
+                    "SubagentStart",
+                    json!({"agent_id": "agx", "agent_type": "general-purpose"}),
+                ),
+                in_agent,
+                hook("aaaa", "SessionEnd", json!({})),
+                hook("aaaa", "SessionStart", json!({"source": "resume"})),
+                hook("aaaa", "UserPromptSubmit", json!({})),
+                bash("aaaa", true, "toolu_live", "claude -p 'from the session'"),
+            ],
+        ),
+        vec![started(10, B, Some(A), None, &[])],
+    ]);
+    assert_eq!(g.nodes[&format!("{A}/agx")].state, State::Canceled);
+    assert_eq!(g.nodes[B].spawned_by.as_deref(), Some("toolu_live"));
+    assert_eq!(g.nodes[B].parent.as_deref(), Some(A));
+}
+
+/// R4: waiting on a session means waiting on its unfinished work, not on
+/// what its finished agents were once waiting for.
+#[test]
+fn a_finished_agents_old_wait_isnt_counted() {
+    const Z: &str = "claude-code:zzzz";
+    let agent = format!("{B}/done");
+    let g = graph(vec![
+        vec![started(0, A, None, None, &[])],
+        vec![started(0, B, None, None, &[])],
+        vec![started(0, Z, None, None, &[])],
+        vec![event(
+            1,
+            Z,
+            Payload::parse(
+                "task.upserted",
+                &json!({"id": "1", "text": "Lots", "status": "pending"}),
+            ),
+        )],
+        vec![event(
+            1,
+            &agent,
+            Payload::parse("agent.spawned", &json!({"agent_type": "Explore"})),
+        )],
+        vec![event(
+            2,
+            &agent,
+            Payload::parse("wait.started", &json!({"wait_id": "w1", "on": Z})),
+        )],
+        vec![event(
+            3,
+            &agent,
+            Payload::parse("agent.finished", &json!({"status": "completed"})),
+        )],
+        vec![event(
+            4,
+            A,
+            Payload::parse("wait.started", &json!({"wait_id": "w2", "on": B})),
+        )],
+    ]);
+    let blocked = g.nodes[A].blocked.as_ref().unwrap();
+    assert_eq!(blocked.on, [B]);
+    assert_eq!(blocked.open_tasks, 0, "Z's task isn't holding A up");
+}

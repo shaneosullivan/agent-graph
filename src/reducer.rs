@@ -266,6 +266,7 @@ impl Reducer {
                 let id = e.node.clone();
                 self.close_waits_on(&id, &e.ts, true);
                 self.cancel_unfinished_descendants(&id, &e.ts);
+                self.calls_over(&id, &e.ts);
             }
             Payload::AgentSpawned(d) => {
                 node.agent_type = d.agent_type.or(node.agent_type.take());
@@ -290,8 +291,13 @@ impl Reducer {
                 // Not spawn waits: which request this agent answers may still
                 // be a guess, and `spawn.returned` will close the right one.
                 self.close_waits_on(&id, &e.ts, false);
+                self.calls_over(&id, &e.ts);
             }
             Payload::Status(d) => {
+                if d.state == State::Idle || d.state.is_terminal() {
+                    self.calls_over(&e.node, &e.ts);
+                }
+                let node = self.nodes.get_mut(&e.node).expect("ensured above");
                 node.state = d.state;
                 if d.state == State::InputRequired {
                     node.attention = d.summary;
@@ -696,6 +702,23 @@ impl Reducer {
         }
     }
 
+    /// `id`'s turn is over (it's idle) or it has ended, so every call it made
+    /// to start a child in the foreground has returned, whether or not the
+    /// provider said so: Claude Code only reports calls that succeed. Their
+    /// waits close, and they can't be paired with a later child.
+    fn calls_over(&mut self, id: &str, ts: &str) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        for wait in node.waits.iter_mut().filter(|w| w.open && w.spawn) {
+            wait.open = false;
+            wait.ended_at = Some(ts.to_string());
+        }
+        for spawn in node.spawns.iter_mut().filter(|s| !s.background) {
+            spawn.returned = true;
+        }
+    }
+
     fn close_waits_on(&mut self, target: &str, ts: &str, spawn_waits_too: bool) {
         for node in self.nodes.values_mut() {
             for wait in node.waits.iter_mut().filter(|w| {
@@ -728,6 +751,7 @@ impl Reducer {
                 node.ended_at = Some(ts.to_string());
             }
             queue.extend(node.children.iter().cloned());
+            self.calls_over(&child, ts);
         }
     }
 
@@ -767,10 +791,11 @@ impl Reducer {
             node.stale = node.state == State::Working && !waiting && quiet_for > opts.stale_after;
         }
 
+        // A node that has finished isn't waiting on anything.
         let blocked: Vec<(String, Blocked)> = self
             .nodes
             .values()
-            .filter(|n| n.waits.iter().any(active))
+            .filter(|n| !n.state.is_terminal() && n.waits.iter().any(active))
             .map(|n| (n.id.clone(), self.blocked(n, &active)))
             .collect();
         for (id, b) in blocked {
@@ -820,12 +845,15 @@ impl Reducer {
                 continue;
             };
             queue.extend(n.children.iter().cloned());
-            queue.extend(
-                n.waits
-                    .iter()
-                    .filter(|w| active(w))
-                    .filter_map(|w| w.on.clone()),
-            );
+            // A node that has finished isn't waiting on anything.
+            if !n.state.is_terminal() {
+                queue.extend(
+                    n.waits
+                        .iter()
+                        .filter(|w| active(w))
+                        .filter_map(|w| w.on.clone()),
+                );
+            }
         }
         let reached: Vec<&Node> = seen.iter().filter_map(|id| self.nodes.get(id)).collect();
         Blocked {

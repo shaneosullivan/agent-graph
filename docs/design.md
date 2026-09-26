@@ -108,7 +108,7 @@ Many sessions write at the same time. If they all rewrite one `state.json`, two 
 | `tasks.updated` | `items: [{id, text, active_text?, status}]` | A todo tool sent its full list. Replaces the node's list |
 | `task.upserted` | `id`, `text?`, `active_text?`, `status?` | An incremental task tool created or changed one task |
 | `task.deleted` | `id` | A task was removed |
-| `spawn.requested` | `call_id`, `kind` (agent/session), `agent_type?`, `purpose?`, `background` | A node asked for a child to start. Unless `background`, the node is blocked until the matching `spawn.returned` |
+| `spawn.requested` | `call_id`, `kind` (agent/session), `agent_type?`, `purpose?`, `background` | A node asked for a child to start. Unless `background`, the node is blocked until the matching `spawn.returned`, or until it goes idle or ends (§4) |
 | `spawn.returned` | `call_id`, `child?`, `outcome?` | The spawning call returned. `child`, when the provider reports it, is authoritative |
 | `wait.started` | `wait_id`, `on` (node id), `reason?` | A node blocks on another node for some other reason |
 | `wait.ended` | `wait_id`, `outcome?` | That block clears |
@@ -150,8 +150,10 @@ It works out these values:
   - Until then (a foreground agent only returns when it finishes), the reducer guesses: a new child is paired with the oldest unpaired request in the same session, preferring one with the same agent type. The guess is corrected when the call returns.
   - A paired child takes the request's `purpose` and `background` flag, and is moved under the node that asked for it. That's how an agent started by another agent ends up nested correctly, even though the provider only reports the session as its parent.
   - When a correction takes a child away from a request it had been guessed for, that child is paired again with whichever request is left. Without this, three parallel agents that start in a different order than requested leave one running agent unmatched.
-- **Waits-on edges.** Every open wait: foreground spawns (open from `spawn.requested` until `spawn.returned`, pointing at the child once paired) and explicit `wait.started` events.
-  - A spawn's wait ends only when its call returns. An agent finishing doesn't end it, because which request that agent answers may still be a guess; ending it then would close the wrong request's wait.
+- **Waits-on edges.** Every open wait: foreground spawns (open from `spawn.requested` until the call is over, pointing at the child once paired) and explicit `wait.started` events.
+  - A spawn's wait ends when its call returns. The child finishing doesn't end it, because which request that child answers may still be a guess; ending it then would close the wrong request's wait.
+  - Claude Code only reports a call's return when it succeeds. So a node going idle (its turn is over) or ending (including an agent canceled with its session) also ends every foreground call it made: their waits close, and they can't be paired with a later child.
+  - A node that has finished isn't waiting on anything.
   - Explicit waits end with `wait.ended`, or when their target finishes.
   - A wait whose target has finished never counts as blocking, even if the event that formally ends it is missing.
 - **Deadlock.** If following a node's waits (and the children of what it waits on) leads back to the node itself, nothing in that loop can finish: `blocked.cycle` is set, and every view shows it.
@@ -273,7 +275,7 @@ Claude Code migrated from `TodoWrite` to `TaskCreate`/`TaskUpdate`, but headless
 
 1. A's `PreToolUse(Bash)` fires. The command starts a known agent CLI, so we emit `spawn.requested` with `kind: session`. A is now waiting on a session that's "starting".
 2. The child starts. Its own `SessionStart` hook links it to A (§6), and the reducer pairs it with A's oldest unpaired session request made before it started, preferring one for the same program (`claude` for a `claude-code` session). A is now waiting on it.
-3. A's `PostToolUse(Bash)` fires when the child exits. That's the `spawn.returned`, and the wait ends.
+3. A's `PostToolUse(Bash)` fires when the child exits. That's the `spawn.returned`, and the wait ends. (If the command fails, `PostToolUse` doesn't fire; the wait ends when A's turn does.)
 
 How commands are recognised (`adapter/shell.rs`):
 - The command is split into simple commands at `;`, `&&`, `||`, `|`, `&`, newlines, parentheses and command substitutions (even inside double quotes), but not inside quotes. Each one's program is found past `NAME=value` assignments, shell keywords, and wrappers like `env`, `nohup`, `timeout 600` or `npx`.
