@@ -33,7 +33,7 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 | Request | What it does |
 |---|---|
 | `POST /api/logs` | Creates a log from the first chunk. Optional headers: `X-Agent-Graph-Source: watch\|paste\|upload`, `X-Agent-Graph-Password: <base64url of the UTF-8 password>`. Replies `201 {id, url, writeToken}`. |
-| `POST /api/logs/{id}/append?offset=<bytes so far>` | Appends a chunk. Requires `Authorization: Bearer <writeToken>`. Replies `204`. |
+| `POST /api/logs/{id}/append?offset=<bytes so far>` | Appends a chunk. Requires `Authorization: Bearer <writeToken>`. Replies `204`, also for the same bytes again (a retry); `409` if other bytes are already stored at that offset. |
 | `GET /api/logs/{id}/content?after=<chunk key>` | Chunks after `after`, joined. `X-Last-Chunk` is the next cursor; `X-More: 1` means fetch again now. Protected logs need the unlock cookie. |
 | `POST /api/logs/{id}/unlock` | `{"password": "…"}`. Sets an HttpOnly cookie for this log. |
 
@@ -47,7 +47,7 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 - The size is checked from the header before the body is read.
 - The key is checked by recomputing an HMAC: no database read.
 - The body is never parsed.
-- Storage is a single write of a new document. Each chunk is its own document, `logs/{id}/chunks/{offset}`, zero-padded so ids sort in order, so the cost doesn't grow with the log and a retried chunk just rewrites itself.
+- Storage is a single write of a new document. Each chunk is its own document, `logs/{id}/chunks/{offset}`, zero-padded so ids sort in order, so the cost doesn't grow with the log. A chunk never changes once stored: a retry of the same bytes is accepted, and different bytes at a stored offset are refused (409).
 
 **Reading:**
 - Each viewer polls every 3 s while events are arriving, backing off to 15 s when quiet or when the tab is hidden.

@@ -75,8 +75,37 @@ test("updates need the key the log was created with", async () => {
 test("retrying a chunk doesn't duplicate it", async () => {
   const log = await create(line(1));
   const offset = line(1).length;
-  await append(log.id, offset, line(2), log.writeToken);
-  await append(log.id, offset, line(2), log.writeToken);
+  assert.equal((await append(log.id, offset, line(2), log.writeToken)).status, 204);
+  assert.equal((await append(log.id, offset, line(2), log.writeToken)).status, 204, "the same bytes again");
+  assert.equal((await content(log.id)).text, line(1) + line(2));
+});
+
+// R16: a viewer that has read a chunk never reads it again, so a chunk must
+// never change: different bytes at an offset already stored are refused,
+// whichever copy arrives first.
+test("a chunk is never replaced with different bytes", async () => {
+  const log = await create(line(1));
+  const offset = line(1).length;
+  assert.equal((await append(log.id, offset, line(2), log.writeToken)).status, 204);
+  assert.equal((await append(log.id, offset, line(2) + line(3), log.writeToken)).status, 409, "bigger");
+  assert.equal((await append(log.id, offset, line(9), log.writeToken)).status, 409, "other bytes");
+  assert.equal((await content(log.id)).text, line(1) + line(2));
+
+  // The first copy wins even when it's the bigger one (a late original).
+  const other = await create(line(1));
+  assert.equal((await append(other.id, offset, line(2) + line(3), other.writeToken)).status, 204);
+  assert.equal((await append(other.id, offset, line(2), other.writeToken)).status, 409);
+  assert.equal((await content(other.id)).text, line(1) + line(2) + line(3));
+});
+
+// R16: a late original racing its retry: every copy is accepted, once.
+test("the same chunk sent several times at once is stored once", async () => {
+  const log = await create(line(1));
+  const offset = line(1).length;
+  const statuses = await Promise.all(
+    Array.from({ length: 6 }, () => append(log.id, offset, line(2), log.writeToken).then((r) => r.status)),
+  );
+  assert.deepEqual(statuses, Array(6).fill(204));
   assert.equal((await content(log.id)).text, line(1) + line(2));
 });
 
@@ -163,5 +192,32 @@ test(
 
     // The site still reads it back.
     assert.equal((await content(log.id)).text, event(1) + event(2));
+  },
+);
+
+// R16: a stored chunk that can't be decrypted is refused like any other
+// mismatch, so the client stops, rather than a 500 it would retry for good.
+test(
+  "a stored chunk that can't be decrypted isn't replaced, and says so",
+  { skip: !process.env.FIRESTORE_EMULATOR_HOST && "writes the database directly, so needs the emulator" },
+  async () => {
+    const log = await create(line(1));
+    const offset = line(1).length;
+    assert.equal((await append(log.id, offset, line(2), log.writeToken)).status, 204);
+
+    // Damage it, past the site (the emulator's admin token).
+    const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "demo-agent-graph";
+    const key = String(offset).padStart(15, "0");
+    const res = await fetch(
+      `http://${process.env.FIRESTORE_EMULATOR_HOST}/v1/projects/${project}/databases/(default)/documents/logs/${log.id}/chunks/${key}?updateMask.fieldPaths=e`,
+      {
+        method: "PATCH",
+        headers: { Authorization: "Bearer owner", "Content-Type": "application/json" },
+        body: JSON.stringify({ fields: { e: { bytesValue: Buffer.from("not a chunk").toString("base64") } } }),
+      },
+    );
+    assert.equal(res.status, 200, await res.text());
+
+    assert.equal((await append(log.id, offset, line(2), log.writeToken)).status, 409);
   },
 );

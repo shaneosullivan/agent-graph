@@ -17,8 +17,10 @@ import { firestore } from "./firebase";
  * Each chunk is a separate document whose id is its byte offset in the log,
  * zero-padded so ids sort in log order. Appending is therefore one write of a
  * new document: nothing is read, and nothing already stored is rewritten, so
- * the cost doesn't grow with the log. A retried chunk rewrites the same
- * document. Readers page through chunks in id order.
+ * the cost doesn't grow with the log. Readers page through chunks in id
+ * order, and never read one twice, so a chunk never changes: a retry of the
+ * same bytes is accepted, and different bytes at an offset already stored
+ * are refused (checking costs a read, only then).
  */
 
 export type Meta = {
@@ -57,14 +59,39 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   }
 }
 
-/** Encrypts and stores one chunk at `offset`. One write, no reads. */
+export class ChunkTaken extends Error {}
+
+/**
+ * Encrypts and stores one chunk at `offset`. One write, no reads, unless a
+ * chunk is already stored there: then it's read, and anything but the same
+ * bytes (or one that can't be decrypted) is refused with `ChunkTaken`.
+ */
 export async function appendChunk(id: string, offset: number, text: string): Promise<void> {
   const key = chunkKey(offset);
-  await logs()
-    .doc(id)
-    .collection("chunks")
-    .doc(key)
-    .set({ e: encryptChunk(id, key, text) });
+  const doc = logs().doc(id).collection("chunks").doc(key);
+  try {
+    await doc.create({ e: encryptChunk(id, key, text) });
+  } catch (err) {
+    // gRPC ALREADY_EXISTS
+    if ((err as { code?: number }).code !== 6) throw err;
+    const stored = (await doc.get()).get("e");
+    if (!stored || !holds(id, key, stored, text)) throw new ChunkTaken(key);
+  }
+}
+
+/**
+ * Whether a stored chunk holds `text`. One that can't be decrypted doesn't:
+ * refusing it tells the client to stop, where an error would have it retry
+ * for good.
+ */
+function holds(id: string, key: string, stored: Uint8Array, text: string): boolean {
+  try {
+    return decryptChunk(id, key, stored) === text;
+  } catch {
+    // The log's id is what lets people read it, so it isn't logged.
+    console.error(`A stored chunk (${key}) couldn't be decrypted; refused the append there.`);
+    return false;
+  }
 }
 
 // Metadata never changes after creation, so each server instance keeps what

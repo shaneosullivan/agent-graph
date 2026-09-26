@@ -480,7 +480,7 @@ Viewers can step through the log exactly as they can locally. Each log can have 
    - verifies the key by recomputing an HMAC of the id, with no database read;
    - stores the raw body, never parsed, as one new Firestore document, `logs/{id}/chunks/{offset}`.
 
-   Nothing already stored is read or rewritten, so an append costs the same however big the log is. A retried chunk lands on the same document, and the viewer drops any event it has already seen.
+   Nothing already stored is rewritten, and nothing is read unless the offset is already taken, so an append costs the same however big the log is. A failed chunk is retried with exactly the same bytes, whatever has arrived since; the site accepts the same bytes again, but refuses (`409`) different ones at an offset it already has, since a viewer never reads a chunk twice. The viewer drops any event it has already seen.
 4. Viewers read `GET /api/logs/{id}/content?after=<last chunk key>`. For a live log they poll every 3 s while events are arriving, backing off to 15 s when quiet or when the tab is hidden.
 
 **Who can do what:**

@@ -449,3 +449,89 @@ fn a_session_that_leaves_the_shared_tree_stops_being_shared() {
         "kept sharing the moved session: {sent}"
     );
 }
+
+/// Like `mock_site`, but each append waits for the test to say what status
+/// to reply with, so the test can change the log before the reply.
+fn scripted_site() -> (u16, mpsc::Receiver<Request>, mpsc::Sender<u16>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    let (reply_tx, reply_rx) = mpsc::channel::<u16>();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let request = read_request(&stream);
+            let reply = if request.path == "/api/logs" {
+                let body = r#"{"id":"abc123def456","url":"https://site.example/l/abc123def456","writeToken":"the-key"}"#;
+                if tx.send(request).is_err() {
+                    return;
+                }
+                format!(
+                    "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            } else {
+                if tx.send(request).is_err() {
+                    return;
+                }
+                let Ok(status) = reply_rx.recv() else { return };
+                format!(
+                    "HTTP/1.1 {status} Whatever\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            };
+            let _ = (&stream).write_all(reply.as_bytes());
+        }
+    });
+    (port, rx, reply_tx)
+}
+
+/// R16: a failed append is retried with exactly the same bytes, even when
+/// new lines have arrived meanwhile; they follow in the next chunk. (A
+/// bigger retry at the same offset would be missed by viewers that had the
+/// first, and lost if the first landed late.)
+#[test]
+fn a_retried_append_sends_the_same_bytes() {
+    let (port, requests, replies) = scripted_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let file = events.join("x-s.jsonl");
+    let first = line(1);
+    std::fs::write(&file, &first).unwrap();
+    let _running = Stopped(
+        Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+            .args(["watch-remote", "--password=", "--url"])
+            .arg(format!("http://127.0.0.1:{port}"))
+            .env("AGENT_GRAPH_HOME", home.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let wait = Duration::from_secs(10);
+    assert_eq!(requests.recv_timeout(wait).unwrap().body, first);
+
+    agent_graph::store::append(&file, line(2).as_bytes()).unwrap();
+    let tried = requests.recv_timeout(wait).unwrap();
+    assert_eq!(tried.body, line(2));
+    // More arrives before the site's reply, which is a failure. (Two lines,
+    // so the chunk after the retry can't be the retry's length by chance.)
+    agent_graph::store::append(&file, (line(3) + &line(4)).as_bytes()).unwrap();
+    replies.send(500).unwrap();
+
+    let retried = requests.recv_timeout(wait).unwrap();
+    assert_eq!(retried.path, tried.path, "the same offset");
+    assert_eq!(retried.body, tried.body, "the same bytes");
+    replies.send(204).unwrap();
+
+    let next = requests.recv_timeout(wait).unwrap();
+    assert_eq!(
+        next.path,
+        format!(
+            "/api/logs/abc123def456/append?offset={}",
+            first.len() + line(2).len()
+        )
+    );
+    assert_eq!(next.body, line(3) + &line(4));
+    replies.send(204).unwrap();
+}

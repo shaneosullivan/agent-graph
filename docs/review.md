@@ -108,7 +108,7 @@ Status is updated as each is done.
 - **Where:** `src/remote.rs`, `site/lib/store.ts`, `site/app/api/logs/[id]/append/route.ts`
 - **Problem:** A retry resends a bigger body at the same offset and the site overwrites the chunk; viewers past that chunk never see the extra lines, and a delayed original request can overwrite the retry, losing them for good.
 - **Fix:** the client resends exactly the same bytes; the site never overwrites a chunk with different content.
-- **Status:** open
+- **Status:** fixed. A failed chunk is retried with exactly the same bytes, whatever has arrived since. The site creates each chunk (never sets it): the same bytes again are accepted, and other bytes at an offset it already has, or a stored chunk it can't decrypt, are refused with `409`, which the client treats as fatal. Tests: `a_retried_append_sends_the_same_bytes` (tests/remote.rs); "retrying a chunk doesn't duplicate it", "a chunk is never replaced with different bytes", "the same chunk sent several times at once is stored once", "a stored chunk that can't be decrypted isn't replaced, and says so" (site/tests/api.test.mjs). Reviewed.
 
 ### R17. One content request can return about 100 MB
 - **Where:** `site/lib/store.ts` (`readChunks`)

@@ -9,7 +9,9 @@
 //!    far>` with `Authorization: Bearer <token>`. The site checks the token
 //!    by recomputing an HMAC (no database read) and stores the chunk as one
 //!    document keyed by its offset, so it never reads or rewrites what's
-//!    already there. Retrying a chunk rewrites the same document.
+//!    already there. A failed chunk is retried with exactly the same bytes
+//!    (the site may have stored it); the site keeps the first copy, and
+//!    refuses different bytes at an offset it already has.
 //!
 //! Bodies are raw JSON Lines, never wrapped in JSON, and are cut only at line
 //! boundaries.
@@ -106,11 +108,15 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     pending.drain(..first);
     let mut backoff = Duration::ZERO;
     let mut reading_failed = false;
+    // The length of a chunk that failed: it's retried with exactly the same
+    // bytes, whatever has arrived since, as the site may have stored it.
+    let mut retrying: Option<usize> = None;
     loop {
         while !pending.is_empty() {
-            let n = chunk_len(&pending, MAX_CHUNK);
+            let n = retrying.unwrap_or_else(|| chunk_len(&pending, MAX_CHUNK));
             match client.append(&log, sent, &pending[..n]) {
                 Ok(()) => {
+                    retrying = None;
                     sent += n as u64;
                     pending.drain(..n);
                     if !backoff.is_zero() {
@@ -120,6 +126,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                 }
                 Err(SendError::Fatal(e)) => return Err(e),
                 Err(SendError::Retry(e)) => {
+                    retrying = Some(n);
                     if backoff.is_zero() {
                         eprintln!("Couldn't reach {base}: {e}. Keeping new events and retrying…");
                     }

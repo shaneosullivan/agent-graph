@@ -1,6 +1,6 @@
 import { ID_PATTERN, MAX_CHUNK_BYTES, MAX_LOG_BYTES } from "@/lib/config";
 import { canWrite } from "@/lib/crypto";
-import { appendChunk } from "@/lib/store";
+import { appendChunk, ChunkTaken } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +14,10 @@ export const dynamic = "force-dynamic";
  * - the write token is checked by recomputing an HMAC, with no database read;
  * - the body is stored as it arrives (raw JSON Lines, never parsed);
  * - storing it is a single write of a new document keyed by the offset.
+ *
+ * A chunk never changes once stored (viewers don't read one twice): the same
+ * bytes again (a retry) are accepted, different ones (or any, where the stored
+ * chunk can't be decrypted) refused with 409.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const { id } = await params;
@@ -34,6 +38,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });
   }
 
-  await appendChunk(id, offset, text);
+  try {
+    await appendChunk(id, offset, text);
+  } catch (err) {
+    if (err instanceof ChunkTaken) {
+      return new Response("Other events are already stored at this offset.", { status: 409 });
+    }
+    throw err;
+  }
   return new Response(null, { status: 204 });
 }
