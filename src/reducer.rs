@@ -705,11 +705,24 @@ impl Reducer {
         }
     }
 
-    /// Creates a placeholder for `id` (and its parent, for agent ids) if needed.
+    /// Creates a placeholder for `id` (and its parents, for agent ids) if
+    /// needed: the missing ones from the top down, in turn, so an id with
+    /// thousands of levels doesn't take a call per level.
     fn ensure(&mut self, id: &str, provider: Option<&str>, ts: &str) {
-        if self.nodes.contains_key(id) {
-            return;
+        let mut missing = Vec::new();
+        let mut next = Some(id);
+        while let Some(id) = next.filter(|id| !self.nodes.contains_key(*id)) {
+            missing.push(id);
+            next = id.rsplit_once('/').map(|(parent, _)| parent);
         }
+        for id in missing.into_iter().rev() {
+            self.placeholder(id, provider, ts);
+        }
+    }
+
+    /// A placeholder for `id`, under its parent (which is there already),
+    /// for agent ids.
+    fn placeholder(&mut self, id: &str, provider: Option<&str>, ts: &str) {
         let (kind, parent) = match id.rsplit_once('/') {
             Some((parent, _)) => (NodeKind::Agent, Some(parent.to_string())),
             None => (NodeKind::Session, None),
@@ -771,7 +784,9 @@ impl Reducer {
             return;
         }
         self.ensure(parent, provider, ts);
-        if self.is_under(parent, child) {
+        // Nothing is under a node with no children (a new one, say) but
+        // itself, so there's no need to look.
+        if !self.nodes[child].children.is_empty() && self.is_under(parent, child) {
             return;
         }
         if let Some(old) = self.nodes[child].parent.clone() {
