@@ -4,6 +4,9 @@ import {
   BYTES_PER_READ,
   CHUNKS_PER_QUERY,
   CHUNKS_PER_READ,
+  MAX_LOG_BYTES,
+  SCRYPT_CHECKS_PER_LOG_AND_ADDRESS,
+  SCRYPT_RUNS_PER_ADDRESS,
   type Source,
   UNLOCK_BUSY_SECONDS,
   UNLOCK_WINDOW_MS,
@@ -18,9 +21,9 @@ import { firestore } from "./firebase";
 /**
  * How logs are kept in Firestore:
  *
- *   logs/{sid}                 { source, pw?, createdAt, mac }
- *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, t: <when written> }
- *   unlock-attempts/{bucket}   { n, since, expireAt }  (password guesses)
+ *   logs/{sid}                 { source, pw?, createdAt, mac, stored }
+ *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, n: <its length>, t: <when written> }
+ *   unlock-attempts/{bucket}   { n, since, at, expireAt }  (password guesses, and scrypt runs)
  *
  * `sid` is an HMAC of the log's id (lib/encryption.ts), not the id itself:
  * the id is the link that opens the log, so the database doesn't hold it.
@@ -39,6 +42,14 @@ import { firestore } from "./firebase";
  *
  * A live share keeps only its last two keyframes' worth (see `trimLog`), so a
  * log's first chunk isn't always at offset 0.
+ *
+ * `stored` is how many bytes of text the log's chunks hold, which is what
+ * `MAX_LOG_BYTES` limits: kept up to date in the transaction that stores or
+ * deletes a chunk, and exactly the sum of its chunks' lengths (`n`), which
+ * say what deleting them gives back. A chunk without one isn't counted:
+ * stored before counting began, or while the log was still stored as it was
+ * before storage ids (it had no count to add to; the migration counts those
+ * as it copies it).
  */
 
 export type Meta = {
@@ -71,10 +82,11 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
     ...(meta.pw ? { pw: meta.pw } : {}),
     createdAt: Timestamp.now(),
     mac: metaTag(id, meta),
+    stored: Buffer.byteLength(text),
   });
   if (text) {
     const key = chunkKey(0);
-    batch.set(log.collection("chunks").doc(key), { e: encryptChunk(id, key, text), t: Timestamp.now() });
+    batch.set(log.collection("chunks").doc(key), chunkData(id, key, text));
   }
   try {
     await batch.commit();
@@ -85,16 +97,21 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   }
 }
 
+/**
+ * A chunk's document: its text, encrypted; its length, if it's `counted` in
+ * the log's `stored`; and when it was written.
+ */
+function chunkData(id: string, key: string, text: string, counted = true) {
+  return { e: encryptChunk(id, key, text), ...(counted ? { n: Buffer.byteLength(text) } : {}), t: Timestamp.now() };
+}
+
 export class ChunkTaken extends Error {}
 
-/**
- * Encrypts and stores one chunk at `offset`, if the log's still there
- * (`LogGone` if not). One write, and one read, of the log's metadata, unless
- * a chunk is already stored there: then it's read, and anything but the
- * same bytes (or one that can't be decrypted) is refused with `ChunkTaken`.
- */
 /** The log isn't there (any more): one not in use is deleted (lib/cleanup.ts). */
 export class LogGone extends Error {}
+
+/** The log holds `MAX_LOG_BYTES` already, or would with the chunk. */
+export class LogFull extends Error {}
 
 /**
  * Whether log `id` is there to add to: stored, and not being deleted
@@ -106,24 +123,56 @@ async function there(
   id: string,
   get: (ref: FirebaseFirestore.DocumentReference) => Promise<FirebaseFirestore.DocumentSnapshot>,
 ): Promise<boolean> {
-  const log = await get(logDoc(id));
-  if (log.exists) return !log.get("deleting");
-  const old = await get(logs().doc(id));
-  return old.exists && !old.get("deleting");
+  return (await where(id, get)) !== null;
 }
 
+/**
+ * Log `id`'s document under its storage id, as `get` read it, if the log's
+ * there (see `there`); `undefined` if it's there only as it was stored
+ * before storage ids (it has no count of what it stores), null if it isn't.
+ */
+async function where(
+  id: string,
+  get: (ref: FirebaseFirestore.DocumentReference) => Promise<FirebaseFirestore.DocumentSnapshot>,
+): Promise<FirebaseFirestore.DocumentSnapshot | undefined | null> {
+  const log = await get(logDoc(id));
+  if (log.exists) return log.get("deleting") ? null : log;
+  const old = await get(logs().doc(id));
+  return old.exists && !old.get("deleting") ? undefined : null;
+}
+
+/**
+ * Encrypts and stores one chunk at `offset`, if the log's still there
+ * (`LogGone` if not), and has room for it (`LogFull` if not). One write of
+ * the chunk, and one read and write of the log's metadata (its count of
+ * what it stores), unless a chunk is already stored there: then it's read,
+ * and anything but the same bytes (or one that can't be decrypted) is
+ * refused with `ChunkTaken`.
+ */
 export async function appendChunk(id: string, offset: number, text: string): Promise<void> {
   const key = chunkKey(offset);
   const log = logDoc(id);
   const doc = log.collection("chunks").doc(key);
+  const bytes = Buffer.byteLength(text);
   try {
     // Only while the log's there (read with it, so a deletion as it's
     // written makes it try again, and fail): otherwise what's sent after
     // it's deleted would be kept for good.
     await firestore().runTransaction(async (tx) => {
-      if (!(await there(id, (ref) => tx.get(ref)))) throw new LogGone(id);
+      const found = await where(id, (ref) => tx.get(ref));
+      if (found === null) throw new LogGone(id);
+      if (found) {
+        // Counted with it, so chunks that overlap, or are sent at once,
+        // can't get past the limit.
+        const stored = Number(found.get("stored")) || 0;
+        // (A retry of a stored chunk isn't refused: storing it, below,
+        // fails, and it's compared.)
+        if (stored + bytes > MAX_LOG_BYTES && !(await tx.get(doc)).exists) throw new LogFull(id);
+        tx.update(log, { stored: stored + bytes });
+      }
       // When it was written: a log with none newer than a week is deleted.
-      tx.create(doc, { e: encryptChunk(id, key, text), t: Timestamp.now() });
+      // (Without its length where it isn't counted, as it isn't subtracted.)
+      tx.create(doc, chunkData(id, key, text, found !== undefined));
     });
   } catch (err) {
     // gRPC ALREADY_EXISTS
@@ -148,7 +197,7 @@ function holds(id: string, key: string, stored: Uint8Array, text: string): boole
   }
 }
 
-/** Chunks deleted in one batch, which Firestore applies all at once. */
+/** Chunks deleted in one transaction, which Firestore applies all at once. */
 const TRIM_BATCH = 500;
 
 /**
@@ -157,7 +206,10 @@ const TRIM_BATCH = 500;
  * asks for everything before the previous one to go. They're deleted
  * newest first, a batch at a time (each all at once), so a reader never
  * starts partway through what's being deleted; one that's reading across it
- * sees a gap, and starts again (site-source.js). Returns how many went.
+ * sees a gap, and starts again (site-source.js). Each batch is a
+ * transaction that gives back what the chunks it deletes held (those still
+ * there: two trims at once don't give back a chunk twice). Returns how many
+ * went.
  */
 export async function trimLog(id: string, before: number): Promise<number> {
   if (!(await there(id, (ref) => ref.get()))) throw new LogGone(id);
@@ -171,12 +223,23 @@ export async function trimLog(id: string, before: number): Promise<number> {
     keys.push(...snap.docs.map((doc) => doc.id));
     if (snap.size < TRIM_BATCH) break;
   }
+  let deleted = 0;
   for (let end = keys.length; end > 0; end -= TRIM_BATCH) {
-    const batch = firestore().batch();
-    for (const key of keys.slice(Math.max(0, end - TRIM_BATCH), end)) batch.delete(chunks.doc(key));
-    await batch.commit();
+    const refs = keys.slice(Math.max(0, end - TRIM_BATCH), end).map((key) => chunks.doc(key));
+    deleted += await firestore().runTransaction(async (tx) => {
+      const found = await where(id, (ref) => tx.get(ref));
+      if (found === null) throw new LogGone(id);
+      const snaps = await tx.getAll(...refs, { fieldMask: ["n"] });
+      const stored = snaps.filter((snap) => snap.exists);
+      for (const snap of stored) tx.delete(snap.ref);
+      if (found) {
+        const freed = stored.reduce((sum, snap) => sum + (Number(snap.get("n")) || 0), 0);
+        tx.update(found.ref, { stored: Math.max(0, (Number(found.get("stored")) || 0) - freed) });
+      }
+      return stored.length;
+    });
   }
-  return keys.length;
+  return deleted;
 }
 
 /** Where log `id`'s first chunk (the oldest kept) starts, or null if it has none. */
@@ -270,16 +333,36 @@ export async function readChunks(
 /** A guess counted by `takeUnlockAttempt`, to give back if it was right. */
 export type Reservation = { ref: FirebaseFirestore.DocumentReference; since: number }[];
 
+/**
+ * A count, per window, of guesses (or scrypt runs), up to `limit`. A guess
+ * that turns out right is given back to all but those that are `kept`.
+ */
+type Bucket = { ref: FirebaseFirestore.DocumentReference; limit: number; kept?: boolean };
+
+/** The bucket counting `address`'s scrypt runs, whatever they're for. */
+function scryptBucket(address: string): Bucket {
+  const ref = firestore().collection("unlock-attempts").doc(`scrypt-${addressKey(address)}`);
+  return { ref, limit: SCRYPT_RUNS_PER_ADDRESS, kept: true };
+}
+
 /** The buckets a guess at log `id` from `address` counts against. */
-function unlockBuckets(id: string, address: string | null) {
+function unlockBuckets(id: string, address: string | null): Bucket[] {
   const attempts = firestore().collection("unlock-attempts");
   const sid = storageId(id);
   // All keyed: the documents name neither the log nor the address.
-  const buckets = [{ ref: attempts.doc(`log-${sid}`), limit: UNLOCKS_PER_LOG }];
+  const buckets: Bucket[] = [{ ref: attempts.doc(`log-${sid}`), limit: UNLOCKS_PER_LOG }];
   if (address) {
     buckets.push(
       { ref: attempts.doc(`pair-${addressKey(address, sid)}`), limit: UNLOCKS_PER_LOG_AND_ADDRESS },
       { ref: attempts.doc(`address-${addressKey(address)}`), limit: UNLOCKS_PER_ADDRESS },
+      // Checking a guess runs scrypt, right or wrong: counted at the log,
+      // and in all.
+      {
+        ref: attempts.doc(`checks-${addressKey(address, sid)}`),
+        limit: SCRYPT_CHECKS_PER_LOG_AND_ADDRESS,
+        kept: true,
+      },
+      scryptBucket(address),
     );
   }
   return buckets;
@@ -291,17 +374,18 @@ const CHECKING_MS = 10_000;
 /**
  * Each bucket's count this window (and when the window began), and how long
  * until a full one has room: the window's end, or only a moment if it was
- * counted in just now (right guesses among those are about to be given back).
+ * counted in just now (right guesses among those are about to be given
+ * back, unless it's `kept`).
  */
-function counted(snaps: FirebaseFirestore.DocumentSnapshot[], limits: number[], now: number) {
+function counted(snaps: FirebaseFirestore.DocumentSnapshot[], buckets: Bucket[], now: number) {
   let wait = 0;
   const counts = snaps.map((snap, i) => {
     const since = (snap.get("since") as Timestamp | undefined)?.toMillis();
     if (since === undefined || now - since >= UNLOCK_WINDOW_MS) return { n: 0, since: now };
     const n = Number(snap.get("n")) || 0;
-    if (n >= limits[i]) {
+    if (n >= buckets[i].limit) {
       const at = (snap.get("at") as Timestamp | undefined)?.toMillis() ?? since;
-      const checking = now - at < CHECKING_MS;
+      const checking = !buckets[i].kept && now - at < CHECKING_MS;
       wait = Math.max(wait, checking ? UNLOCK_BUSY_SECONDS * 1000 : since + UNLOCK_WINDOW_MS - now);
     }
     return { n, since };
@@ -312,31 +396,21 @@ function counted(snaps: FirebaseFirestore.DocumentSnapshot[], limits: number[], 
 let warnedNoAddress = false;
 
 /**
- * Counts a guess at log `id`'s password from `address`, unless the log, the
- * address, or the two together have had their fill of wrong guesses this
- * window: then it isn't counted, and the seconds until they may try again
- * are returned. Counted in a transaction, so guesses made at once can't get
- * past a limit; a right guess is given back with `giveBackUnlockAttempt`.
+ * Counts one in each of `buckets`, unless any has had its fill this window:
+ * then none is, and the seconds until there's room are returned. Counted in
+ * a transaction, so ones made at once can't get past a limit. Returns each
+ * bucket's window, for giving it back.
  */
-export async function takeUnlockAttempt(
-  id: string,
-  address: string | null,
-): Promise<{ wait: number } | { reservation: Reservation }> {
-  if (!address && !warnedNoAddress) {
-    console.warn("A request came without an address; guesses are only limited per log.");
-    warnedNoAddress = true;
-  }
-  const buckets = unlockBuckets(id, address);
+async function take(buckets: Bucket[]): Promise<{ wait: number } | { since: number[] }> {
   const refs = buckets.map((b) => b.ref);
-  const limits = buckets.map((b) => b.limit);
-  // A flood of guesses meets full buckets: refused by a plain read, since a
+  // A flood meets full buckets: refused by a plain read, since a
   // transaction would only contend with the others.
-  const before = counted(await firestore().getAll(...refs), limits, Date.now());
+  const before = counted(await firestore().getAll(...refs), buckets, Date.now());
   if (before.wait > 0) return { wait: before.wait };
   try {
     return await firestore().runTransaction(async (tx) => {
       const now = Date.now();
-      const { counts, wait } = counted(await tx.getAll(...refs), limits, now);
+      const { counts, wait } = counted(await tx.getAll(...refs), buckets, now);
       if (wait > 0) return { wait };
       counts.forEach(({ n, since }, i) =>
         tx.set(refs[i], {
@@ -347,13 +421,47 @@ export async function takeUnlockAttempt(
           expireAt: Timestamp.fromMillis(since + UNLOCK_WINDOW_MS),
         }),
       );
-      return { reservation: counts.map(({ since }, i) => ({ ref: refs[i], since })) };
+      return { since: counts.map(({ since }) => since) };
     });
   } catch (err) {
-    // ABORTED: too many guesses at once to count them all.
+    // ABORTED: too many at once to count them all.
     if ((err as { code?: number }).code === 10) return { wait: UNLOCK_BUSY_SECONDS };
     throw err;
   }
+}
+
+/**
+ * Counts a guess at log `id`'s password from `address`, unless the log, the
+ * address, or the two together have had their fill of wrong guesses this
+ * window, or the address its fill of scrypt runs (at this log, or in all):
+ * then it isn't counted, and the seconds until they may try again are
+ * returned. Guesses made at once can't get past a limit; a right guess is
+ * given back with `giveBackUnlockAttempt` (but for its scrypt runs).
+ */
+export async function takeUnlockAttempt(
+  id: string,
+  address: string | null,
+): Promise<{ wait: number } | { reservation: Reservation }> {
+  if (!address && !warnedNoAddress) {
+    console.warn("A request came without an address; guesses are only limited per log.");
+    warnedNoAddress = true;
+  }
+  const buckets = unlockBuckets(id, address);
+  const taken = await take(buckets);
+  if ("wait" in taken) return taken;
+  return { reservation: buckets.flatMap(({ ref, kept }, i) => (kept ? [] : [{ ref, since: taken.since[i] }])) };
+}
+
+/**
+ * Counts a scrypt run from `address` that isn't checking a guess (hashing a
+ * new log's password), unless it's had its fill this window: then the
+ * seconds until it may run another are returned. Not limited without an
+ * address.
+ */
+export async function takeScryptRun(address: string | null): Promise<{ wait: number } | Record<string, never>> {
+  if (!address) return {};
+  const taken = await take([scryptBucket(address)]);
+  return "wait" in taken ? taken : {};
 }
 
 /**
