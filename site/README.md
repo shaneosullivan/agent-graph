@@ -49,7 +49,8 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 - The size is checked from the header before the body is read.
 - The key is checked by recomputing an HMAC: no database read.
 - The body is never parsed.
-- Storage is a single write of a new document, in a transaction with one read, that the log is still there (one not in use is deleted: an append to it is refused with 410, and the sharer stops). Each chunk is its own document, `logs/{sid}/chunks/{offset}` (`sid` is an HMAC of the log's id, below), zero-padded so ids sort in order, so the cost doesn't grow with the log. A chunk never changes once stored: a retry of the same bytes is accepted, and different bytes at a stored offset are refused (409).
+- Storage is a single write of a new document, in a transaction with the log's metadata: it's read, that the log is still there (one not in use is deleted: an append to it is refused with 410, and the sharer stops), and its count of the bytes it stores is updated. Each chunk is its own document, `logs/{sid}/chunks/{offset}` (`sid` is an HMAC of the log's id, below), zero-padded so ids sort in order, so the cost doesn't grow with the log. A chunk never changes once stored: a retry of the same bytes is accepted, and different bytes at a stored offset are refused (409).
+- **A log stores at most 64 MiB.** That's counted from the chunks it holds, not their offsets: it goes up as each is stored and down as trimming deletes it, so a live share that trims its start can go on for good, but chunks sent at overlapping offsets each count in full. Past it, an append is refused with `413`. (Appends must also be within 64 MiB of where the log starts, judged from their offsets.)
 
 **Reading:**
 - Each viewer polls every 3 s while events are arriving, backing off to 15 s when quiet or when the tab is hidden.
@@ -69,7 +70,7 @@ Firestore's security rules (`firestore.rules`) deny all direct access; only the 
 - **The links aren't stored.** A log's id is its link, so logs are stored under an HMAC of it (keyed from the master key), which can't be turned back into the link. Someone with the database can't open the logs through the site. (Except from an export or backup made before logs were stored this way: see Deploy.)
 - **The metadata is authenticated.** Each log's metadata carries a MAC bound to its id, so a password removed from it, or another log's metadata copied over it, is refused.
 - **Cost:** a fraction of a millisecond per chunk.
-- **Not encrypted:** the metadata (when a log was created, how it was shared, the password *hash*) and the chunk ids, which reveal a log's size. (When a log was created isn't authenticated either; nothing depends on it.)
+- **Not encrypted:** the metadata (when a log was created, how it was shared, the password *hash*, how many bytes it stores) and the chunk ids and lengths, which reveal a log's size. (When a log was created isn't authenticated either; nothing depends on it.)
 - **The server can still read logs.** It holds the key; this isn't end-to-end encryption.
 
 ## Develop

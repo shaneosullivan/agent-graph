@@ -125,11 +125,11 @@ test("a log isn't stored under its id, and its chunks are ciphertext", { skip, t
   await store.appendChunk(id, Buffer.byteLength(text), text);
 
   const stored = await doc.get();
-  assert.deepEqual(Object.keys(stored.data()).sort(), ["createdAt", "mac", "source"]);
+  assert.deepEqual(Object.keys(stored.data()).sort(), ["createdAt", "mac", "source", "stored"]);
   const chunks = await doc.collection("chunks").get();
   assert.equal(chunks.size, 2);
   for (const chunk of chunks.docs) {
-    assert.deepEqual(Object.keys(chunk.data()).sort(), ["e", "t"], "ciphertext, and when it was written");
+    assert.deepEqual(Object.keys(chunk.data()).sort(), ["e", "n", "t"], "ciphertext, its length, and when it was written");
     assert.ok(Math.abs(chunk.get("t").toMillis() - Date.now()) < 60_000);
     assert.ok(!Buffer.from(chunk.get("e")).includes(Buffer.from("recognisable")));
   }
@@ -171,24 +171,23 @@ test("trimming more chunks than a batch holds deletes them all", { skip, timeout
   const id = newId();
   await store.createLog(id, { source: "watch" }, "");
   const count = 620;
-  await Promise.all(Array.from({ length: count }, (_, i) => store.appendChunk(id, i * 10, `{"n":${i}}\n`)));
+  // (One at a time: each counts what the log stores, so appends at once
+  // wait for each other.)
+  for (let i = 0; i < count; i++) await store.appendChunk(id, i * 10, `{"n":${i}}\n`);
   // Newest first: a reader starting from the first chunk left never starts
   // partway through what's being deleted.
-  const { WriteBatch } = await import("firebase-admin/firestore");
-  const { delete: remove, commit } = WriteBatch.prototype;
+  const { Transaction } = await import("firebase-admin/firestore");
+  const { delete: remove } = Transaction.prototype;
   const batches = [];
-  WriteBatch.prototype.delete = function (ref) {
-    (this.keys ??= []).push(ref.id);
+  Transaction.prototype.delete = function (ref) {
+    if (!batches.includes(this.keys)) batches.push((this.keys = []));
+    this.keys.push(ref.id);
     return remove.call(this, ref);
-  };
-  WriteBatch.prototype.commit = function () {
-    batches.push(this.keys ?? []);
-    return commit.call(this);
   };
   try {
     assert.equal(await store.trimLog(id, 600 * 10), 600);
   } finally {
-    Object.assign(WriteBatch.prototype, { delete: remove, commit });
+    Object.assign(Transaction.prototype, { delete: remove });
   }
   const key = (i) => store.chunkKey(i * 10);
   assert.deepEqual(
@@ -200,6 +199,40 @@ test("trimming more chunks than a batch holds deletes them all", { skip, timeout
   );
   assert.equal(await store.firstChunkOffset(id), 6000);
   assert.equal((await store.readChunks(id, "")).first, store.chunkKey(6000));
+});
+
+// R44: a log's count of what it stores goes up with each chunk stored
+// (once, however often it's sent) and down with each one trimmed (once,
+// however many trims delete it at once), so it bounds what's stored.
+test("a log counts what it stores, and trimming gives it back", { skip, timeout: 60_000 }, async () => {
+  const { MAX_LOG_BYTES } = await import("../lib/config.ts");
+  const store = await import("../lib/store.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const { storageId } = await import("../lib/encryption.ts");
+  const id = newId();
+  const log = firestore().collection("logs").doc(storageId(id));
+  const stored = async () => (await log.get()).get("stored");
+
+  await store.createLog(id, { source: "watch" }, "AA\n");
+  assert.equal(await stored(), 3);
+  await store.appendChunk(id, 3, "BBBB\n");
+  await store.appendChunk(id, 3, "BBBB\n");
+  // Overlapping: counted in full.
+  await store.appendChunk(id, 4, "CCCCCC\n");
+  assert.equal(await stored(), 3 + 5 + 7);
+
+  await Promise.all([store.trimLog(id, 4), store.trimLog(id, 4)]);
+  assert.equal(await stored(), 7, "each chunk given back once");
+
+  // Full: refused, but for a retry of what's stored.
+  await log.update({ stored: MAX_LOG_BYTES - 1 });
+  await store.appendChunk(id, 11, "D\n").then(
+    () => assert.fail("stored past the limit"),
+    (err) => assert.ok(err instanceof store.LogFull, String(err)),
+  );
+  await store.appendChunk(id, 4, "CCCCCC\n");
+  assert.equal(await stored(), MAX_LOG_BYTES - 1);
+  assert.equal((await store.readChunks(id, "")).text, "CCCCCC\n");
 });
 
 // Chunks are stored one after another; a gap means the log's start was
