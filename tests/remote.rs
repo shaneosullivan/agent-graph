@@ -748,3 +748,30 @@ fn a_password_too_long_for_the_site_is_refused() {
         .unwrap_or_else(|_| panic!("not shared: {err}"));
     assert_eq!(create.path, "/api/logs");
 }
+
+/// R47: a redirect isn't followed. (One would carry the password header on
+/// to wherever it points, over plain HTTP too: only `Authorization` and
+/// cookies are dropped.) The site's API never redirects.
+#[test]
+fn a_redirect_is_not_followed() {
+    let (elsewhere, followed) = mock_site();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            read_request(&stream);
+            let reply = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{elsewhere}/api/logs\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = (&stream).write_all(reply.as_bytes());
+        }
+    });
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("events")).unwrap();
+    let err = watch(home.path(), port, &["--password=s3cret"], &[]);
+    assert!(err.contains("302"), "{err}");
+    assert!(
+        followed.recv_timeout(Duration::from_millis(300)).is_err(),
+        "followed the redirect"
+    );
+}

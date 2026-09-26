@@ -26,6 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -87,7 +88,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     }
 
     let base = opts.url.trim_end_matches('/').to_string();
-    if password.is_some() && base.starts_with("http://") && !is_local(&base) {
+    if password.is_some() && !sends_privately(&base) {
         return Err(format!(
             "{base} isn't HTTPS, so the password would be sent in the clear. Use an https:// URL."
         ));
@@ -951,9 +952,24 @@ pub struct Client {
 
 impl Client {
     pub fn new(base: &str) -> Client {
+        // Plain HTTP to this machine, as a password may be sent (see
+        // `sends_privately`).
+        let local = sends_privately(base)
+            && base
+                .get(..7)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"));
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
+            // The site never redirects, and a redirect would carry the
+            // password header on to wherever it points.
+            .max_redirects(0)
+            // Not through a proxy, which would see what's sent.
+            .proxy(if local {
+                None
+            } else {
+                ureq::Proxy::try_from_env()
+            })
             .user_agent(concat!("agent-graph/", env!("CARGO_PKG_VERSION")))
             .build();
         Client {
@@ -1050,13 +1066,28 @@ fn check_password(password: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn is_local(base: &str) -> bool {
-    let host = base
-        .trim_start_matches("http://")
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("");
-    matches!(host, "localhost" | "127.0.0.1" | "[")
+/// Whether a password may be sent to `base`: over HTTPS, or over plain HTTP
+/// to this machine (`localhost`, or a loopback address). Judged from the URL
+/// as it's parsed to be sent: the scheme in any case, the host after any
+/// userinfo, an IPv6 address in full. (Redirects aren't followed, so it
+/// can't be sent on anywhere else: see `Client::new`.)
+fn sends_privately(base: &str) -> bool {
+    let Ok(uri) = base.parse::<ureq::http::Uri>() else {
+        return false;
+    };
+    let host = uri.host().unwrap_or("");
+    match uri.scheme_str().map(str::to_ascii_lowercase).as_deref() {
+        Some("https") => true,
+        Some("http") => {
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        }
+        _ => false,
+    }
 }
 
 pub fn base64url(bytes: &[u8]) -> String {
@@ -1852,6 +1883,49 @@ mod tests {
         assert_eq!(base64url(b"fo"), "Zm8");
         assert_eq!(base64url(b"foo"), "Zm9v");
         assert_eq!(base64url("pässwörd?>".as_bytes()), "cMOkc3N3w7ZyZD8-");
+    }
+
+    /// R47: a password goes only over HTTPS, or plain HTTP to this machine,
+    /// however the URL is written.
+    #[test]
+    fn a_password_is_only_sent_over_https_or_to_this_machine() {
+        let private = [
+            "https://agentgraph.chofter.com",
+            "HTTPS://example.com/",
+            "http://localhost",
+            "http://localhost:3000/",
+            "http://LocalHost:3000",
+            "http://127.0.0.1:3000",
+            "http://127.1.2.3",
+            "http://[::1]:3000",
+        ];
+        let not = [
+            "http://example.com",
+            // The scheme is case-insensitive.
+            "HTTP://example.com",
+            "Http://example.com",
+            // Userinfo: the host is after the @.
+            "http://localhost@example.com",
+            "http://localhost:x@example.com",
+            "http://127.0.0.1:3000@example.com",
+            "http://[::1]@example.com",
+            // IPv6 addresses that aren't this machine.
+            "http://[2001:db8::1]",
+            "http://[::ffff:203.0.113.7]:80",
+            "http://[::]",
+            // Names that only start like it.
+            "http://localhost.example.com",
+            "http://127.0.0.1.nip.io",
+            "http://0.0.0.0",
+            // Not a URL it could send to safely at all.
+            "ftp://example.com",
+            "example.com",
+            "",
+        ];
+        let wrong: Vec<_> = (private.iter().filter(|url| !sends_privately(url)))
+            .chain(not.iter().filter(|url| sends_privately(url)))
+            .collect();
+        assert!(wrong.is_empty(), "judged wrongly: {wrong:?}");
     }
 
     #[test]
