@@ -87,12 +87,17 @@ export const MAX_PASSWORD_BYTES = 1024;
  */
 export const UNLOCK_BODY_BYTES = 8 * 1024;
 /**
- * scrypt runs allowed per address in each window (each is about 50 ms of
- * the server's time): every password checked, right ones too, and every
- * log created with one. Generous: it's there to stop one address keeping
- * the server busy, not to limit guesses (those limits are above).
+ * scrypt runs allowed in each window (each is about 50 ms of the server's
+ * time), counting right passwords too, which the limits above don't: every
+ * password checked at a log from one address, and every run from one
+ * address, a password checked at any log or a log created with one.
+ * Generous: they're there to stop one address keeping the server busy, not
+ * to limit guesses. Per log first, so one log's viewers behind an address
+ * (or one viewer, unlocking it again and again) hold back only that log
+ * there; the per-address one is the bound on the server's time.
  */
-export const SCRYPT_RUNS_PER_ADDRESS = 200;
+export const SCRYPT_CHECKS_PER_LOG_AND_ADDRESS = 200;
+export const SCRYPT_RUNS_PER_ADDRESS = 2000;
 /** How long to wait when too many guesses arrive at once to count them. */
 export const UNLOCK_BUSY_SECONDS = 5;
 

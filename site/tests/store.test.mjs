@@ -631,36 +631,54 @@ test("guesses that can't be counted just now wait a moment", { skip, timeout: 60
   assert.ok(later.wait > 60, `full a while: ${later.wait}s`);
 });
 
-// R52: every scrypt run counts against its address: checking a password
-// (a right one isn't given back) and hashing a new log's. Past the limit,
-// both wait for the window to end.
-test("scrypt runs are counted per address, and not given back", { skip, timeout: 60_000 }, async () => {
+// R52: every scrypt run counts against its address (2000 a window): a
+// password checked, right or wrong, and a new log's hashed. Checks at a log
+// count against the log and address together too (200 a window), so one
+// log can't use up the address's. Neither is given back.
+test("scrypt runs are counted per address, and per log and address", { skip, timeout: 60_000 }, async () => {
   const { Timestamp } = await import("firebase-admin/firestore");
-  const { SCRYPT_RUNS_PER_ADDRESS, UNLOCK_WINDOW_MS } = await import("../lib/config.ts");
+  const { SCRYPT_CHECKS_PER_LOG_AND_ADDRESS, SCRYPT_RUNS_PER_ADDRESS, UNLOCK_WINDOW_MS } = await import(
+    "../lib/config.ts"
+  );
   const { addressKey } = await import("../lib/crypto.ts");
+  const { storageId } = await import("../lib/encryption.ts");
   const { firestore } = await import("../lib/firebase.ts");
   const store = await import("../lib/store.ts");
 
   const address = anAddress();
-  const bucket = firestore().collection("unlock-attempts").doc(`scrypt-${addressKey(address)}`);
-  const right = await store.takeUnlockAttempt(newId(), address);
+  const id = newId();
+  const buckets = firestore().collection("unlock-attempts");
+  const runs = buckets.doc(`scrypt-${addressKey(address)}`);
+  const checks = buckets.doc(`checks-${addressKey(address, storageId(id))}`);
+  const right = await store.takeUnlockAttempt(id, address);
   await store.giveBackUnlockAttempt(right.reservation);
-  assert.equal((await bucket.get()).get("n"), 1, "a right guess still ran scrypt");
+  assert.equal((await runs.get()).get("n"), 1, "a right guess still ran scrypt");
+  assert.equal((await checks.get()).get("n"), 1, "at this log");
   assert.deepEqual(await store.takeScryptRun(address), {});
-  assert.equal((await bucket.get()).get("n"), 2);
+  assert.equal((await runs.get()).get("n"), 2);
 
-  await bucket.update({ n: SCRYPT_RUNS_PER_ADDRESS, at: Timestamp.fromMillis(Date.now() - 60_000) });
-  const full = await store.takeScryptRun(address);
-  assert.ok(full.wait > 60, `a new log's password waits for the window: ${full.wait}s`);
+  // A log's checks, full: only that log waits.
+  const long = Timestamp.fromMillis(Date.now() - 60_000);
+  await checks.update({ n: SCRYPT_CHECKS_PER_LOG_AND_ADDRESS, at: long });
+  const full = await store.takeUnlockAttempt(id, address);
+  assert.ok(full.wait > 60, `this log waits for the window: ${full.wait}s`);
+  assert.ok("reservation" in (await store.takeUnlockAttempt(newId(), address)), "another log doesn't");
+  assert.deepEqual(await store.takeScryptRun(address), {}, "nor does creating a log");
+  assert.ok("reservation" in (await store.takeUnlockAttempt(id, anAddress())), "nor another address");
+
+  // The address's runs, full: everything from it waits.
+  await runs.update({ n: SCRYPT_RUNS_PER_ADDRESS, at: long });
+  const created = await store.takeScryptRun(address);
+  assert.ok(created.wait > 60, `a new log's password waits for the window: ${created.wait}s`);
   const guess = await store.takeUnlockAttempt(newId(), address);
-  assert.ok(guess.wait > 60, `so does a guess: ${guess.wait}s`);
-  assert.equal((await bucket.get()).get("n"), SCRYPT_RUNS_PER_ADDRESS, "refused runs aren't counted");
+  assert.ok(guess.wait > 60, `so does a guess at any log: ${guess.wait}s`);
+  assert.equal((await runs.get()).get("n"), SCRYPT_RUNS_PER_ADDRESS, "refused runs aren't counted");
   assert.deepEqual(await store.takeScryptRun(anAddress()), {}, "other addresses aren't affected");
   assert.deepEqual(await store.takeScryptRun(null), {}, "without an address, not limited");
 
-  await bucket.update({ since: Timestamp.fromMillis(Date.now() - UNLOCK_WINDOW_MS - 1000) });
+  await runs.update({ since: Timestamp.fromMillis(Date.now() - UNLOCK_WINDOW_MS - 1000) });
   assert.deepEqual(await store.takeScryptRun(address), {});
-  assert.equal((await bucket.get()).get("n"), 1);
+  assert.equal((await runs.get()).get("n"), 1);
 });
 
 // Metadata can go (a log not in use is deleted): each instance's cache of it

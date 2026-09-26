@@ -37,8 +37,8 @@ export function tooMany(what: string, wait: number): Response {
  * Every guess is counted before the password is checked (a scrypt run), and
  * a right one given back: past the limits on wrong ones (lib/config.ts),
  * it's refused with 429 until the window ends, without checking it. So it
- * is past the limit on an address's scrypt runs, which counts right ones
- * too.
+ * is past the limits on an address's scrypt runs (at this log, and in all),
+ * which count right ones too.
  */
 export async function unlock(req: Request, id: string, deps: UnlockDeps = defaults): Promise<Response> {
   if (!ID_PATTERN.test(id)) return new Response("Unknown log.", { status: 404 });
