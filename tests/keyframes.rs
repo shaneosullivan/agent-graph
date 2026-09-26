@@ -40,13 +40,15 @@ const QUICK: &str = "claude-code:c0ffee00-0000-4000-8000-000000000003";
 const UNDER: &str = "claude-code:c0ffee00-0000-4000-8000-000000000004";
 const GUESSED: &str = "claude-code:c0ffee00-0000-4000-8000-000000000005";
 const ENDED: &str = "claude-code:c0ffee00-0000-4000-8000-000000000006";
+const EARLY: &str = "claude-code:c0ffee00-0000-4000-8000-000000000007";
 
 /// A log with a bit of everything, so that everything the reducer keeps
 /// matters across some point in it: the session fixture (tasks, agents,
 /// requests, waits, messages, a question); a session it starts from its
 /// shell, which ends, with a late status, and is resumed; one that ends as
-/// soon as it starts; one linked by its process; and one paired by a guess
-/// that the request's return puts right.
+/// soon as it starts; one linked by its process; one paired by a guess
+/// that the request's return puts right; and one whose start sorts before
+/// its request.
 fn log() -> Vec<Envelope> {
     let mut events = translate(
         &fixture("claude-code/session.jsonl"),
@@ -76,7 +78,7 @@ fn log() -> Vec<Envelope> {
         // Linked by its process (`processes`).
         ev(70_000, UNDER, "session.started", json!({"process": "78@1", "ancestors": ["77@1"]})),
         // Paired by a guess, put right (`requesters`), and waited on until
-        // it ends (`waiting_on`).
+        // it ends (the waits on each node).
         ev(80_000, SESSION, "spawn.requested", json!({"call_id": "r1", "kind": "session", "agent_type": "claude"})),
         ev(80_100, SESSION, "spawn.requested", json!({"call_id": "r2", "kind": "session", "agent_type": "claude"})),
         with_parent(ev(80_500, GUESSED, "session.started", json!({"link_method": "env"})), SESSION),
@@ -89,6 +91,30 @@ fn log() -> Vec<Envelope> {
         ev(95_000, ENDED, "session.ended", json!({})),
         ev(95_500, ENDED, "status", json!({"state": "idle"})),
     ]);
+    // Paired with a request that sorts after its start, in the same
+    // millisecond (`unpaired_runs`), once the calls before have returned.
+    events.push(ev(99_000, SESSION, "status", json!({"state": "idle"})));
+    let mut early = [
+        with_parent(
+            ev(
+                100_000,
+                EARLY,
+                "session.started",
+                json!({"link_method": "env"}),
+            ),
+            SESSION,
+        ),
+        ev(
+            100_000,
+            SESSION,
+            "spawn.requested",
+            json!({"call_id": "e1", "kind": "session", "agent_type": "claude"}),
+        ),
+    ];
+    for (i, e) in early.iter_mut().enumerate() {
+        e.id = format!("{}{i:016}", &e.id[..10]);
+    }
+    events.extend(early);
     events.sort_by_cached_key(sort_key);
     events
 }
@@ -180,6 +206,65 @@ fn a_big_keyframe_is_split_and_merged() {
     assert_eq!(shown(from), whole);
 }
 
+/// R43: moving a node with no children skips looking for a cycle, which
+/// is only safe if a node's parent lists it. A keyframe whose parent
+/// doesn't is refused, so a later event can't make a cycle, leaving no
+/// roots and both nodes out of sight.
+#[test]
+fn a_keyframe_whose_parent_doesnt_list_its_child_cant_make_a_cycle() {
+    let events = vec![
+        ev(0, "x:a", "session.started", json!({})),
+        with_parent(ev(1, "x:b", "session.started", json!({})), "x:a"),
+    ];
+    let base =
+        reducer::merge_keyframe(&reducer::keyframe(None, &events, KEYFRAME_PART).unwrap()).unwrap();
+    let text = base.data["text"].as_str().unwrap();
+    let mut state: Value = serde_json::from_slice(&reducer::unpack_state(text).unwrap()).unwrap();
+    assert_eq!(state["nodes"]["x:b"]["parent"], "x:a");
+    state["nodes"]["x:a"]["children"] = json!([]);
+    let mut crafted = base.clone();
+    crafted.data =
+        json!({"part": 0, "parts": 1, "text": reducer::pack_state(state.to_string().as_bytes())});
+    let after = vec![with_parent(
+        ev(2, "x:a", "status", json!({"state": "working"})),
+        "x:b",
+    )];
+    let graph = reducer::reduce_from(Some(&crafted), after, &opts());
+    assert!(!graph.roots.is_empty(), "{:?}", graph.nodes.keys());
+}
+
+/// A keyframe written before R41, R53 and R54 changed what the reducer
+/// keeps (it has `waiting_on`, now made from the nodes, and neither
+/// `unpaired_runs` nor who made each child's request) still loads: a log
+/// shared and trimmed then starts with one. Carrying on from it (after the
+/// log's first 8 events, as d0c927d's code wrote it) makes the graph the
+/// whole log does, but that the children paired before it don't say which
+/// node asked for them.
+#[test]
+fn a_keyframe_from_before_still_loads() {
+    let envelopes = |path: &str| -> Vec<Envelope> {
+        fixture(path)
+            .into_iter()
+            .map(|v| serde_json::from_value(v).unwrap())
+            .collect()
+    };
+    let mut events = envelopes("keyframes/d0c927d-log.jsonl");
+    events.sort_by_cached_key(sort_key);
+    let parts = envelopes("keyframes/d0c927d-keyframe.jsonl");
+    let base = reducer::merge_keyframe(&parts).expect("the keyframe loads");
+    assert_eq!(base.id, format!("{}~000000", events[7].id));
+    let without_requesters = |g: reducer::Graph| {
+        let mut json = shown(g);
+        for node in json["nodes"].as_object_mut().unwrap().values_mut() {
+            node.as_object_mut().unwrap().remove("requested_by");
+        }
+        json
+    };
+    let from = reducer::reduce_from(Some(&base), events[8..].to_vec(), &opts());
+    let whole = reducer::reduce(events, &opts());
+    assert_eq!(without_requesters(from), without_requesters(whole));
+}
+
 /// A keyframe anywhere but a log's start stands for events already there:
 /// it changes nothing.
 #[test]
@@ -258,12 +343,32 @@ fn a_keyframe_that_couldnt_be_is_refused() {
         state[index]["somewhere"] = value;
         state
     };
+    // A child under a node that isn't its parent.
+    let mut adopted = state.clone();
+    adopted["nodes"][SESSION]["children"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(QUICK));
+    // A child its parent doesn't list, or whose parent isn't there.
+    let mut disowned = state.clone();
+    assert_eq!(disowned["nodes"][CHILD]["parent"], SESSION);
+    disowned["nodes"][SESSION]["children"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|c| c != CHILD);
+    let mut orphaned = state.clone();
+    orphaned["nodes"][QUICK]["parent"] = json!("x:nobody");
+    let mut runs = state.clone();
+    runs["unpaired_runs"][2] = json!(["x:nobody"]);
     for bad in [
         with(&moved, 0, 1),
         with(&twice, 0, 1),
+        with(&adopted, 0, 1),
+        with(&disowned, 0, 1),
+        with(&orphaned, 0, 1),
+        with(&runs, 0, 1),
         with(&missing("processes", json!("x:nobody")), 0, 1),
         with(&missing("requesters", json!(["x:nobody"])), 0, 1),
-        with(&missing("waiting_on", json!(["x:nobody"])), 0, 1),
         with(&json!({"nodes": 5}), 0, 1),
         with(&json!("not a state"), 0, 1),
         with(&state, 0, 2),

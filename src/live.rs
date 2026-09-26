@@ -124,7 +124,7 @@ fn frames(tail: &mut Tail, opts: &Options) -> Result<(), String> {
 fn frame(tail: &Tail, opts: &Options, all: bool, live: bool) -> Result<Vec<Line>, String> {
     let now = crate::clock::now();
     let graph = reducer::reduce(
-        tail.events.iter().map(|t| t.event.clone()).collect(),
+        tail.events.iter().map(|t| (*t.event).clone()).collect(),
         &reducer::Options {
             now,
             stale_after: opts.stale_after,

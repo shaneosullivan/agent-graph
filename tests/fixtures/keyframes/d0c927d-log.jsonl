@@ -1,0 +1,12 @@
+{"v":1,"id":"01K0000000000000000000000A","ts":"2026-09-25T10:00:00.000Z","type":"session.started","node":"x:p","data":{"process":"4@1"}}
+{"v":1,"id":"01K0000000000000000000000B","ts":"2026-09-25T10:00:01.000Z","type":"spawn.requested","node":"x:p","data":{"call_id":"c1","kind":"agent","purpose":"First"}}
+{"v":1,"id":"01K0000000000000000000000C","ts":"2026-09-25T10:00:01.000Z","type":"spawn.requested","node":"x:p","data":{"call_id":"c2","kind":"agent","purpose":"Second"}}
+{"v":1,"id":"01K0000000000000000000000D","ts":"2026-09-25T10:00:01.000Z","type":"wait.started","node":"x:p","data":{"wait_id":"w1","on":"x:p/a"}}
+{"v":1,"id":"01K0000000000000000000000E","ts":"2026-09-25T10:00:02.000Z","type":"agent.spawned","node":"x:p/a","data":{}}
+{"v":1,"id":"01K0000000000000000000000F","ts":"2026-09-25T10:00:02.000Z","type":"spawn.requested","node":"x:p","data":{"call_id":"k1","kind":"session","agent_type":"claude"}}
+{"v":1,"id":"01K0000000000000000000000G","ts":"2026-09-25T10:00:03.000Z","type":"session.started","node":"x:c","parent":"x:p","data":{"link_method":"env"}}
+{"v":1,"id":"01K0000000000000000000000H","ts":"2026-09-25T10:00:03.000Z","type":"session.started","node":"x:q","data":{"process":"5@1","ancestors":["4@1"]}}
+{"v":1,"id":"01K0000000000000000000000J","ts":"2026-09-25T10:00:04.000Z","type":"spawn.returned","node":"x:p","data":{"call_id":"c2","child":"x:p/a"}}
+{"v":1,"id":"01K0000000000000000000000K","ts":"2026-09-25T10:00:05.000Z","type":"agent.finished","node":"x:p/a","data":{"status":"completed"}}
+{"v":1,"id":"01K0000000000000000000000M","ts":"2026-09-25T10:00:06.000Z","type":"session.ended","node":"x:c","data":{}}
+{"v":1,"id":"01K0000000000000000000000N","ts":"2026-09-25T10:00:07.000Z","type":"status","node":"x:p","data":{"state":"idle"}}
