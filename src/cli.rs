@@ -811,9 +811,25 @@ fn snapshot_cmd(
             ));
         }
     }
-    let (graph, root) = load_graph(stale_minutes)?;
+    let (mut graph, root) = load_graph(stale_minutes)?;
+    let none = || {
+        format!(
+            "no sessions recorded yet in {}. Run `agent-graph install claude-code`, then start a new session.",
+            root.display()
+        )
+    };
 
     if json || ext.as_deref() == Some("json") {
+        // The sessions asked for, as a picture would have; with neither
+        // option, the whole graph (which may be empty).
+        if session.is_some() || all {
+            if graph.roots.is_empty() {
+                return Err(none());
+            }
+            let cwd = std::env::current_dir().ok();
+            let roots = pick_roots(&graph, session.as_deref(), all, cwd.as_deref())?;
+            graph = only(graph, &roots);
+        }
         let text = serde_json::to_string_pretty(&graph).expect("serializable") + "\n";
         match out {
             Some(out) => {
@@ -826,10 +842,7 @@ fn snapshot_cmd(
     }
 
     if graph.roots.is_empty() {
-        return Err(format!(
-            "no sessions recorded yet in {}. Run `agent-graph install claude-code`, then start a new session.",
-            root.display()
-        ));
+        return Err(none());
     }
     let cwd = std::env::current_dir().ok();
     let roots = pick_roots(&graph, session.as_deref(), all, cwd.as_deref())?;
@@ -873,6 +886,68 @@ fn snapshot_cmd(
     // Only the path goes to stdout, so scripts and agents can use it directly.
     println!("{}", path.display());
     Ok(())
+}
+
+/// `graph` cut down to the sessions `picked` (sessions or agents) are in,
+/// in that order, then those they wait on, directly or not (which what's
+/// blocked counts), and those they exchanged messages with (but not who
+/// those did in turn: a lead's team, say): whole trees, each from a root.
+pub fn only(mut graph: Graph, picked: &[String]) -> Graph {
+    let top = |id: &str| {
+        let mut id = id;
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(parent) = graph.nodes[id].parent.as_deref() {
+            if !graph.nodes.contains_key(parent) || !seen.insert(id) {
+                break;
+            }
+            id = parent;
+        }
+        id.to_string()
+    };
+    let mut roots: Vec<String> = Vec::new();
+    let mut keep = std::collections::BTreeSet::new();
+    // Each tree, and whether it was picked.
+    let mut queue: std::collections::VecDeque<(String, bool)> = picked
+        .iter()
+        .filter(|id| graph.nodes.contains_key(*id))
+        .map(|id| (top(id), true))
+        .collect();
+    while let Some((root, was_picked)) = queue.pop_front() {
+        if roots.contains(&root) {
+            continue;
+        }
+        roots.push(root.clone());
+        let mut peers = Vec::new();
+        let mut named = Vec::new();
+        let mut next = vec![root];
+        while let Some(id) = next.pop() {
+            let Some(node) = graph.nodes.get(&id) else {
+                continue;
+            };
+            if !keep.insert(id) {
+                continue;
+            }
+            next.extend(node.children.iter().cloned());
+            named.extend(node.spawns.iter().filter_map(|s| s.child.as_ref()));
+            named.extend(node.waits.iter().filter_map(|w| w.on.as_ref()));
+            named.extend(node.blocked.iter().flat_map(|b| &b.on));
+            if was_picked {
+                peers.extend(node.messages.iter().map(|m| &m.peer));
+            }
+        }
+        let tops = |ids: Vec<&String>, picked: bool| {
+            ids.into_iter()
+                .filter(|id| graph.nodes.contains_key(*id))
+                .map(|id| (top(id), picked))
+                .collect::<Vec<_>>()
+        };
+        queue.extend(tops(named, false));
+        queue.extend(tops(peers, false));
+    }
+    graph.nodes.retain(|id, _| keep.contains(id));
+    graph.late.retain(|id| keep.contains(id));
+    graph.roots = roots;
+    graph
 }
 
 /// Which trees to draw. See the `Snapshot` command's docs for the order.

@@ -655,3 +655,69 @@ fn a_message_recorded_twice_counts_once() {
     assert_eq!(g.nodes[A].messages.len(), 1);
     assert_eq!(g.nodes[&format!("{A}/ag1")].messages.len(), 1);
 }
+
+/// R31: a snapshot of some sessions as data holds what they name (the
+/// session one waits on), so every id in it can be looked up, and its
+/// roots are sessions, even when an agent was asked for.
+#[test]
+fn a_snapshot_of_some_sessions_holds_what_they_name() {
+    const C: &str = "claude-code:cccc";
+    const D: &str = "claude-code:dddd";
+    const E: &str = "claude-code:eeee";
+    const Z: &str = "claude-code:zzzz";
+    let agent = format!("{A}/ag1");
+    let g = graph(vec![
+        vec![started(0, A, None, None, &[])],
+        vec![started(0, B, None, None, &[])],
+        vec![started(0, Z, None, None, &[])],
+        vec![event(
+            1,
+            &agent,
+            Payload::parse("agent.spawned", &json!({"agent_type": "Explore"})),
+        )],
+        vec![started(0, C, None, None, &[])],
+        vec![started(0, D, None, None, &[])],
+        vec![event(
+            2,
+            A,
+            Payload::parse("wait.started", &json!({"wait_id": "w1", "on": B})),
+        )],
+        // A wait that's over, and a message: still named.
+        vec![event(
+            3,
+            A,
+            Payload::parse("wait.started", &json!({"wait_id": "w2", "on": C})),
+        )],
+        vec![event(
+            4,
+            A,
+            Payload::parse("wait.ended", &json!({"wait_id": "w2"})),
+        )],
+        vec![event(
+            5,
+            &agent,
+            Payload::parse("message.sent", &json!({"message_id": "m1", "to": D})),
+        )],
+        // Who D messages isn't A's business.
+        vec![started(0, E, None, None, &[])],
+        vec![event(
+            6,
+            D,
+            Payload::parse("message.sent", &json!({"message_id": "m2", "to": E})),
+        )],
+    ]);
+    let ids = |g: &Graph| g.nodes.keys().cloned().collect::<Vec<_>>();
+
+    let a = agent_graph::cli::only(g.clone(), &[A.to_string()]);
+    assert_eq!(
+        ids(&a),
+        [A.to_string(), agent.clone(), B.into(), C.into(), D.into()]
+    );
+    assert_eq!(a.roots, [A, B, C, D], "what it names, after it");
+
+    let of_agent = agent_graph::cli::only(g.clone(), std::slice::from_ref(&agent));
+    assert_eq!(of_agent.roots, [A, B, C, D], "its session");
+
+    let z = agent_graph::cli::only(g, &[Z.to_string()]);
+    assert_eq!(ids(&z), [Z]);
+}

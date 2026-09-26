@@ -196,7 +196,8 @@ Status is updated as each is done.
 
 ### R31. `snapshot --session X --out x.json` writes every session
 - **Where:** `src/cli.rs`
-- **Status:** open
+- **Problem:** As JSON, a snapshot ignored `--session` and `--all` and wrote the whole graph.
+- **Status:** fixed. With `--session` or `--all`, the JSON is cut down (`cli::only`) to whole trees: the sessions chosen (an agent gives its session), those they exchanged messages with (one step, so a teammate doesn't bring the whole team), and whatever those wait on, directly or not, so the waits and `blocked` counts in the file refer to nodes in it. With neither, it's the whole graph, as before. Asking for sessions with none recorded fails as a picture does. Help updated. Tests: `a_snapshot_of_some_sessions_holds_what_they_name` (tests/sessions.rs), `snapshot_json_is_the_sessions_asked_for` and `snapshot_json_of_sessions_needs_some` (tests/cli.rs). Reviewed (three rounds, and a fourth on the help's wording, stopped before it answered).
 
 ### R32. Two snapshots in the same second overwrite each other
 - **Where:** `src/cli.rs`
