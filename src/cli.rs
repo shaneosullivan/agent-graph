@@ -869,20 +869,29 @@ fn snapshot_cmd(
         println!("{}", out.path.display());
         return Ok(());
     }
-    let path = {
-        {
-            let dir = root.join("images");
-            store::ensure_dir(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-            let stamp = humantime::format_rfc3339_seconds(SystemTime::now())
-                .to_string()
-                .replace(['-', ':'], "")
-                .replace('T', "-")
-                .trim_end_matches('Z')
-                .to_string();
-            dir.join(format!("agent-graph-{stamp}.png"))
+    let dir = root.join("images");
+    store::ensure_dir(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    let stamp = humantime::format_rfc3339_seconds(SystemTime::now())
+        .to_string()
+        .replace(['-', ':'], "")
+        .replace('T', "-")
+        .trim_end_matches('Z')
+        .to_string();
+    // The name only has seconds, so another snapshot may have it already:
+    // that one is kept, and this one gets the next free "-2", "-3"...
+    let mut n = 1;
+    let path = loop {
+        let name = match n {
+            1 => format!("agent-graph-{stamp}.png"),
+            _ => format!("agent-graph-{stamp}-{n}.png"),
+        };
+        let path = dir.join(name);
+        match store::write_new(&path, &bytes) {
+            Ok(()) => break path,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 1000 => n += 1,
+            Err(e) => return Err(format!("writing {}: {e}", path.display())),
         }
     };
-    std::fs::write(&path, bytes).map_err(|e| format!("writing {}: {e}", path.display()))?;
     // Only the path goes to stdout, so scripts and agents can use it directly.
     println!("{}", path.display());
     Ok(())
