@@ -593,6 +593,38 @@ test("guesses that can't be counted just now wait a moment", { skip, timeout: 60
   assert.ok(later.wait > 60, `full a while: ${later.wait}s`);
 });
 
+// R52: every scrypt run counts against its address: checking a password
+// (a right one isn't given back) and hashing a new log's. Past the limit,
+// both wait for the window to end.
+test("scrypt runs are counted per address, and not given back", { skip, timeout: 60_000 }, async () => {
+  const { Timestamp } = await import("firebase-admin/firestore");
+  const { SCRYPT_RUNS_PER_ADDRESS, UNLOCK_WINDOW_MS } = await import("../lib/config.ts");
+  const { addressKey } = await import("../lib/crypto.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const store = await import("../lib/store.ts");
+
+  const address = anAddress();
+  const bucket = firestore().collection("unlock-attempts").doc(`scrypt-${addressKey(address)}`);
+  const right = await store.takeUnlockAttempt(newId(), address);
+  await store.giveBackUnlockAttempt(right.reservation);
+  assert.equal((await bucket.get()).get("n"), 1, "a right guess still ran scrypt");
+  assert.deepEqual(await store.takeScryptRun(address), {});
+  assert.equal((await bucket.get()).get("n"), 2);
+
+  await bucket.update({ n: SCRYPT_RUNS_PER_ADDRESS, at: Timestamp.fromMillis(Date.now() - 60_000) });
+  const full = await store.takeScryptRun(address);
+  assert.ok(full.wait > 60, `a new log's password waits for the window: ${full.wait}s`);
+  const guess = await store.takeUnlockAttempt(newId(), address);
+  assert.ok(guess.wait > 60, `so does a guess: ${guess.wait}s`);
+  assert.equal((await bucket.get()).get("n"), SCRYPT_RUNS_PER_ADDRESS, "refused runs aren't counted");
+  assert.deepEqual(await store.takeScryptRun(anAddress()), {}, "other addresses aren't affected");
+  assert.deepEqual(await store.takeScryptRun(null), {}, "without an address, not limited");
+
+  await bucket.update({ since: Timestamp.fromMillis(Date.now() - UNLOCK_WINDOW_MS - 1000) });
+  assert.deepEqual(await store.takeScryptRun(address), {});
+  assert.equal((await bucket.get()).get("n"), 1);
+});
+
 // Metadata can go (a log not in use is deleted): each instance's cache of it
 // is kept only so long.
 test("cached metadata is read again after a while", { skip, timeout: 60_000 }, async () => {

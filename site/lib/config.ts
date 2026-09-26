@@ -86,6 +86,13 @@ export const MAX_PASSWORD_BYTES = 1024;
  * `MAX_PASSWORD_BYTES` written all in JSON escapes.
  */
 export const UNLOCK_BODY_BYTES = 8 * 1024;
+/**
+ * scrypt runs allowed per address in each window (each is about 50 ms of
+ * the server's time): every password checked, right ones too, and every
+ * log created with one. Generous: it's there to stop one address keeping
+ * the server busy, not to limit guesses (those limits are above).
+ */
+export const SCRYPT_RUNS_PER_ADDRESS = 200;
 /** How long to wait when too many guesses arrive at once to count them. */
 export const UNLOCK_BUSY_SECONDS = 5;
 

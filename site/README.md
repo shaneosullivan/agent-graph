@@ -57,6 +57,7 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 - A log's metadata never changes, so each server instance caches it.
 
 Passwords are hashed with scrypt. Wrong guesses are limited, every 15 minutes: 5 at a log from one address, 20 at a log from anywhere, and 30 from one address across logs (counted in Firestore, so across every server instance; a right password doesn't count). Past a limit, unlocking answers `429` until the window ends, even with the right password.
+- **Every scrypt run is limited too,** per address: 200 every 15 minutes, counting every password checked (right ones too) and every log created with a password. Each costs the server about 50 ms, so that's what stops one address keeping it busy. Past it, unlocking and creating a log with a password answer `429` until the window ends; creating one without a password doesn't.
 - **What that costs viewers:** one address can only hold back itself and anyone sharing it (an office, or a mobile carrier's shared address), but someone guessing from four or more addresses can keep a log's new viewers waiting for as long as they keep at it. Viewers who have already unlocked it aren't affected.
 - **What it allows guessers:** about 2,000 guesses a day at a log, for as long as it exists. Choose a password that wouldn't fall to that: not a word, a name or a date.
 - **Addresses** are the ones Vercel reports (`X-Real-IP`), IPv6 counted by its /64. Behind another proxy, check it sets that header, or the per-address limits can be dodged (the per-log one holds regardless).
@@ -140,7 +141,7 @@ npm run test:ci
    - `NEXT_PUBLIC_SITE_URL`: `https://agentgraph.chofter.com`
    - `CRON_SECRET`: 32+ random bytes, generated the same way. Vercel Cron sends it to `/api/cron/cleanup` (see `vercel.json`), the daily deletion of logs with no event for a week, which does nothing without it.
 5. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
-6. **Optional:** add a Firestore TTL policy on the `unlock-attempts` collection's `expireAt` field, so counts of password guesses are cleared away once their window is over.
+6. **Optional:** add a Firestore TTL policy on the `unlock-attempts` collection's `expireAt` field, so counts of password guesses and scrypt runs are cleared away once their window is over.
 7. **Logs from before storage ids.** Logs created before logs were stored under an HMAC of their id can't be found by the new site until they're copied. Run the migration with the production environment: the same `AGENT_GRAPH_ENCRYPTION_KEY`, and `FIREBASE_SERVICE_ACCOUNT`. It refuses to run without the key, prints the project, and checks that the key decrypts the logs before writing anything.
    1. Before deploying, copy the logs. The old site doesn't see the copies.
       ```bash
@@ -157,6 +158,6 @@ npm run test:ci
    Rolling the site back past this deploy loses the logs created since (the old site can't find them), and after step 3, all of them. Exports, backups and point-in-time recovery (which keeps deleted documents for up to 7 days) from before step 3 still name every log by its link: delete them, or keep them as safe as the logs.
 
 Not built yet:
-- rate limiting on log creation;
+- rate limiting on log creation (only hashing a new log's password is limited);
 - a way to delete a log;
 - rotating the encryption key. The stored format carries a version byte, so a second key can be added later, but existing logs can't be re-encrypted with it: that needs each log's id, which isn't stored. The same goes for anyone who gets the key and the database without the links: they can't decrypt anything.
