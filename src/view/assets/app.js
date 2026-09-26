@@ -398,9 +398,16 @@ function selectNode(id) {
   renderView();
 }
 
-/** The node named in the address (`#<id>`), whether or not it exists. */
+/**
+ * The node named in the address (`#<id>`), whether or not it exists. One
+ * that doesn't decode (a stray `%`, say) names nothing.
+ */
 function hashId() {
-  return decodeURIComponent(location.hash.slice(1)) || null;
+  try {
+    return decodeURIComponent(location.hash.slice(1)) || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Whether `id` is a session in the live graph, or a node it has (of its tree, or one it refers to). */
