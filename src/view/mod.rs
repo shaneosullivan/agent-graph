@@ -8,6 +8,15 @@
 //!
 //! Being on the computer the sessions ran on, it can also reopen one in its
 //! agent (`POST /api/open`, see `open`).
+//!
+//! Listening only on 127.0.0.1 keeps other computers out, but not other
+//! accounts on this one. So each run makes a random key, and the link it
+//! prints carries it (`/?key=…`). The page (static, and built into the
+//! binary) keeps the key in its own storage and sends it with every API
+//! request in the `X-Agent-Graph-Key` header, which another website can't
+//! send. (Not a cookie: browsers send cookies to every port on localhost,
+//! so any other local web server would receive it.) The event stream, which
+//! can't set headers, carries it as `?key=`.
 
 mod http;
 pub mod open;
@@ -15,9 +24,10 @@ pub mod tail;
 
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use http::{Request, respond};
 use tail::Tail;
@@ -30,6 +40,11 @@ use crate::timeline::{self as api, ApiError, Environment, Timed};
 const POLL: Duration = Duration::from_millis(250);
 /// How often an idle event stream sends a keep-alive comment.
 const HEARTBEAT: Duration = Duration::from_secs(15);
+/// Most connections served at once (each open page holds one for its event
+/// stream); more are closed straight away, so a flood can't use up every
+/// thread. (A local user without the key can still lock the viewer out for
+/// as long as they keep the connections coming, but not read anything.)
+pub const MAX_CONNECTIONS: usize = 256;
 
 const INDEX_HTML: &str = include_str!("assets/index.html");
 const APP_CSS: &str = include_str!("assets/app.css");
@@ -47,15 +62,10 @@ pub struct Options {
 }
 
 pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
-    let listener = TcpListener::bind(("127.0.0.1", opts.port)).map_err(|e| {
-        format!(
-            "can't listen on port {}: {e}. Is the viewer already running? Try --port.",
-            opts.port
-        )
-    })?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let url = format!("http://localhost:{port}/");
-    start(events_dir, listener, opts.stale_after)?;
+    let listeners = bind(opts.port)?;
+    let port = listeners[0].local_addr().map_err(|e| e.to_string())?.port();
+    let key = start_on(events_dir, listeners, opts.stale_after, open::in_terminal)?;
+    let url = link(port, &key);
     println!("Agent Graph viewer: {url}");
     println!("Reading events from {}", events_dir.display());
     println!("Press Ctrl+C to stop.");
@@ -67,17 +77,45 @@ pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
     }
 }
 
+/// Listens on `port` of 127.0.0.1, and of [::1] too when there's IPv6.
+///
+/// Browsers try `localhost` as [::1] first, so if another program (another
+/// account's, say) were listening there, a `localhost` link would go to it.
+/// The printed link uses 127.0.0.1 to avoid that, and the viewer refuses to
+/// start if [::1] at its port is taken, so typing `localhost` is safe too.
+pub fn bind(port: u16) -> Result<Vec<TcpListener>, String> {
+    let v4 = TcpListener::bind(("127.0.0.1", port)).map_err(|e| {
+        format!("can't listen on port {port}: {e}. Is the viewer already running? Try --port.")
+    })?;
+    let port = v4.local_addr().map_err(|e| e.to_string())?.port();
+    match TcpListener::bind(("::1", port)) {
+        Ok(v6) => Ok(vec![v4, v6]),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Err(format!(
+            "something else is listening on [::1]:{port} (localhost over IPv6), where a \
+             browser could send the viewer's link. Try another --port."
+        )),
+        // No IPv6 here: nothing can be listening there either.
+        Err(_) => Ok(vec![v4]),
+    }
+}
+
+/// The link to the viewer on `port`, carrying `key`. It names 127.0.0.1
+/// rather than `localhost`, so it can't be sent anywhere else (see `bind`).
+pub fn link(port: u16, key: &str) -> String {
+    format!("http://127.0.0.1:{port}/?key={key}")
+}
+
 /// Runs a command that reopens a session: `open::in_terminal`, or a stand-in
 /// in tests.
 pub type Launch = fn(&Resume) -> Result<(), String>;
 
 /// Loads the events, then serves `listener` and watches for new events on
-/// background threads.
+/// background threads. Returns the key the page's link must carry.
 pub fn start(
     events_dir: &Path,
     listener: TcpListener,
     stale_after: Duration,
-) -> Result<(), String> {
+) -> Result<String, String> {
     start_with(events_dir, listener, stale_after, open::in_terminal)
 }
 
@@ -87,8 +125,24 @@ pub fn start_with(
     listener: TcpListener,
     stale_after: Duration,
     launch: Launch,
-) -> Result<(), String> {
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+) -> Result<String, String> {
+    start_on(events_dir, vec![listener], stale_after, launch)
+}
+
+/// `start_with`, serving each of `listeners` (all on the same port).
+fn start_on(
+    events_dir: &Path,
+    listeners: Vec<TcpListener>,
+    stale_after: Duration,
+    launch: Launch,
+) -> Result<String, String> {
+    let key = new_key();
+    let port = listeners
+        .first()
+        .ok_or("nothing to listen on")?
+        .local_addr()
+        .map_err(|e| e.to_string())?
+        .port();
     let shared = Arc::new(Shared {
         tail: Mutex::new(Tail::new(events_dir)),
         version: Mutex::new(0),
@@ -97,6 +151,8 @@ pub fn start_with(
         port,
         events_dir: events_dir.to_path_buf(),
         launch,
+        key: key.clone(),
+        connections: AtomicUsize::new(0),
     });
     shared
         .poll()
@@ -112,13 +168,30 @@ pub fn start_with(
         }
     });
 
-    thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let shared = Arc::clone(&shared);
-            thread::spawn(move || handle(stream, &shared));
+    for listener in listeners {
+        let shared = Arc::clone(&shared);
+        thread::spawn(move || accept(listener, shared));
+    }
+    Ok(key)
+}
+
+/// Serves `listener`'s connections, each on its own thread, up to
+/// `MAX_CONNECTIONS` at once across all listeners.
+fn accept(listener: TcpListener, shared: Arc<Shared>) {
+    for stream in listener.incoming().flatten() {
+        // Each connection gets a thread; past the limit, new ones are
+        // closed rather than piling up.
+        if shared.connections.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+            shared.connections.fetch_sub(1, Ordering::SeqCst);
+            continue;
         }
-    });
-    Ok(())
+        let shared = Arc::clone(&shared);
+        thread::spawn(move || {
+            // Gives the slot back however the handler ends, panics included.
+            let _slot = Slot(&shared.connections);
+            handle(stream, &shared);
+        });
+    }
 }
 
 struct Shared {
@@ -130,6 +203,10 @@ struct Shared {
     port: u16,
     events_dir: PathBuf,
     launch: Launch,
+    /// This run's key; see the module docs.
+    key: String,
+    /// Connections being served now.
+    connections: AtomicUsize,
 }
 
 impl Shared {
@@ -165,6 +242,16 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
     // page from reaching the viewer through DNS rebinding.
     if !host_allowed(req.header("host"), shared.port) {
         return respond(stream, 403, "text/plain", &[], b"Forbidden");
+    }
+    // The page and its script and styles are built in and hold nothing
+    // private; everything else needs this run's key.
+    let public = req.method == "GET"
+        && matches!(
+            req.path.as_str(),
+            "/" | "/index.html" | "/app.css" | "/app.js"
+        );
+    if !public && !has_key(req, &shared.key) {
+        return respond(stream, 403, "text/plain", &[], NEEDS_KEY);
     }
     if req.method == "POST" {
         // Other websites can send requests to localhost too. Browsers say
@@ -377,6 +464,43 @@ fn stream_changes(stream: &mut TcpStream, shared: &Shared) -> std::io::Result<()
     }
 }
 
+const NEEDS_KEY: &[u8] = b"Open the viewer with the link `agent-graph view` printed: \
+it carries this run's key.";
+
+/// A key no one else can guess: 160 random bits from a generator seeded by
+/// the OS (the random part of two ULIDs).
+fn new_key() -> String {
+    let random = || ulid::Ulid::from_datetime(SystemTime::now()).random();
+    format!("{:020x}{:020x}", random(), random())
+}
+
+/// Whether the request carries the key: in the `X-Agent-Graph-Key` header,
+/// or for the event stream (which can't send headers), as `?key=`.
+fn has_key(req: &Request, key: &str) -> bool {
+    same_key(req.header("x-agent-graph-key"), key)
+        || (req.method == "GET" && req.path == "/api/stream" && same_key(req.param("key"), key))
+}
+
+/// A connection's place under `MAX_CONNECTIONS`, given back when dropped.
+struct Slot<'a>(&'a AtomicUsize);
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Whether `given` is the key, compared in constant time.
+fn same_key(given: Option<&str>, key: &str) -> bool {
+    let Some(given) = given else { return false };
+    given.len() == key.len()
+        && given
+            .bytes()
+            .zip(key.bytes())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+}
+
 fn host_allowed(host: Option<&str>, port: u16) -> bool {
     let Some(host) = host else { return false };
     ["localhost", "127.0.0.1", "[::1]"]
@@ -447,6 +571,19 @@ mod tests {
         assert!(!host_allowed(Some("localhost:8080"), 7777));
         assert!(!host_allowed(Some("evil.example:7777"), 7777));
         assert!(!host_allowed(None, 7777));
+    }
+
+    /// R7: a handler that panics still gives its connection slot back, or
+    /// a few panics would lock everyone out.
+    #[test]
+    fn a_panicking_handler_gives_its_slot_back() {
+        let connections = AtomicUsize::new(1);
+        let result = std::panic::catch_unwind(|| {
+            let _slot = Slot(&connections);
+            panic!("handler failed");
+        });
+        assert!(result.is_err());
+        assert_eq!(connections.load(Ordering::SeqCst), 0);
     }
 
     #[test]

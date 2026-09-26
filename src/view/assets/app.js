@@ -63,8 +63,39 @@ function h(tag, props, ...kids) {
   return el;
 }
 
+/**
+ * This run's key for `agent-graph view`'s API. It arrives in the link the
+ * command printed (`?key=…`), is kept in this origin's storage (so another
+ * tab, or a reload, still has it), and is taken out of the address bar.
+ */
+const KEY = (() => {
+  if (window.agentGraphSource) return null;
+  const params = new URLSearchParams(location.search);
+  const given = params.get('key');
+  try {
+    if (given) localStorage.setItem('agentGraphKey', given);
+  } catch {
+    /* no storage: this page still has the key until it's closed */
+  }
+  if (given) {
+    params.delete('key');
+    const rest = params.toString();
+    history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
+    return given;
+  }
+  try {
+    return localStorage.getItem('agentGraphKey');
+  } catch {
+    return null;
+  }
+})();
+
+/** `url` with the key added, for requests that can't send headers. */
+const withKey = (url) => `${url}${url.includes('?') ? '&' : '?'}key=${encodeURIComponent(KEY || '')}`;
+
 async function getJSON(url) {
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(url, { cache: 'no-store', headers: { 'X-Agent-Graph-Key': KEY || '' } });
+  if (res.status === 403) throw Object.assign(new Error('no key'), { needsKey: true });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
 }
@@ -84,7 +115,7 @@ const source = window.agentGraphSource || {
   info: () => getJSON('/api/info').then((i) => ({ now_ms: i.now_ms, where: i.events_dir })),
   /** Calls `onChange()` when new events arrive and `onStatus(connected)` as the connection changes. */
   subscribe(onChange, onStatus) {
-    const stream = new EventSource('/api/stream');
+    const stream = new EventSource(withKey('/api/stream'));
     stream.addEventListener('open', () => onStatus(true));
     stream.addEventListener('changed', onChange);
     stream.addEventListener('error', () => onStatus(false));
@@ -96,6 +127,16 @@ const source = window.agentGraphSource || {
     if (dark) params.set('theme', 'dark');
     return `/api/image.png?${params}`;
   },
+  /**
+   * The image at `url` (from `imageUrl`), when fetching it takes more than a
+   * link can carry: here, the key, sent as a header so it never ends up in
+   * the saved file's "where from" details.
+   */
+  async fetchImage(url) {
+    const res = await fetch(url, { cache: 'no-store', headers: { 'X-Agent-Graph-Key': KEY || '' } });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return res.blob();
+  },
   /** What to call the newest point in the timeline. */
   liveLabel: 'Live',
   /**
@@ -104,7 +145,11 @@ const source = window.agentGraphSource || {
    * nothing to open. Rejects with an error that may carry a `command` to run.
    */
   async open(id) {
-    const res = await fetch(`/api/open?node=${encodeURIComponent(id)}`, { method: 'POST', cache: 'no-store' });
+    const res = await fetch(`/api/open?node=${encodeURIComponent(id)}`, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'X-Agent-Graph-Key': KEY || '' },
+    });
     const body = await res.json().catch(() => ({ error: `${res.status} ${res.statusText}` }));
     if (!res.ok) throw Object.assign(new Error(body.error), { command: body.command });
     return body;
@@ -179,7 +224,13 @@ function scheduleRefresh() {
   }
   refreshing = refresh()
     .then(() => setError(null))
-    .catch((e) => setError(`Can't reach the viewer: ${e.message}. Is \`agent-graph view\` still running?`))
+    .catch((e) =>
+      setError(
+        e.needsKey
+          ? 'Open this page with the link `agent-graph view` printed: it carries the key for this run.'
+          : `Can't reach the viewer: ${e.message}. Is \`agent-graph view\` still running?`,
+      ),
+    )
     .finally(() => {
       refreshing = null;
       if (refreshAgain) {
@@ -454,16 +505,37 @@ function saveImageLink(stop) {
   if (!url) return null;
   const when = !S.following && stop ? new Date(stop.ts) : new Date();
   const time = when.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
+  const name = `agent-graph-${short(S.root)}-${time}.png`;
   return h(
     'a',
     {
       class: 'btn',
       href: url,
-      download: `agent-graph-${short(S.root)}-${time}.png`,
+      download: name,
       title: 'Save a picture of this session as it looks here',
+      onclick: source.fetchImage
+        ? (e) => {
+            e.preventDefault();
+            saveImage(url, name);
+          }
+        : null,
     },
     'Save image',
   );
+}
+
+/** Downloads the image at `url` as `name`, through `source.fetchImage`. */
+async function saveImage(url, name) {
+  try {
+    const href = URL.createObjectURL(await source.fetchImage(url));
+    const link = h('a', { href, download: name, hidden: true });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 60_000);
+  } catch (e) {
+    setError(`Couldn't save the image: ${e.message}`);
+  }
 }
 
 /** A card and its children's cards. `drawn` skips any node already drawn. */

@@ -31,11 +31,24 @@ impl Request {
 
 const MAX_HEAD: usize = 16 * 1024;
 
+/// How long a request's head may take to arrive, all told. (A trickle of
+/// bytes would otherwise hold a connection open indefinitely.)
+const HEAD_DEADLINE: Duration = Duration::from_secs(5);
+
 pub fn read_request(stream: &mut TcpStream) -> io::Result<Request> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    read_request_within(stream, HEAD_DEADLINE)
+}
+
+fn read_request_within(stream: &mut TcpStream, limit: Duration) -> io::Result<Request> {
+    let deadline = std::time::Instant::now() + limit;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
     while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "request too slow"));
+        }
+        stream.set_read_timeout(Some(left))?;
         let n = stream.read(&mut chunk)?;
         if n == 0 || buf.len() > MAX_HEAD {
             return Err(io::Error::new(
@@ -147,6 +160,34 @@ pub fn percent_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R7: a client sending its request a byte at a time can't hold the
+    /// connection (and its thread) past the deadline.
+    #[test]
+    fn a_trickled_request_is_cut_off() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            for _ in 0..40 {
+                if stream.write_all(b"G").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let (mut server, _) = listener.accept().unwrap();
+        let start = std::time::Instant::now();
+        let result = read_request_within(&mut server, Duration::from_millis(300));
+        assert!(result.is_err());
+        assert!(
+            start.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            start.elapsed()
+        );
+        drop(server);
+        client.join().unwrap();
+    }
 
     #[test]
     fn decodes_query_values() {

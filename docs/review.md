@@ -53,8 +53,8 @@ Status is updated as each is done.
 ### R7. The local viewer serves any local user
 - **Where:** `src/view/mod.rs`, `src/view/http.rs`
 - **Problem:** Loopback doesn't mean "this user": another account on the machine can read every log through the API and, forging `Origin`, open terminals on the user's desktop. There's also no limit on connections.
-- **Fix:** a random token, printed in the viewer's URL and kept in a cookie, required for every request; cap concurrent connections.
-- **Status:** open
+- **Fix:** each run makes a random 160-bit key and prints its link as `http://127.0.0.1:<port>/?key=…`. The page (public, built in) keeps the key in its own origin's storage and sends it with every API request as an `X-Agent-Graph-Key` header, which another website can't send; only the event stream takes it as `?key=`, and Save image fetches with the header so the key isn't recorded on the file. Not a cookie: browsers send cookies to every localhost port. The viewer listens on `[::1]` too and refuses to start if another program holds it (browsers try `localhost` as `[::1]` first). Connections are capped at 256, a request's head must arrive within 5 s, and a panicking handler gives its slot back. (A local user without the key can still lock the viewer out by flooding it, but can't read anything.)
+- **Status:** fixed. Tests: `nothing_private_is_served_without_the_viewers_key`, `connections_past_the_limit_are_closed`, `the_viewer_wont_share_its_port_on_ipv6_localhost` (tests/view.rs), `a_trickled_request_is_cut_off`, `a_panicking_handler_gives_its_slot_back` (src/view), and "R7: …" in site/tests/viewer.test.mjs. Reviewed (three rounds: the first design used a cookie, which leaks to other localhost servers; the second missed IPv6 `localhost`).
 
 ### R8. Resume can run a `claude` planted in the session's folder
 - **Where:** `src/view/open.rs`

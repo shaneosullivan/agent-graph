@@ -16,9 +16,9 @@ const app = readFileSync(new URL("app.js", assets), "utf8");
  * keep the test run alive). Returns jsdom's window; `window.__viewer`
  * exposes the page's state `S` and its navigation functions.
  */
-export function loadViewer(t, source, { hash = "" } = {}) {
+export function loadViewer(t, source, { hash = "", path = "", fetch, EventSource } = {}) {
   const dom = new JSDOM(html, {
-    url: `http://localhost/${hash}`,
+    url: `http://localhost:7777/${path}${hash}`,
     runScripts: "outside-only",
     pretendToBeVisual: true,
   });
@@ -28,14 +28,19 @@ export function loadViewer(t, source, { hash = "" } = {}) {
   window.HTMLElement.prototype.scrollIntoView = function () {
     window.__scrolls = (window.__scrolls || 0) + 1;
   };
-  window.agentGraphSource = {
-    liveLabel: "Live",
-    imageUrl: null,
-    info: async () => ({ now_ms: Date.now(), where: "test" }),
-    subscribe() {},
-    timeline: async () => ({ stops: [] }),
-    ...source,
-  };
+  // With no `source`, the page uses its own (the local viewer's API), over
+  // the given `fetch` and `EventSource`.
+  if (fetch) window.fetch = fetch;
+  if (EventSource) window.EventSource = EventSource;
+  if (source)
+    window.agentGraphSource = {
+      liveLabel: "Live",
+      imageUrl: null,
+      info: async () => ({ now_ms: Date.now(), where: "test" }),
+      subscribe() {},
+      timeline: async () => ({ stops: [] }),
+      ...source,
+    };
   window.eval(
     `${app}\nwindow.__viewer = { S, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll };`,
   );

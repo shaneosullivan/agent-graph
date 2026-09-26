@@ -395,7 +395,7 @@ claude-code:e0000002  search-indexer  [working]  Rebuilding the index schema (+1
 
 ### `agent-graph view`: live, in the browser
 
-Serves `http://localhost:7777` (`--open` opens it). The layout:
+Serves port 7777, and prints its link with this run's key, `http://127.0.0.1:7777/?key=…` (`--open` opens it). The layout:
 - **Sessions sidebar.** Each entry shows what's happening. Anything that needs you, is deadlocked or looks stuck is called out there, so trouble is visible without clicking.
 - **Tree.** Cards coloured by state, with task progress and what each node is waiting on.
 - **Detail panel.** Tasks, waits, agents it started, messages and timestamps for the selected node.
@@ -413,8 +413,14 @@ Serves `http://localhost:7777` (`--open` opens it). The layout:
 How it works:
 - **One graph implementation.** A thread tails the event files (reading only new, complete lines) and tells pages about changes over Server-Sent Events. Pages then ask for the graph again, live or `?until=<event id>`, so the Rust reducer stays the only implementation of the graph logic. There's no JavaScript copy to drift out of step.
 - **Security.**
-  - The server listens only on `127.0.0.1`.
+  - The server listens only on `127.0.0.1` and `[::1]` (when there's IPv6).
+    - Browsers try `localhost` as `[::1]` first, so if another program were listening there, a `localhost` link would reach it. The printed link names `127.0.0.1`, and the viewer won't start if `[::1]` at its port is already taken, so a typed `localhost` is safe too.
+  - That keeps other computers out, but not other accounts on this one. So each run makes a random 160-bit key and prints its link with `?key=<key>`.
+    - The page, its script and its styles are built in and private to no one, so they're served to anyone. Everything under `/api/` needs the key, compared in constant time.
+    - The page takes the key from the link, keeps it in its own origin's `localStorage` (so a reload or a second tab works), takes it out of the address bar, and sends it with every API request as an `X-Agent-Graph-Key` header. Another website can't send that header without a CORS preflight the server never grants. The event stream, which can't set headers, carries it as `?key=`; nothing else accepts it that way. Save image fetches the picture with the header and saves it from memory, so the key isn't recorded in the file's "where from" details.
+    - It isn't a cookie: browsers send cookies to every port on `localhost`, so any other local web server (another account's included) would receive it.
   - It answers only requests whose `Host` is `localhost`, `127.0.0.1` or `[::1]` on its port, which stops other websites reaching it through DNS rebinding.
+  - At most 256 connections are served at once (each open page holds one for its event stream), and a request's head must arrive within 5 seconds, so a slow or flooding client can't tie up every thread. A local user without the key can still lock the viewer out for as long as they keep opening connections, but can't read anything.
   - It sends a strict Content Security Policy (`default-src 'none'`, same-origin scripts, styles and fetches only).
   - It loads nothing from the internet.
   - Resuming runs a program, so it gets more care:

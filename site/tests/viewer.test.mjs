@@ -15,3 +15,48 @@ test("R3: a tree with a loop in it is drawn once, and the page keeps working", a
   assert.equal(doc.querySelector("#banner").hidden, true, doc.querySelector("#banner").textContent);
   assert.equal(doc.querySelectorAll("#view .node").length, 2);
 });
+
+test("R7: the local page takes its key from the link, keeps it, and sends it", async (t) => {
+  const requests = [];
+  const streams = [];
+  const g = graph([node("x:a")]);
+  const fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), key: init.headers && init.headers["X-Agent-Graph-Key"] });
+    const body = String(url).startsWith("/api/timeline")
+      ? { stops: [] }
+      : String(url).startsWith("/api/info")
+        ? { now_ms: Date.now(), events_dir: "x" }
+        : g;
+    return { ok: true, status: 200, json: async () => body, text: async () => "", blob: async () => ({}) };
+  };
+  class EventSource {
+    constructor(url) {
+      streams.push(url);
+    }
+    addEventListener() {}
+  }
+  const window = loadViewer(t, null, { path: "?key=k3y", hash: "#x:a", fetch, EventSource });
+  await until(() => window.document.querySelectorAll("#view .node").length);
+
+  assert.equal(window.location.search, "", "the key is out of the address bar");
+  assert.equal(window.location.hash, "#x:a", "the rest of the link is kept");
+  assert.equal(window.localStorage.getItem("agentGraphKey"), "k3y");
+  assert.ok(requests.length > 0);
+  for (const r of requests) assert.equal(r.key, "k3y", r.url);
+  assert.deepEqual(streams, ["/api/stream?key=k3y"]);
+
+  // Saving an image fetches it with the key as a header: the key is never
+  // in a URL, so it can't end up in the saved file's "where from" details.
+  const image = window.document.querySelector('a[href^="/api/image.png"]');
+  assert.ok(image, "a Save image link");
+  assert.ok(!image.getAttribute("href").includes("k3y"), image.getAttribute("href"));
+  window.URL.createObjectURL = () => "blob:saved";
+  window.URL.revokeObjectURL = () => {};
+  const before = requests.length;
+  image.click();
+  await until(() => requests.length > before);
+  const fetched = requests.slice(before).find((r) => r.url.startsWith("/api/image.png"));
+  assert.ok(fetched, "fetched the image");
+  assert.equal(fetched.key, "k3y");
+  assert.ok(!fetched.url.includes("k3y"));
+});
