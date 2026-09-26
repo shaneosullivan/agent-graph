@@ -56,5 +56,16 @@ test("the site's WebAssembly sends one tree, and every session's summary", () =>
 
   const newest = call({ op: "graph", env: "site" });
   assert.equal(newest.root, newest.roots[0], "none asked for: the newest");
-  assert.equal(call({ op: "timeline", root: "x:a" }).stops.length, 2);
+});
+
+// R56: one request, reducing the log once, brings a refresh all it needs.
+test("the site's WebAssembly sends the graph now with its tree's timeline", () => {
+  const g = call({ op: "graph", env: "site", root: "x:a" });
+  assert.deepEqual(
+    g.stops.map((s) => s.node),
+    ["x:a", "x:a/b"],
+  );
+  assert.equal(call({ op: "graph", env: "site", root: "x:c" }).stops.length, 2);
+  const step = call({ op: "graph", env: "site", root: "x:a", until: g.stops[0].id });
+  assert.equal(step.stops, undefined, "a step's is the same timeline");
 });

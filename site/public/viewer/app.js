@@ -13,6 +13,7 @@ const STATE_LABEL = {
 };
 const RECENT_MS = 24 * 60 * 60 * 1000;
 const THUMB = 18; // slider thumb width, px; matches app.css
+const CACHED_STEPS = 32; // past steps' graphs kept, the most recently shown
 
 const S = {
   live: null, // the graph now
@@ -25,9 +26,10 @@ const S = {
   showAll: false,
   connected: false,
   info: null,
-  cache: new Map(), // event id -> graph at that stop (a new map on each refresh)
+  cache: new Map(), // event id -> graph at that stop, least recently shown first (a new map on each refresh)
   seq: 0, // bumped whenever the view moves on, so a step still loading isn't shown
   lastFlashed: null,
+  scrolledTo: null, // what the ringed card last brought into view stands for (see `renderMain`)
   error: null,
   skew: 0, // server clock minus ours; non-zero when AGENT_GRAPH_NOW pins it
   opened: null, // { id, busy?, error?, command? }: the last Open button press
@@ -48,13 +50,16 @@ const clean = (s) =>
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
     .replace(/[\u202a-\u202e\u2066-\u2069]/g, '');
 
-/** Builds an element. Strings become text nodes, never markup. */
+/**
+ * Builds an element. Strings become text nodes, never markup. Handlers are
+ * set as properties (`onclick`), so `morph` can carry them over.
+ */
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
     if (v == null || v === false) continue;
     if (k === 'class') el.className = v;
-    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k.startsWith('on')) el[k] = v;
     else el.setAttribute(k, v === true ? '' : clean(v));
   }
   for (const kid of kids.flat(Infinity)) {
@@ -62,6 +67,51 @@ function h(tag, props, ...kids) {
     el.append(kid instanceof Node ? kid : clean(kid));
   }
   return el;
+}
+
+/**
+ * Makes `el`'s children look like `kids`, as `replaceChildren(...kids)`
+ * would, but keeps each node that's still there (the same tag, at the same
+ * place), changing only what differs: its text, or its attributes and click
+ * handler. So a redraw as events arrive leaves focus and selected text alone
+ * wherever nothing changed.
+ */
+function morph(el, kids) {
+  const old = [...el.childNodes];
+  kids.forEach((kid, i) => {
+    const was = old[i];
+    if (!was) el.append(kid);
+    else if (was.nodeName !== kid.nodeName) was.replaceWith(kid);
+    else if (was.nodeType === Node.TEXT_NODE) {
+      if (was.data !== kid.data) was.data = kid.data;
+    } else {
+      for (const { name } of [...was.attributes]) if (!kid.hasAttribute(name)) was.removeAttribute(name);
+      for (const { name, value } of [...kid.attributes]) if (was.getAttribute(name) !== value) was.setAttribute(name, value);
+      was.onclick = kid.onclick;
+      morph(was, [...kid.childNodes]);
+    }
+  });
+  for (const gone of old.slice(kids.length)) gone.remove();
+}
+
+/**
+ * Redraws `el` with `kids` (see `morph`). A control that had focus and now
+ * stands for something else, or has gone (a session listed above it moved
+ * it down, say), gives it to the one that stands for what it did.
+ */
+function redraw(el, kids) {
+  const focused = el.contains(document.activeElement) ? document.activeElement : null;
+  const key = focused && controlKey(focused);
+  morph(el, kids);
+  if (key && controlKey(focused) !== key) {
+    const again = [...el.querySelectorAll('[data-id]')].find((e) => controlKey(e) === key);
+    if (again) again.focus({ preventScroll: true });
+  }
+}
+
+/** What control `el` is, if it stands for a node: which node, and what it does with it. */
+function controlKey(el) {
+  return el.isConnected && el.dataset.id != null ? `${el.dataset.id} ${el.classList[0]}` : null;
 }
 
 /**
@@ -110,7 +160,9 @@ async function getJSON(url) {
 const source = window.agentGraphSource || {
   /**
    * The graph now, or as of event `until`: a summary of every session
-   * (`sessions`), and the nodes of the tree under `root` (`nodes`).
+   * (`sessions`), and the nodes of the tree under `root` (`nodes`). The
+   * graph now also has every stop in that tree's timeline (`stops`), worked
+   * out with it, so a refresh is one request.
    */
   graph: (until, root) => {
     const params = new URLSearchParams();
@@ -119,8 +171,6 @@ const source = window.agentGraphSource || {
     const query = params.toString();
     return getJSON(`/api/graph${query ? `?${query}` : ''}`);
   },
-  /** Every stop in the timeline of the tree under `root`. */
-  timeline: (root) => getJSON(`/api/timeline?root=${encodeURIComponent(root)}`),
   /** `{ now_ms, where }`: the clock to measure "5m ago" by, and where events come from. */
   info: () => getJSON('/api/info').then((i) => ({ now_ms: i.now_ms, where: i.events_dir })),
   /** Calls `onChange()` when new events arrive and `onStatus(connected)` as the connection changes. */
@@ -248,7 +298,13 @@ async function refresh() {
   S.cache = new Map();
   const before = S.root;
   const asked = S.root || hashId();
-  const live = await source.graph(null, asked);
+  let live;
+  try {
+    live = await source.graph(null, asked);
+  } catch (e) {
+    if (S.root !== before) return; // no longer shown: nothing to say
+    throw e;
+  }
   // Another session was chosen meanwhile; the refresh that follows shows it.
   if (S.root !== before) return;
   S.live = live;
@@ -265,7 +321,7 @@ async function refresh() {
   if (live.root !== S.root) {
     // The session asked for has gone, or none was yet: the one the reply
     // holds instead (the newest), if it's one to show. Nothing of the old
-    // one's (not its timeline to step through either, while the new one comes).
+    // one's (not its timeline to step through either).
     forgetLoads();
     const tree = live.root;
     S.root = tree && (tree === asked || visibleRoots().includes(tree)) ? tree : null;
@@ -274,20 +330,11 @@ async function refresh() {
     S.shown = S.live;
     S.stops = [];
     S.pos = -1;
-    renderAll();
   }
-  const root = S.root;
-  let stops;
-  try {
-    stops = root ? (await source.timeline(root)).stops : [];
-  } catch (e) {
-    if (root !== S.root) return; // no longer shown: nothing to say
-    throw e;
-  }
-  // Another session was chosen meanwhile; the refresh that follows shows it.
-  if (root !== S.root) return;
+  // The timeline of the tree the reply holds, which is now the one shown.
+  const stops = S.root ? live.stops : [];
 
-  // Where the timeline is now, after the requests: it may have been moved.
+  // Where the timeline is now, after the request: it may have been moved.
   const old = S.stops;
   const currentId = old[S.pos] && old[S.pos].id;
   S.stops = stops;
@@ -334,6 +381,7 @@ function goTo(pos) {
   const id = S.stops[S.pos].id;
   const cached = S.cache.get(id);
   if (cached) {
+    remember(S.cache, id, cached);
     S.shown = cached;
     renderView();
     return;
@@ -344,7 +392,7 @@ function goTo(pos) {
   fetchTimer = setTimeout(async () => {
     try {
       const graph = await source.graph(id, S.root);
-      cache.set(id, graph);
+      remember(cache, id, graph);
       if (seq !== S.seq) return;
       S.shown = graph;
       renderView();
@@ -352,6 +400,17 @@ function goTo(pos) {
       if (seq === S.seq) setError(`Couldn't load that step: ${e.message}`);
     }
   }, 40);
+}
+
+/**
+ * Keeps step `id`'s graph in `cache` as the most recently shown, forgetting
+ * the least recently shown past `CACHED_STEPS`: a long timeline's graphs
+ * would otherwise pile up while the page stays open.
+ */
+function remember(cache, id, graph) {
+  cache.delete(id);
+  cache.set(id, graph);
+  while (cache.size > CACHED_STEPS) cache.delete(cache.keys().next().value);
 }
 
 function goLive() {
@@ -384,9 +443,16 @@ function selectNode(id) {
   renderView();
 }
 
-/** The node named in the address (`#<id>`), whether or not it exists. */
+/**
+ * The node named in the address (`#<id>`), whether or not it exists. One
+ * that doesn't decode (a stray `%`, say) names nothing.
+ */
 function hashId() {
-  return decodeURIComponent(location.hash.slice(1)) || null;
+  try {
+    return decodeURIComponent(location.hash.slice(1)) || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Whether `id` is a session in the live graph, or a node it has (of its tree, or one it refers to). */
@@ -437,18 +503,17 @@ function renderMode() {
 }
 
 function renderSessions() {
-  const list = $('#session-list');
-  list.replaceChildren();
-  if (!S.live) return;
+  redraw($('#session-list'), sessionItems());
+}
+
+function sessionItems() {
+  if (!S.live) return [];
   const roots = visibleRoots();
   if (!roots.length) {
     const hidden = S.live.roots.length;
-    list.append(
-      h('li', { class: 'empty-note' }, hidden ? `${plural(hidden, 'older session')} hidden.` : 'No sessions yet.'),
-    );
-    return;
+    return [h('li', { class: 'empty-note' }, hidden ? `${plural(hidden, 'older session')} hidden.` : 'No sessions yet.')];
   }
-  for (const id of roots) {
+  return roots.map((id) => {
     // What's going on in the session's tree, worked out where the graph is.
     const root = S.live.sessions[id];
     const { agents, needs_you: needsYou, deadlocked, stuck, busy } = root;
@@ -457,102 +522,126 @@ function renderSessions() {
     const meta = [root.provider, agents ? plural(agents, 'agent') : null, root.tasks ? `tasks ${done}/${root.tasks}` : null]
       .filter(Boolean)
       .join(' · ');
-    list.append(
+    return h(
+      'li',
+      null,
       h(
-        'li',
-        null,
-        h(
-          'button',
-          {
-            class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}`,
-            'aria-current': id === S.root ? 'true' : null,
-            onclick: () => selectRoot(id),
-          },
-          h('span', { class: `dot ${dotState}` }),
-          h('span', { class: 's-title', title: root.cwd || id }, nodeName(root)),
-          h('span', { class: 's-when' }, ago(root.last_event_at)),
-          needsYou
-            ? h('span', { class: 's-sub attention' }, `Needs you: ${needsYou.attention || nodeName(needsYou)}`)
-            : deadlocked
-              ? h('span', { class: 's-sub problem' }, 'Deadlocked: waiting on a session that waits on it')
-              : stuck
-                ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck.id === id ? 'no activity' : nodeName(stuck)}`)
-                : h('span', { class: 's-sub' }, root.headline || STATE_LABEL[root.state]),
-          h('span', { class: 's-meta' }, meta),
-        ),
+        'button',
+        {
+          class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}`,
+          'data-id': id,
+          'aria-current': id === S.root ? 'true' : null,
+          onclick: () => selectRoot(id),
+        },
+        h('span', { class: `dot ${dotState}` }),
+        h('span', { class: 's-title', title: root.cwd || id }, nodeName(root)),
+        h('span', { class: 's-when' }, ago(root.last_event_at)),
+        needsYou
+          ? h('span', { class: 's-sub attention' }, `Needs you: ${needsYou.attention || nodeName(needsYou)}`)
+          : deadlocked
+            ? h('span', { class: 's-sub problem' }, 'Deadlocked: waiting on a session that waits on it')
+            : stuck
+              ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck.id === id ? 'no activity' : nodeName(stuck)}`)
+              : h('span', { class: 's-sub' }, root.headline || STATE_LABEL[root.state]),
+        h('span', { class: 's-meta' }, meta),
       ),
     );
-  }
+  });
 }
 
 function renderMain() {
   const view = $('#view');
-  view.replaceChildren();
-  if (!S.live) return;
+  const { kids, graph, ringed, flash } = mainView();
+  redraw(view, kids);
+  if (!graph) return;
+  // A card flashes each time an event touches it, even if it did last time.
+  const flashed = flash && view.querySelector('.node.flash');
+  if (flashed) {
+    flashed.classList.remove('flash');
+    void flashed.offsetWidth;
+    flashed.classList.add('flash');
+  }
+  // Brought into view when what it stands for changes (the session, the
+  // step, the node it touched); not whenever the tree is drawn again (a card
+  // chosen, new events, the step's graph arriving), or it would undo the
+  // reader's scrolling. Only a card drawn counts as brought into view: one
+  // not in the graph still shown (its step's is on its way) is, once it is.
+  const stop = S.stops[S.pos];
+  const key = ringed ? `${S.root} ${stop && stop.id} ${ringed}` : null;
+  const ring = view.querySelector('.node.current');
+  if (!ringed) S.scrolledTo = null;
+  else if (ring) {
+    if (key !== S.scrolledTo) ring.scrollIntoView({ block: 'nearest' });
+    S.scrolledTo = key;
+  }
+}
+
+/**
+ * What the main view shows (`kids`), and when it's a tree, the graph it's
+ * from, and the nodes it rings and flashes.
+ */
+function mainView() {
+  if (!S.live) return { kids: [] };
 
   if (!S.live.roots.length) {
-    view.append(
-      h(
-        'div',
-        { class: 'empty' },
-        h('h2', null, 'No sessions recorded yet'),
-        h('p', null, 'Install the hooks, then start a new Claude Code session. It will appear here as soon as it starts.'),
-        h('pre', null, h('code', null, 'agent-graph install claude-code')),
-        S.info && S.info.where ? h('p', null, 'Watching ', h('code', null, S.info.where)) : null,
-      ),
-    );
-    return;
+    return {
+      kids: [
+        h(
+          'div',
+          { class: 'empty' },
+          h('h2', null, 'No sessions recorded yet'),
+          h('p', null, 'Install the hooks, then start a new Claude Code session. It will appear here as soon as it starts.'),
+          h('pre', null, h('code', null, 'agent-graph install claude-code')),
+          S.info && S.info.where ? h('p', null, 'Watching ', h('code', null, S.info.where)) : null,
+        ),
+      ],
+    };
   }
   if (!S.root) {
-    view.append(
-      h(
-        'div',
-        { class: 'empty' },
-        h('h2', null, 'Nothing in the last 24 hours'),
-        h('p', null, 'Tick “Older” in the sessions list to see earlier sessions.'),
-      ),
-    );
-    return;
+    return {
+      kids: [
+        h(
+          'div',
+          { class: 'empty' },
+          h('h2', null, 'Nothing in the last 24 hours'),
+          h('p', null, 'Tick “Older” in the sessions list to see earlier sessions.'),
+        ),
+      ],
+    };
   }
 
   const graph = S.shown || S.live;
   const root = graph.nodes[S.root];
   // Its summary until its tree comes.
   const liveRoot = S.live.nodes[S.root] || S.live.sessions[S.root] || (S.live.others || {})[S.root];
-  if (!liveRoot) {
-    view.append(h('p', { class: 'empty-note' }, 'Loading…'));
-    return;
-  }
+  if (!liveRoot) return { kids: [h('p', { class: 'empty-note' }, 'Loading…')] };
   const stop = S.stops[S.pos];
 
-  view.append(
+  const head = h(
+    'div',
+    { class: 'view-head' },
     h(
       'div',
-      { class: 'view-head' },
-      h(
-        'div',
-        { class: 'title-row' },
-        h('h1', null, nodeName(liveRoot), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
-        root ? saveImageLink(stop) : null,
-      ),
-      h(
-        'div',
-        { class: 'meta' },
-        h('span', null, liveRoot.provider),
-        h('span', { class: 'mono', title: liveRoot.id }, short(liveRoot.id)),
-        liveRoot.cwd ? h('span', { class: 'mono', title: liveRoot.cwd }, liveRoot.cwd) : null,
-        liveRoot.started_at ? h('span', null, `Started ${clock(liveRoot.started_at)}`) : null,
-      ),
-      !S.following && stop
-        ? h('div', { class: 'past-note' }, `As of ${clock(stop.ts)} — step ${S.pos + 1} of ${S.stops.length}`)
-        : null,
+      { class: 'title-row' },
+      h('h1', null, nodeName(liveRoot), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
+      root ? saveImageLink(stop) : null,
     ),
+    h(
+      'div',
+      { class: 'meta' },
+      h('span', null, liveRoot.provider),
+      h('span', { class: 'mono', title: liveRoot.id }, short(liveRoot.id)),
+      liveRoot.cwd ? h('span', { class: 'mono', title: liveRoot.cwd }, liveRoot.cwd) : null,
+      liveRoot.started_at ? h('span', null, `Started ${clock(liveRoot.started_at)}`) : null,
+    ),
+    !S.following && stop
+      ? h('div', { class: 'past-note' }, `As of ${clock(stop.ts)} — step ${S.pos + 1} of ${S.stops.length}`)
+      : null,
   );
 
   if (!root) {
     const note = S.following ? 'Loading…' : 'This session hadn’t started yet at this point.';
-    view.append(h('p', { class: 'empty-note' }, note));
-    return;
+    return { kids: [head, h('p', { class: 'empty-note' }, note)] };
   }
 
   // Which node to ring: the one the current step touched.
@@ -565,9 +654,7 @@ function renderMain() {
     S.lastFlashed = last.id;
   }
 
-  view.append(h('div', { class: 'tree' }, branch(graph, root, ringed, flash)));
-  const ring = view.querySelector('.node.current');
-  if (ring) ring.scrollIntoView({ block: 'nearest' });
+  return { kids: [head, h('div', { class: 'tree' }, branch(graph, root, ringed, flash))], graph, ringed, flash };
 }
 
 /** A download link for a PNG of this session, at the step being viewed. */
@@ -686,8 +773,13 @@ function blockedText(graph, b) {
 }
 
 function renderDetail() {
-  const pane = $('#detail');
-  pane.replaceChildren();
+  const pane = h('div');
+  drawDetail(pane);
+  redraw($('#detail'), [...pane.childNodes]);
+}
+
+/** Draws what's known of the selected node, as of the step shown, into `pane`. */
+function drawDetail(pane) {
   const graph = S.shown || S.live;
   const n = graph && S.selected ? graph.nodes[S.selected] : null;
   if (!n) {
@@ -706,9 +798,9 @@ function renderDetail() {
   // A node of this tree is shown here; one outside it, by showing its own tree.
   const link = (id) =>
     graph.nodes[id]
-      ? h('button', { class: 'linkish', onclick: () => selectNode(id) }, nameOf(graph, id))
+      ? h('button', { class: 'linkish', 'data-id': id, onclick: () => selectNode(id) }, nameOf(graph, id))
       : nodeOf(graph, id)
-        ? h('button', { class: 'linkish', title: 'Show its own tree', onclick: () => switchTo(id) }, nameOf(graph, id))
+        ? h('button', { class: 'linkish', 'data-id': id, title: 'Show its own tree', onclick: () => switchTo(id) }, nameOf(graph, id))
         : short(id);
 
   pane.append(
@@ -940,7 +1032,7 @@ function renderTimeline() {
   const pct = n > 1 ? (S.pos / (n - 1)) * 100 : 100;
   slider.style.setProperty('--pct', `${pct}%`);
   const stop = S.stops[S.pos];
-  slider.setAttribute('aria-valuetext', stop ? `Step ${S.pos + 1} of ${n}: ${stop.label}` : 'No events');
+  slider.setAttribute('aria-valuetext', stop ? `Step ${S.pos + 1} of ${n}: ${clean(stop.label)}` : 'No events');
 
   // Ticks only change when the stops do.
   const key = `${S.root}|${n}|${n ? S.stops[n - 1].id : ''}`;
@@ -984,7 +1076,7 @@ function showTip(e) {
   const i = stopAt(e.clientX);
   const stop = S.stops[i];
   const rect = $('#track').getBoundingClientRect();
-  tip.replaceChildren(h('span', { class: 't' }, `${i + 1} · ${clock(stop.ts)}`), stop.label);
+  tip.replaceChildren(h('span', { class: 't' }, `${i + 1} · ${clock(stop.ts)}`), clean(stop.label));
   tip.hidden = false;
   const x = THUMB / 2 + (i / (S.stops.length - 1)) * (rect.width - THUMB);
   tip.style.left = `${clamp(x, 120, rect.width - 120)}px`;

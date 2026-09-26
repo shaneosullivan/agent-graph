@@ -176,7 +176,8 @@
         "kind": { "enum": ["agent", "session"] },
         "agent_type": { "type": "string" },
         "purpose": { "type": "string" },
-        "background": { "type": "boolean" }
+        "background": { "type": "boolean" },
+        "run": { "type": "boolean", "description": "For a session: whether it's started through agent-graph run, so named for the run, not the program. Only a run's session answers one that is, and a run's session only answers such a request. Absent in logs written before it was recorded, where a run's session answers a request for the program it's named for." }
       }
     },
     "spawn.returned": {

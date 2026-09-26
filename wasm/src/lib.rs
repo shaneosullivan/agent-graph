@@ -15,9 +15,9 @@
 //!
 //! - `{"op": "graph", "env": "site", "root": …, "until": …, "now_ms": …, "stale_minutes": …}`:
 //!   the graph now, or as of event `until`: every session's summary, and the
-//!   tree under `root`. `env` says where it's being shown (`"site"` or
-//!   `"local"`, see `timeline::Environment`) and is required.
-//! - `{"op": "timeline", "root": …, "now_ms": …, "stale_minutes": …}`
+//!   tree under `root`, and for the graph now, that tree's timeline
+//!   (`stops`), from the same reduction. `env` says where it's being shown
+//!   (`"site"` or `"local"`, see `timeline::Environment`) and is required.
 //! - `{"op": "info"}`
 //!
 //! Cutting a log to send to the site (its last two keyframes' worth:
@@ -240,13 +240,6 @@ enum Request {
         #[serde(default = "default_stale")]
         stale_minutes: f64,
     },
-    Timeline {
-        root: String,
-        #[serde(default)]
-        now_ms: Option<f64>,
-        #[serde(default = "default_stale")]
-        stale_minutes: f64,
-    },
     Info,
 }
 
@@ -276,16 +269,6 @@ pub fn answer(request: &str) -> String {
                 now(&log, now_ms),
                 minutes(stale_minutes),
                 env,
-            ),
-            Request::Timeline {
-                root,
-                now_ms,
-                stale_minutes,
-            } => timeline::timeline(
-                &log.events,
-                &root,
-                now(&log, now_ms),
-                minutes(stale_minutes),
             ),
             Request::Info => Ok(serde_json::json!({
                 "events": log.events.len(),
@@ -357,15 +340,16 @@ mod tests {
         .unwrap();
         assert_eq!(past["nodes"]["claude-code:s"]["state"], "idle");
 
-        let timeline: serde_json::Value =
-            serde_json::from_str(&answer(r#"{"op":"timeline","root":"claude-code:s"}"#)).unwrap();
-        assert_eq!(timeline["stops"].as_array().unwrap().len(), 2);
+        assert_eq!(graph["stops"].as_array().unwrap().len(), 2, "its timeline");
+        assert!(past.get("stops").is_none());
 
         let info: serde_json::Value = serde_json::from_str(&answer(r#"{"op":"info"}"#)).unwrap();
         assert_eq!(info["skipped"], 2, "the bad line, once per load");
 
-        let missing: serde_json::Value =
-            serde_json::from_str(&answer(r#"{"op":"timeline","root":"x:nope"}"#)).unwrap();
+        let missing: serde_json::Value = serde_json::from_str(&answer(
+            r#"{"op":"graph","env":"site","root":"claude-code:s","until":"nope"}"#,
+        ))
+        .unwrap();
         assert_eq!(missing["status"], 404);
     }
 
@@ -471,7 +455,7 @@ mod tests {
         let after = query(r#"{"op":"graph","env":"site","root":"x:s4"}"#);
         assert_eq!(after["sessions"], whole["sessions"]);
         assert_eq!(after["nodes"], whole["nodes"]);
-        let stops = query(r#"{"op":"timeline","root":"x:s4"}"#)["stops"].clone();
+        let stops = query(r#"{"op":"graph","env":"site","root":"x:s4"}"#)["stops"].clone();
         assert_eq!(stops[0]["label"], "Earlier history isn't included");
 
         // Cut again: its own keyframe, and its events.
@@ -502,7 +486,7 @@ mod tests {
         reset();
         append_text(&busy(3));
         append_text(&text);
-        let stops = query(r#"{"op":"timeline","root":"x:s0"}"#)["stops"].clone();
+        let stops = query(r#"{"op":"graph","env":"site","root":"x:s0"}"#)["stops"].clone();
         assert_ne!(stops[0]["label"], "Earlier history isn't included");
         // A keyframe that doesn't merge: then no other is tried.
         let bad = text
@@ -514,7 +498,7 @@ mod tests {
         reset();
         append_text(&(bad + "\n"));
         append_text(&text);
-        let stops = query(r#"{"op":"timeline","root":"x:s4"}"#)["stops"].clone();
+        let stops = query(r#"{"op":"graph","env":"site","root":"x:s4"}"#)["stops"].clone();
         assert_ne!(stops[0]["label"], "Earlier history isn't included");
     }
 
@@ -550,7 +534,7 @@ mod tests {
         append_text(&busy(3));
         append_text(&restart);
         // (Session 4 starts after it.)
-        let stops = query(r#"{"op":"timeline","root":"x:s3"}"#)["stops"].clone();
+        let stops = query(r#"{"op":"graph","env":"site","root":"x:s3"}"#)["stops"].clone();
         assert_eq!(stops[0]["label"], "Earlier history isn't included");
         assert_eq!(query(r#"{"op":"info"}"#)["events"], 1, "just the base");
         // Not one that isn't marked.

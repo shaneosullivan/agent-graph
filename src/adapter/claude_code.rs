@@ -149,6 +149,7 @@ impl Adapter for ClaudeCode {
                                 agent_type: Some(launch.program),
                                 purpose: label(&["tool_input", "description"]),
                                 background,
+                                run: Some(launch.run),
                             }),
                         ));
                     }
@@ -165,6 +166,7 @@ impl Adapter for ClaudeCode {
                             purpose: label(&["tool_input", "description"]),
                             background: bool_at(input, &["tool_input", "run_in_background"])
                                 .unwrap_or(false),
+                            run: None,
                         }),
                     ));
                 }

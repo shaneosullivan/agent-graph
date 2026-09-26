@@ -247,6 +247,25 @@ test("right passwords don't use up the limits", async () => {
   assert.equal((await unlock(log.id, "pässwörd", anAddress())).status, 429);
 });
 
+// R52: every scrypt run is counted, right passwords too (each costs about
+// 50 ms of the server's time): 200 checks at a log from one address every 15
+// minutes, so one log's viewers can't hold the address back from others.
+// (The per-address limit on all scrypt runs, 2000, is tested against the
+// store: store.test.mjs.)
+test("checking passwords at a log is limited per address", { timeout: 120_000 }, async () => {
+  const address = anAddress();
+  const withPassword = { "X-Agent-Graph-Password": b64url("pässwörd") };
+  const log = await create(line(1), { ...withPassword, "X-Real-IP": address });
+  const other = await create(line(1), { ...withPassword, "X-Real-IP": address });
+  for (let i = 0; i < 200; i++) assert.equal((await unlock(log.id, "pässwörd", address)).status, 204, `unlock ${i}`);
+  const refused = await unlock(log.id, "pässwörd", address);
+  assert.equal(refused.status, 429);
+  assert.ok(Number(refused.headers.get("retry-after")) > 60, "until the window ends");
+  assert.equal((await unlock(other.id, "pässwörd", address)).status, 204, "other logs aren't affected");
+  assert.equal((await unlock(log.id, "pässwörd", anAddress())).status, 204, "nor other addresses");
+  await create(line(1), { ...withPassword, "X-Real-IP": address });
+});
+
 // Keyframes: a live share keeps only its last two keyframes' worth.
 test("a log's start can be trimmed, with its key", async () => {
   const log = await create(line(1));
@@ -286,6 +305,23 @@ test("a trimmed log can go on past the size limit", async () => {
   assert.equal((await append(log.id, past - 1000, line(4), log.writeToken)).status, 413);
   assert.equal((await trim(log.id, past + 1, log.writeToken)).status, 204);
   assert.equal((await append(log.id, past + 1000, line(4), log.writeToken)).status, 413);
+});
+
+// R44: the limit is on the bytes stored, not the offsets used: chunks that
+// overlap (each at its own offset, a byte apart) are each stored in full,
+// so they count in full.
+test("overlapping chunks count towards the size limit", { timeout: 120_000 }, async () => {
+  const log = await create(line(1));
+  const big = `${"x".repeat(512 * 1024 - 1)}\n`;
+  // 127 of them and the first line fit in 64 MiB; one more doesn't.
+  for (let i = 1; i <= 127; i++) assert.equal((await append(log.id, i, big, log.writeToken)).status, 204, `chunk ${i}`);
+  const full = await append(log.id, 128, big, log.writeToken);
+  assert.equal(full.status, 413);
+  assert.match(await full.text(), /full/);
+  assert.equal((await append(log.id, 127, big, log.writeToken)).status, 204, "a retry is still accepted");
+  // Trimming makes room again.
+  assert.equal((await trim(log.id, 100, log.writeToken)).status, 204);
+  assert.equal((await append(log.id, 128, big, log.writeToken)).status, 204);
 });
 
 // Stored as sent, so chunks' offsets stay true: a byte-order mark at a
@@ -337,6 +373,29 @@ test("bad input is refused", async () => {
     body: line(1),
   });
   assert.equal(badPassword.status, 400);
+  // R46: no longer than unlocking checks.
+  const longPassword = await fetch(`${BASE}/api/logs`, {
+    method: "POST",
+    headers: { "X-Agent-Graph-Password": b64url("x".repeat(1025)) },
+    body: line(1),
+  });
+  assert.equal(longPassword.status, 400);
+  assert.match(await longPassword.text(), /at most 1024 bytes/);
+
+  // R45: sent without a Content-Length, a body is measured as it's read.
+  const streamed = (bytes) => ({
+    method: "POST",
+    duplex: "half",
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`{"password":"${"x".repeat(bytes)}"}`));
+        controller.close();
+      },
+    }),
+  });
+  assert.equal((await fetch(`${BASE}/api/logs`, streamed(600 * 1024))).status, 413, "created too big");
+  const locked = await create(line(1), { "X-Agent-Graph-Password": b64url("pässwörd") });
+  assert.equal((await fetch(`${BASE}/api/logs/${locked.id}/unlock`, streamed(100 * 1024))).status, 413);
 });
 
 test(
