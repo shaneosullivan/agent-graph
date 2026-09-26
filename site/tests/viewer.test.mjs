@@ -860,3 +860,24 @@ test("R38: new events leave keyboard focus and selected text where they were", a
   doc.activeElement.click();
   await until(() => v.S.root === "x:z" && v.S.live.root === "x:z");
 });
+
+test("R39: the timeline's hover tip and spoken step show a label as text, cleaned", async (t) => {
+  const label = "Task: <img src=x onerror=alert(1)>‮gnp.exe\u0007⁦ done\u0085";
+  const stops = stopsOf(["e1", "e2", "e3"]).map((s) => ({ ...s, label }));
+  const window = loadViewer(t, { graph: async () => graph([node("x:a")]), timeline: async () => ({ stops }) }, { hash: "#x:a" });
+  const doc = window.document;
+  await until(() => window.__viewer.S.stops.length === 3);
+  const unclean = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/;
+
+  const slider = doc.querySelector("#slider");
+  slider.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 0, bubbles: true }));
+  const tip = doc.querySelector("#hover-tip");
+  assert.equal(tip.hidden, false);
+  assert.equal(tip.querySelector("img"), null, "not markup");
+  assert.match(tip.textContent, /<img src=x onerror=alert\(1\)>/, "shown as text");
+  assert.doesNotMatch(tip.textContent, unclean, JSON.stringify(tip.textContent));
+
+  const spoken = slider.getAttribute("aria-valuetext");
+  assert.match(spoken, /Step 3 of 3: Task: <img/);
+  assert.doesNotMatch(spoken, unclean, JSON.stringify(spoken));
+});

@@ -1027,7 +1027,7 @@ function renderTimeline() {
   const pct = n > 1 ? (S.pos / (n - 1)) * 100 : 100;
   slider.style.setProperty('--pct', `${pct}%`);
   const stop = S.stops[S.pos];
-  slider.setAttribute('aria-valuetext', stop ? `Step ${S.pos + 1} of ${n}: ${stop.label}` : 'No events');
+  slider.setAttribute('aria-valuetext', stop ? `Step ${S.pos + 1} of ${n}: ${clean(stop.label)}` : 'No events');
 
   // Ticks only change when the stops do.
   const key = `${S.root}|${n}|${n ? S.stops[n - 1].id : ''}`;
@@ -1071,7 +1071,7 @@ function showTip(e) {
   const i = stopAt(e.clientX);
   const stop = S.stops[i];
   const rect = $('#track').getBoundingClientRect();
-  tip.replaceChildren(h('span', { class: 't' }, `${i + 1} · ${clock(stop.ts)}`), stop.label);
+  tip.replaceChildren(h('span', { class: 't' }, `${i + 1} · ${clock(stop.ts)}`), clean(stop.label));
   tip.hidden = false;
   const x = THUMB / 2 + (i / (S.stops.length - 1)) * (rect.width - THUMB);
   tip.style.left = `${clamp(x, 120, rect.width - 120)}px`;
