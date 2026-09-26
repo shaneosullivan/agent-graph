@@ -1,0 +1,5 @@
+# dist's macOS signing passes CODESIGN_OPTIONS to `codesign --options`:
+# the hardened runtime, which Apple requires to notarize.
+- name: Sign with the hardened runtime
+  shell: bash
+  run: echo "CODESIGN_OPTIONS=runtime" >> "$GITHUB_ENV"

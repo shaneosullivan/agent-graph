@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Records a live graph of AI coding agent sessions from provider hooks"
+repository = "https://github.com/shaneosullivan/agent-graph"
+homepage = "https://agentgraph.chofter.com"
 
 [features]
 default = ["cli"]
@@ -60,6 +62,11 @@ members = [".", "wasm"]
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Release builds for `dist` (dist-workspace.toml): prebuilt binaries per
+# platform, and the installers and packages that fetch them.
+[profile.dist]
+inherits = "release"
 
 # For the WebAssembly build: small, and panics abort (wasm can't unwind).
 [profile.wasm]

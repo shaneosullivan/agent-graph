@@ -595,7 +595,7 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
             match this_on_path {
                 None => summary.push(
                     "Note: `agent-graph` isn't on your PATH, so these hooks won't run for you \
-                     until it is (cargo install --path .)."
+                     until it is."
                         .into(),
                 ),
                 Some(false) => summary.push(

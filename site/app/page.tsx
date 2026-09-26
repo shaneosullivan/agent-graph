@@ -6,6 +6,7 @@ import cliHelp from "@/lib/cli-help.json";
 import { type Help, Inline } from "@/lib/help-render";
 
 import { Brand } from "./brand";
+import { Install } from "./install";
 import { Uploader } from "./uploader";
 
 const watchRemote = (cliHelp as unknown as Help).commands.find((c) => c.name === "watch-remote")!;
@@ -17,6 +18,7 @@ export default function Home() {
         <header className="top">
           <Brand />
           <nav>
+            <a href="#install">Install</a>
             <a href="#live">Share live</a>
             <a href="/docs">Docs</a>
           </nav>
@@ -30,6 +32,8 @@ export default function Home() {
             A log is deleted once it has had no new events for a week.
           </p>
         </section>
+
+        <Install />
 
         <Uploader />
 

@@ -181,6 +181,30 @@ body {
   padding: 18px;
 }
 
+/* The install card, above the paste / upload card */
+.site .install {
+  margin-bottom: 20px;
+  scroll-margin-top: 16px;
+}
+.site .install-steps {
+  margin: 0;
+  padding-left: 38px;
+  color: var(--muted);
+}
+.site .install-steps li + li {
+  margin-top: 10px;
+}
+.site .install-or {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+}
+.site .install-steps .command {
+  margin: 6px 0 0;
+  padding: 9px 12px;
+  white-space: pre;
+}
+
 .site .paste {
   width: 100%;
   min-height: 260px;

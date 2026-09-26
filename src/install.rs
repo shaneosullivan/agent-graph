@@ -112,21 +112,36 @@ pub fn path_command(provider: &str) -> String {
 /// Whether the `agent-graph` on PATH is this executable, or `None` if
 /// there isn't one.
 pub fn this_is_on_path() -> Option<bool> {
-    let found = crate::paths::find_program("agent-graph")?;
+    let found = paths::find_program("agent-graph")?;
     let this = std::env::current_exe().ok()?;
-    Some(
-        match (std::fs::canonicalize(found), std::fs::canonicalize(this)) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => false,
-        },
-    )
+    Some(same_file(&found, &this))
 }
 
-/// The hook command pointing at this executable. Forward slashes and quotes
-/// keep it working in the shells Claude Code uses on every platform.
-pub fn default_command(provider: &str) -> Result<String, String> {
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The path hooks should run this executable by. A package manager keeps
+/// the program in a folder named for its version, which an upgrade
+/// removes, and links to it from a folder on PATH that stays put
+/// (Homebrew's `bin`, WinGet's `Links`): when the `agent-graph` on PATH is
+/// this copy, that path, as PATH names it, not the file it leads to.
+pub fn lasting_exe() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("can't find this executable: {e}"))?;
-    let exe = exe.to_string_lossy().replace('\\', "/");
+    Ok(match paths::find_program("agent-graph") {
+        Some(found) if same_file(&found, &exe) => found,
+        _ => exe,
+    })
+}
+
+/// The hook command pointing at this executable (`lasting_exe`). Forward
+/// slashes and quotes keep it working in the shells Claude Code uses on
+/// every platform.
+pub fn default_command(provider: &str) -> Result<String, String> {
+    let exe = lasting_exe()?.to_string_lossy().replace('\\', "/");
     Ok(format!("\"{exe}\" emit --provider {provider}"))
 }
 

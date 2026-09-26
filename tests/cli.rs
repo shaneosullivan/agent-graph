@@ -973,6 +973,52 @@ fn user_hooks_keep_the_full_path_even_when_path_has_this_copy() {
     assert!(command.starts_with('"'), "{command}");
 }
 
+/// R61: a package manager keeps the program in a folder named for its
+/// version and links to it from PATH; the hooks name the link, which an
+/// upgrade keeps, not the versioned file, which it removes.
+#[cfg(unix)]
+#[test]
+fn user_hooks_name_the_link_on_path_not_the_versioned_file() {
+    let home = tempfile::tempdir().unwrap();
+    let cellar = home.path().join("Cellar/agent-graph/0.1.0/bin");
+    let bin_dir = home.path().join("bin");
+    std::fs::create_dir_all(&cellar).unwrap();
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let versioned = cellar.join("agent-graph");
+    std::fs::copy(env!("CARGO_BIN_EXE_agent-graph"), &versioned).unwrap();
+    let link = bin_dir.join("agent-graph");
+    std::os::unix::fs::symlink(&versioned, &link).unwrap();
+
+    // Run by its versioned path, as a hook recorded before this fix, or a
+    // wrapper that resolves links, would.
+    let mut command = Command::new(&versioned);
+    for var in ["AGENT_GRAPH_PARENT", "TRACEPARENT", "CLAUDE_ENV_FILE"] {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["install", "claude-code", "--yes", "--no-slash-command"])
+        .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
+        .env("HOME", home.path())
+        .env("AGENT_GRAPH_HOME", home.path().join(".agent-graph"))
+        .env("PATH", path_with(Some(&bin_dir)))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(home.path().join(".claude/settings.json"))).unwrap();
+    let command = settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        command,
+        format!("\"{}\" emit --provider claude-code", link.display())
+    );
+}
+
 /// R14: installing hooks that run `agent-graph` from PATH says so when
 /// PATH has no `agent-graph` (they'd never run for this user).
 #[test]

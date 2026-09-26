@@ -1,0 +1,26 @@
+# Opens a pull request to microsoft/winget-pkgs for each release, adding
+# its Windows zips (release.yml runs this after it announces the release).
+#
+# Needs: a fork of microsoft/winget-pkgs under this repository's owner, a
+# WINGET_TOKEN secret (a classic token with `public_repo`), and the
+# package's first version already in winget-pkgs: this only updates it.
+
+name: Winget
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  winget:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: ShaneOSullivan.AgentGraph
+          release-tag: ${{ fromJson(inputs.plan).announcement_tag }}
+          installers-regex: '-pc-windows-msvc\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}
