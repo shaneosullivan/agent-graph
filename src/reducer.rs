@@ -77,7 +77,7 @@ pub struct Node {
     pub spawned_by: Option<String>,
     /// The node that made that request: call ids aren't unique across
     /// sessions.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_by: Option<String>,
     /// For a session started by another: how the link was found. `env` (it
     /// inherited its parent's identity), `run` (`agent-graph run` started
@@ -377,6 +377,11 @@ struct Reducer {
     /// to a parent but with no request to pair with: one in the same
     /// millisecond may sort after them (hooks in separate processes get
     /// random ids).
+    ///
+    /// (Not in a keyframe from before R41, which still loads: nor is
+    /// `requested_by`, and its `waiting_on`, now made from the nodes, is
+    /// ignored.)
+    #[serde(default)]
     unpaired_runs: Option<(SystemTime, String, Vec<String>)>,
     /// Statuses ignored as late (see `LATE_STATUS`).
     #[serde(skip)]
