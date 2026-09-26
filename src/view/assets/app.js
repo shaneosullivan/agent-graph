@@ -25,8 +25,8 @@ const S = {
   showAll: false,
   connected: false,
   info: null,
-  cache: new Map(), // event id -> graph at that stop
-  seq: 0, // guards against out-of-order graph fetches
+  cache: new Map(), // event id -> graph at that stop (a new map on each refresh)
+  seq: 0, // bumped whenever the view moves on, so a step still loading isn't shown
   lastFlashed: null,
   error: null,
   skew: 0, // server clock minus ours; non-zero when AGENT_GRAPH_NOW pins it
@@ -242,13 +242,19 @@ function scheduleRefresh() {
 
 async function refresh() {
   const currentId = S.stops[S.pos] && S.stops[S.pos].id;
-  S.cache.clear();
+  // A new map: a step still loading lands in the old one.
+  S.cache = new Map();
   S.live = await source.graph(null);
 
   if (!S.root || !S.live.nodes[S.root]) {
+    // The session has gone: another, live, and nothing of the old one's
+    // (not its timeline to step through either, while the new one comes).
+    forgetLoads();
     S.root = rootFromHash() || visibleRoots()[0] || null;
     S.selected = S.root;
     S.following = true;
+    S.shown = S.live;
+    S.stops = [];
   }
   S.stops = S.root ? (await source.timeline(S.root)).stops : [];
 
@@ -266,6 +272,12 @@ async function refresh() {
 
 let fetchTimer = null;
 
+/** Keeps any step still loading from being shown: the view has moved on. */
+function forgetLoads() {
+  clearTimeout(fetchTimer);
+  S.seq++;
+}
+
 /** Moves the timeline to stop `pos`. The last stop means "live". */
 function goTo(pos) {
   if (!S.stops.length) return;
@@ -273,7 +285,7 @@ function goTo(pos) {
   S.following = S.pos === S.stops.length - 1;
   renderTimeline();
   renderMode();
-  clearTimeout(fetchTimer);
+  forgetLoads();
   if (S.following) {
     S.shown = S.live;
     renderView();
@@ -287,16 +299,17 @@ function goTo(pos) {
     return;
   }
   // Coalesce requests while the slider is being dragged.
-  const seq = ++S.seq;
+  const seq = S.seq;
+  const cache = S.cache;
   fetchTimer = setTimeout(async () => {
     try {
       const graph = await source.graph(id);
-      S.cache.set(id, graph);
+      cache.set(id, graph);
       if (seq !== S.seq) return;
       S.shown = graph;
       renderView();
     } catch (e) {
-      setError(`Couldn't load that step: ${e.message}`);
+      if (seq === S.seq) setError(`Couldn't load that step: ${e.message}`);
     }
   }, 40);
 }
@@ -307,9 +320,12 @@ function goLive() {
 
 function selectRoot(id) {
   if (id === S.root) return;
+  forgetLoads();
   S.root = id;
   S.selected = id;
   S.following = true;
+  // Live, until its timeline comes: not a step of the session left.
+  S.shown = S.live;
   S.stops = [];
   history.replaceState(null, '', `#${encodeURIComponent(id)}`);
   scheduleRefresh();

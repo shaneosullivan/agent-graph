@@ -132,7 +132,7 @@ Status is updated as each is done.
 - **Where:** `src/view/assets/app.js`
 - **Problem:** The guard against out-of-order fetches is only bumped for uncached steps, so an older reply lands after the user moved on and shows the wrong graph under the right label.
 - **Fix:** invalidate in-flight step fetches on every navigation.
-- **Status:** open
+- **Status:** fixed. `forgetLoads()` (clear the pending timer, bump `S.seq`) runs whenever the view moves on: every `goTo` (live and cached steps included), `selectRoot`, and a refresh that finds the session gone (before it waits for the next one's timeline); `selectRoot` and that refresh also show the live graph straight away and drop the old session's timeline, so it can't be stepped through meanwhile. A refresh that stays on a past step keeps its load. Each refresh starts a new cache map, so a step that was loading lands in the old one, and a step left behind that fails shows no error. Tests: "R20: a step's graph arriving late never replaces the graph shown since" (site/tests/viewer.test.mjs): going live, a cached step, the session going, and choosing another session, each while a step loads (the step arriving before the new timeline); stepping while the new session's timeline comes; choosing a session from a past step; a refresh that stays on the loading step; a left step's failure (silent) and the viewed step's (shown); and a step loaded before a refresh isn't served from the new cache. Reviewed (three rounds).
 
 ### R21. A refresh in flight snaps the slider back to where it was
 - **Where:** `src/view/assets/app.js` (`refresh`)
