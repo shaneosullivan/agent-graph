@@ -303,12 +303,6 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
             stream,
             graph_json(shared, req.param("until"), req.param("root")),
         ),
-        "/api/timeline" => {
-            let Some(root) = req.param("root") else {
-                return respond(stream, 404, "text/plain", &[], b"missing root");
-            };
-            json(stream, timeline_json(shared, root))
-        }
         "/api/image.png" | "/api/image.svg" => {
             let Some(root) = req.param("root") else {
                 return respond(stream, 404, "text/plain", &[], b"missing root");
@@ -371,7 +365,8 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
     }
 }
 
-/// `GET /api/graph`'s reply.
+/// `GET /api/graph`'s reply: without `until`, with the timeline of the tree
+/// it holds too, so a refresh reduces the events once.
 fn graph_json(
     shared: &Shared,
     until: Option<&str>,
@@ -384,16 +379,6 @@ fn graph_json(
         crate::clock::now(),
         shared.stale_after,
         Environment::Local,
-    )
-}
-
-/// `GET /api/timeline`'s reply.
-fn timeline_json(shared: &Shared, root: &str) -> Result<String, ApiError> {
-    api::timeline(
-        &shared.events(),
-        root,
-        crate::clock::now(),
-        shared.stale_after,
     )
 }
 
@@ -637,8 +622,10 @@ mod tests {
 
         type Work = fn(&Shared) -> Result<String, ApiError>;
         let works: [(&str, Work); 2] = [
-            ("graph", |s| graph_json(s, None, Some("x:s0"))),
-            ("timeline", |s| timeline_json(s, "x:s0")),
+            ("graph and timeline", |s| graph_json(s, None, Some("x:s0"))),
+            ("a step's graph", |s| {
+                graph_json(s, Some("01K00000000000000000000100"), Some("x:s0"))
+            }),
         ];
         for (name, work) in works {
             let busy = {

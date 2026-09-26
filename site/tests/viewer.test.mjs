@@ -23,11 +23,9 @@ test("R7: the local page takes its key from the link, keeps it, and sends it", a
   const g = graph([node("x:a")]);
   const fetch = async (url, init = {}) => {
     requests.push({ url: String(url), key: init.headers && init.headers["X-Agent-Graph-Key"] });
-    const body = String(url).startsWith("/api/timeline")
-      ? { stops: [] }
-      : String(url).startsWith("/api/info")
-        ? { now_ms: Date.now(), events_dir: "x" }
-        : asServer(g, new URL(String(url), "http://x").searchParams.get("root"));
+    const body = String(url).startsWith("/api/info")
+      ? { now_ms: Date.now(), events_dir: "x" }
+      : { ...asServer(g, new URL(String(url), "http://x").searchParams.get("root")), stops: [] };
     return { ok: true, status: 200, json: async () => body, text: async () => "", blob: async () => ({}) };
   };
   class EventSource {
@@ -90,7 +88,7 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   const late = graph([node("x:a"), node("x:b")]);
   let stops = stopsOf(["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8"]);
   // Every step but e2 waits until the test lets it through; so does the
-  // timeline, while `hold` is set.
+  // timeline (and so the graph now, which carries it), while `hold` is set.
   const pending = [];
   const calls = {};
   let hold = null;
@@ -145,26 +143,17 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   await settle();
   assert.equal(v.S.shown, cachedStep, "the cached step");
 
-  // The session goes, so a refresh goes live on another, while a step
-  // loads: the step arrives before the new session's timeline does, and
-  // the old session's steps can't be stepped to meanwhile.
+  // The session goes, so a refresh goes live on another (its tree and its
+  // timeline come together), while a step loads: the step arrives after.
   slow = await loading(3);
   live = graph([node("x:b"), node("x:c")]);
-  let release = holding();
   v.scheduleRefresh();
   await until(() => v.S.root === "x:b");
+  const refreshed = () => v.S.following && v.S.stops.length && v.S.pos === v.S.stops.length - 1;
+  assert.ok(refreshed());
   slow.resolve(late);
   await settle();
-  assert.equal(v.S.shown, v.S.live, "live, not the step of the session that went");
-  assert.equal(window.document.querySelector("#step-count").textContent, "No events yet", "and the page says so");
-  assert.equal(window.document.querySelector("#prev").disabled, true, "with nothing to step back to");
-  v.goTo(1);
-  await settle();
-  assert.equal(v.S.shown, v.S.live, "not a step of the session that went");
-  release();
-  const refreshed = () => v.S.following && v.S.stops.length && v.S.pos === v.S.stops.length - 1;
-  await until(refreshed);
-  assert.equal(v.S.shown, v.S.live, "the other session, live");
+  assert.equal(v.S.shown, v.S.live, "the other session, live, not the step of the session that went");
   // Nor was it kept for later: it's from before the refresh.
   v.goTo(3);
   await settle();
@@ -174,9 +163,9 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   assert.equal(v.S.shown, late);
 
   // Choosing another session while a step loads: the step arrives before
-  // the new session's timeline does.
+  // the new session's tree does.
   slow = await loading(4);
-  release = holding();
+  let release = holding();
   v.selectRoot("x:c");
   slow.resolve(late);
   await settle();
@@ -191,7 +180,7 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   await until(() => v.S.shown === cachedStep);
   release = holding();
   v.selectRoot("x:b");
-  assert.equal(v.S.shown, v.S.live, "before its timeline comes");
+  assert.equal(v.S.shown, v.S.live, "before its tree comes");
   v.goTo(1);
   await settle();
   assert.equal(v.S.shown, v.S.live, "not a step of the session left");
@@ -382,15 +371,11 @@ test("R21: a refresh overtaken by a change of session shows nothing of the old o
 test("R21: choosing a session that has just gone is ignored, and the page recovers", async (t) => {
   let live = graph([node("x:a"), node("x:b")]);
   const stops = stopsOf(["a1", "a2"]);
-  let hold = null;
   const window = loadViewer(
     t,
     {
       graph: async () => live,
-      timeline: async () => {
-        if (hold) await hold.promise;
-        return { stops };
-      },
+      timeline: async () => ({ stops }),
     },
     { hash: "#x:a" },
   );
@@ -398,16 +383,14 @@ test("R21: choosing a session that has just gone is ignored, and the page recove
   const count = () => window.document.querySelector("#step-count").textContent;
   await until(() => v.S.stops.length === 2);
 
-  // x:b goes; while the refresh that finds out waits for x:a's timeline,
-  // x:b (still listed) is chosen.
+  // x:b goes; once the refresh that finds out has come, x:b's button (as
+  // it was when pressed) is pressed.
+  const button = window.document.querySelector('#session-list .session[data-id="x:b"]');
   live = graph([node("x:a")]);
-  hold = deferred();
   v.scheduleRefresh();
   await until(() => v.S.live === live);
-  v.selectRoot("x:b");
+  button.click();
   assert.equal(v.S.root, "x:a", "not a session that has gone");
-  hold.resolve();
-  hold = null;
   await settle();
   assert.equal(v.S.root, "x:a");
   assert.equal(count(), "Step 2 of 2");
@@ -880,4 +863,50 @@ test("R39: the timeline's hover tip and spoken step show a label as text, cleane
   const spoken = slider.getAttribute("aria-valuetext");
   assert.match(spoken, /Step 3 of 3: Task: <img/);
   assert.doesNotMatch(spoken, unclean, JSON.stringify(spoken));
+});
+
+test("R56: a refresh is one request: the graph now, with its tree's timeline", async (t) => {
+  const requests = [];
+  const g = graph([node("x:a"), node("x:b")]);
+  let stops = stopsOf(["e1", "e2"]).map((s) => ({ ...s, node: "x:a" }));
+  const fetch = async (url) => {
+    requests.push(String(url));
+    const u = new URL(String(url), "http://x");
+    const body =
+      u.pathname === "/api/info"
+        ? { now_ms: Date.now(), events_dir: "x" }
+        : u.pathname === "/api/graph"
+          ? { ...asServer(g, u.searchParams.get("root")), ...(u.searchParams.get("until") ? {} : { stops }) }
+          : null;
+    return body
+      ? { ok: true, status: 200, json: async () => body }
+      : { ok: false, status: 404, text: async () => "Not found" };
+  };
+  class EventSource {
+    addEventListener() {}
+  }
+  const window = loadViewer(t, null, { hash: "#x:a", fetch, EventSource });
+  const v = window.__viewer;
+  const banner = window.document.querySelector("#banner");
+  const graphs = () => requests.filter((r) => r.startsWith("/api/graph"));
+  await until(() => v.S.stops.length === 2 || !banner.hidden);
+  assert.equal(banner.hidden, true, banner.textContent);
+  assert.deepEqual(graphs(), ["/api/graph?root=x%3Aa"]);
+  assert.deepEqual(
+    requests.filter((r) => !r.startsWith("/api/graph") && r !== "/api/info"),
+    [],
+    "and nothing else",
+  );
+
+  stops = [...stops, ...stopsOf(["e3"])];
+  v.scheduleRefresh();
+  await until(() => v.S.stops.length === 3);
+  assert.equal(graphs().length, 2);
+  assert.equal(window.document.querySelector("#step-count").textContent, "Step 3 of 3");
+
+  // Another session: one request brings its tree and its timeline.
+  v.selectRoot("x:b");
+  await until(() => v.S.root === "x:b" && v.S.live.root === "x:b" && v.S.stops.length === 3);
+  assert.deepEqual(graphs().slice(2), ["/api/graph?root=x%3Ab"]);
+  assert.equal(banner.hidden, true, banner.textContent);
 });
