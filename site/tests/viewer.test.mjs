@@ -750,3 +750,21 @@ test("R35: the tree scrolls to the ringed card when the step changes, not whenev
   await until(() => v.S.shown.at === "e2");
   assert.equal(scrolls(), 2, "to the next step's card");
 });
+
+test("R36: an address that isn't a well-formed one names nothing, and the page still works", async (t) => {
+  const { source } = treeSource([node("x:a"), node("x:b")]);
+  const window = loadViewer(t, source, { hash: "#x%3Ab%E0%A4%A" });
+  const v = window.__viewer;
+  const banner = window.document.querySelector("#banner");
+  await until(() => v.S.stops.length === 2 || !banner.hidden);
+  assert.equal(banner.hidden, true, banner.textContent);
+  assert.equal(v.S.root, "x:a", "the newest session");
+
+  // Changed to one in the page: nothing happens.
+  window.location.hash = "#%";
+  await settle();
+  assert.equal(banner.hidden, true, banner.textContent);
+  assert.equal(v.S.root, "x:a");
+  window.location.hash = "#x%3Ab";
+  await until(() => v.S.root === "x:b" && v.S.live.root === "x:b");
+});
