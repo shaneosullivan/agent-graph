@@ -206,6 +206,38 @@ fn a_big_keyframe_is_split_and_merged() {
     assert_eq!(shown(from), whole);
 }
 
+/// A keyframe written before R41, R53 and R54 changed what the reducer
+/// keeps (it has `waiting_on`, now made from the nodes, and neither
+/// `unpaired_runs` nor who made each child's request) still loads: a log
+/// shared and trimmed then starts with one. Carrying on from it (after the
+/// log's first 8 events, as d0c927d's code wrote it) makes the graph the
+/// whole log does, but that the children paired before it don't say which
+/// node asked for them.
+#[test]
+fn a_keyframe_from_before_still_loads() {
+    let envelopes = |path: &str| -> Vec<Envelope> {
+        fixture(path)
+            .into_iter()
+            .map(|v| serde_json::from_value(v).unwrap())
+            .collect()
+    };
+    let mut events = envelopes("keyframes/d0c927d-log.jsonl");
+    events.sort_by_cached_key(sort_key);
+    let parts = envelopes("keyframes/d0c927d-keyframe.jsonl");
+    let base = reducer::merge_keyframe(&parts).expect("the keyframe loads");
+    assert_eq!(base.id, format!("{}~000000", events[7].id));
+    let without_requesters = |g: reducer::Graph| {
+        let mut json = shown(g);
+        for node in json["nodes"].as_object_mut().unwrap().values_mut() {
+            node.as_object_mut().unwrap().remove("requested_by");
+        }
+        json
+    };
+    let from = reducer::reduce_from(Some(&base), events[8..].to_vec(), &opts());
+    let whole = reducer::reduce(events, &opts());
+    assert_eq!(without_requesters(from), without_requesters(whole));
+}
+
 /// A keyframe anywhere but a log's start stands for events already there:
 /// it changes nothing.
 #[test]
