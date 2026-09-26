@@ -5,6 +5,7 @@ import {
   CHUNKS_PER_QUERY,
   CHUNKS_PER_READ,
   MAX_LOG_BYTES,
+  SCRYPT_RUNS_PER_ADDRESS,
   type Source,
   UNLOCK_BUSY_SECONDS,
   UNLOCK_WINDOW_MS,
@@ -21,7 +22,7 @@ import { firestore } from "./firebase";
  *
  *   logs/{sid}                 { source, pw?, createdAt, mac, stored }
  *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, n: <its length>, t: <when written> }
- *   unlock-attempts/{bucket}   { n, since, expireAt }  (password guesses)
+ *   unlock-attempts/{bucket}   { n, since, at, expireAt }  (password guesses, and scrypt runs)
  *
  * `sid` is an HMAC of the log's id (lib/encryption.ts), not the id itself:
  * the id is the link that opens the log, so the database doesn't hold it.
@@ -325,16 +326,30 @@ export async function readChunks(
 /** A guess counted by `takeUnlockAttempt`, to give back if it was right. */
 export type Reservation = { ref: FirebaseFirestore.DocumentReference; since: number }[];
 
+/**
+ * A count, per window, of guesses (or scrypt runs), up to `limit`. A guess
+ * that turns out right is given back to all but those that are `kept`.
+ */
+type Bucket = { ref: FirebaseFirestore.DocumentReference; limit: number; kept?: boolean };
+
+/** The bucket counting `address`'s scrypt runs, whatever they're for. */
+function scryptBucket(address: string): Bucket {
+  const ref = firestore().collection("unlock-attempts").doc(`scrypt-${addressKey(address)}`);
+  return { ref, limit: SCRYPT_RUNS_PER_ADDRESS, kept: true };
+}
+
 /** The buckets a guess at log `id` from `address` counts against. */
-function unlockBuckets(id: string, address: string | null) {
+function unlockBuckets(id: string, address: string | null): Bucket[] {
   const attempts = firestore().collection("unlock-attempts");
   const sid = storageId(id);
   // All keyed: the documents name neither the log nor the address.
-  const buckets = [{ ref: attempts.doc(`log-${sid}`), limit: UNLOCKS_PER_LOG }];
+  const buckets: Bucket[] = [{ ref: attempts.doc(`log-${sid}`), limit: UNLOCKS_PER_LOG }];
   if (address) {
     buckets.push(
       { ref: attempts.doc(`pair-${addressKey(address, sid)}`), limit: UNLOCKS_PER_LOG_AND_ADDRESS },
       { ref: attempts.doc(`address-${addressKey(address)}`), limit: UNLOCKS_PER_ADDRESS },
+      // Checking a guess runs scrypt, right or wrong.
+      scryptBucket(address),
     );
   }
   return buckets;
@@ -346,17 +361,18 @@ const CHECKING_MS = 10_000;
 /**
  * Each bucket's count this window (and when the window began), and how long
  * until a full one has room: the window's end, or only a moment if it was
- * counted in just now (right guesses among those are about to be given back).
+ * counted in just now (right guesses among those are about to be given
+ * back, unless it's `kept`).
  */
-function counted(snaps: FirebaseFirestore.DocumentSnapshot[], limits: number[], now: number) {
+function counted(snaps: FirebaseFirestore.DocumentSnapshot[], buckets: Bucket[], now: number) {
   let wait = 0;
   const counts = snaps.map((snap, i) => {
     const since = (snap.get("since") as Timestamp | undefined)?.toMillis();
     if (since === undefined || now - since >= UNLOCK_WINDOW_MS) return { n: 0, since: now };
     const n = Number(snap.get("n")) || 0;
-    if (n >= limits[i]) {
+    if (n >= buckets[i].limit) {
       const at = (snap.get("at") as Timestamp | undefined)?.toMillis() ?? since;
-      const checking = now - at < CHECKING_MS;
+      const checking = !buckets[i].kept && now - at < CHECKING_MS;
       wait = Math.max(wait, checking ? UNLOCK_BUSY_SECONDS * 1000 : since + UNLOCK_WINDOW_MS - now);
     }
     return { n, since };
@@ -367,31 +383,21 @@ function counted(snaps: FirebaseFirestore.DocumentSnapshot[], limits: number[], 
 let warnedNoAddress = false;
 
 /**
- * Counts a guess at log `id`'s password from `address`, unless the log, the
- * address, or the two together have had their fill of wrong guesses this
- * window: then it isn't counted, and the seconds until they may try again
- * are returned. Counted in a transaction, so guesses made at once can't get
- * past a limit; a right guess is given back with `giveBackUnlockAttempt`.
+ * Counts one in each of `buckets`, unless any has had its fill this window:
+ * then none is, and the seconds until there's room are returned. Counted in
+ * a transaction, so ones made at once can't get past a limit. Returns each
+ * bucket's window, for giving it back.
  */
-export async function takeUnlockAttempt(
-  id: string,
-  address: string | null,
-): Promise<{ wait: number } | { reservation: Reservation }> {
-  if (!address && !warnedNoAddress) {
-    console.warn("A request came without an address; guesses are only limited per log.");
-    warnedNoAddress = true;
-  }
-  const buckets = unlockBuckets(id, address);
+async function take(buckets: Bucket[]): Promise<{ wait: number } | { since: number[] }> {
   const refs = buckets.map((b) => b.ref);
-  const limits = buckets.map((b) => b.limit);
-  // A flood of guesses meets full buckets: refused by a plain read, since a
+  // A flood meets full buckets: refused by a plain read, since a
   // transaction would only contend with the others.
-  const before = counted(await firestore().getAll(...refs), limits, Date.now());
+  const before = counted(await firestore().getAll(...refs), buckets, Date.now());
   if (before.wait > 0) return { wait: before.wait };
   try {
     return await firestore().runTransaction(async (tx) => {
       const now = Date.now();
-      const { counts, wait } = counted(await tx.getAll(...refs), limits, now);
+      const { counts, wait } = counted(await tx.getAll(...refs), buckets, now);
       if (wait > 0) return { wait };
       counts.forEach(({ n, since }, i) =>
         tx.set(refs[i], {
@@ -402,13 +408,47 @@ export async function takeUnlockAttempt(
           expireAt: Timestamp.fromMillis(since + UNLOCK_WINDOW_MS),
         }),
       );
-      return { reservation: counts.map(({ since }, i) => ({ ref: refs[i], since })) };
+      return { since: counts.map(({ since }) => since) };
     });
   } catch (err) {
-    // ABORTED: too many guesses at once to count them all.
+    // ABORTED: too many at once to count them all.
     if ((err as { code?: number }).code === 10) return { wait: UNLOCK_BUSY_SECONDS };
     throw err;
   }
+}
+
+/**
+ * Counts a guess at log `id`'s password from `address`, unless the log, the
+ * address, or the two together have had their fill of wrong guesses this
+ * window, or the address its fill of scrypt runs: then it isn't counted,
+ * and the seconds until they may try again are returned. Guesses made at
+ * once can't get past a limit; a right guess is given back with
+ * `giveBackUnlockAttempt` (but for its scrypt run).
+ */
+export async function takeUnlockAttempt(
+  id: string,
+  address: string | null,
+): Promise<{ wait: number } | { reservation: Reservation }> {
+  if (!address && !warnedNoAddress) {
+    console.warn("A request came without an address; guesses are only limited per log.");
+    warnedNoAddress = true;
+  }
+  const buckets = unlockBuckets(id, address);
+  const taken = await take(buckets);
+  if ("wait" in taken) return taken;
+  return { reservation: buckets.flatMap(({ ref, kept }, i) => (kept ? [] : [{ ref, since: taken.since[i] }])) };
+}
+
+/**
+ * Counts a scrypt run from `address` that isn't checking a guess (hashing a
+ * new log's password), unless it's had its fill this window: then the
+ * seconds until it may run another are returned. Not limited without an
+ * address.
+ */
+export async function takeScryptRun(address: string | null): Promise<{ wait: number } | Record<string, never>> {
+  if (!address) return {};
+  const taken = await take([scryptBucket(address)]);
+  return "wait" in taken ? taken : {};
 }
 
 /**

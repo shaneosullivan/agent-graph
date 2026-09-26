@@ -1,6 +1,7 @@
-import { bodyText, MAX_CHUNK_BYTES, MAX_PASSWORD_BYTES, SOURCES, type Source, siteUrl } from "@/lib/config";
+import { bodyText, clientAddress, MAX_CHUNK_BYTES, MAX_PASSWORD_BYTES, SOURCES, type Source, siteUrl } from "@/lib/config";
 import { hashPassword, newId, PasswordTooLong, passwordFromHeader, writeToken } from "@/lib/crypto";
-import { IdTaken, createLog } from "@/lib/store";
+import { IdTaken, createLog, takeScryptRun } from "@/lib/store";
+import { tooMany } from "@/lib/unlock";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +15,8 @@ export const dynamic = "force-dynamic";
  *   X-Agent-Graph-Password: base64url(UTF-8 password), optional (at most
  *   MAX_PASSWORD_BYTES)
  * Reply (201): { id, url, writeToken }. Send further chunks to
- * /api/logs/{id}/append with the write token.
+ * /api/logs/{id}/append with the write token. 429 (with Retry-After) if the
+ * address has run scrypt too often lately (lib/config.ts).
  */
 export async function POST(req: Request): Promise<Response> {
   if (Number(req.headers.get("content-length") ?? 0) > MAX_CHUNK_BYTES) {
@@ -34,6 +36,11 @@ export async function POST(req: Request): Promise<Response> {
       return new Response(`A password may be at most ${MAX_PASSWORD_BYTES} bytes.`, { status: 400 });
     }
     return new Response("Malformed X-Agent-Graph-Password header.", { status: 400 });
+  }
+  // Hashing it is a scrypt run, which is limited per address.
+  if (password) {
+    const run = await takeScryptRun(clientAddress(req));
+    if ("wait" in run) return tooMany("Too many passwords from this address", run.wait);
   }
   const pw = password ? await hashPassword(password) : undefined;
 

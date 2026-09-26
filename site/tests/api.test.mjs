@@ -247,6 +247,29 @@ test("right passwords don't use up the limits", async () => {
   assert.equal((await unlock(log.id, "pässwörd", anAddress())).status, 429);
 });
 
+// R52: every scrypt run is counted per address, right passwords and new
+// logs' passwords too (each costs about 50 ms of the server's time), with a
+// generous limit: 200 every 15 minutes.
+test("hashing passwords is limited per address", { timeout: 120_000 }, async () => {
+  const address = anAddress();
+  const withPassword = { "X-Agent-Graph-Password": b64url("pässwörd") };
+  const log = await create(line(1), { ...withPassword, "X-Real-IP": address });
+  for (let i = 1; i < 200; i++) assert.equal((await unlock(log.id, "pässwörd", address)).status, 204, `unlock ${i}`);
+  const refused = await unlock(log.id, "pässwörd", address);
+  assert.equal(refused.status, 429);
+  assert.ok(Number(refused.headers.get("retry-after")) > 60, "until the window ends");
+  const another = await fetch(`${BASE}/api/logs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-ndjson", ...withPassword, "X-Real-IP": address },
+    body: line(1),
+  });
+  assert.equal(another.status, 429, "nor can it create a log with a password");
+  assert.ok(Number(another.headers.get("retry-after")) > 60);
+  // Without one, it can: no hash.
+  await create(line(1), { "X-Real-IP": address });
+  assert.equal((await unlock(log.id, "pässwörd", anAddress())).status, 204, "other addresses aren't affected");
+});
+
 // Keyframes: a live share keeps only its last two keyframes' worth.
 test("a log's start can be trimmed, with its key", async () => {
   const log = await create(line(1));
