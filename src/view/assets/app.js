@@ -29,6 +29,7 @@ const S = {
   cache: new Map(), // event id -> graph at that stop, least recently shown first (a new map on each refresh)
   seq: 0, // bumped whenever the view moves on, so a step still loading isn't shown
   lastFlashed: null,
+  scrolledTo: {}, // { graph, id }: the ringed card last brought into view
   error: null,
   skew: 0, // server clock minus ours; non-zero when AGENT_GRAPH_NOW pins it
   opened: null, // { id, busy?, error?, command? }: the last Open button press
@@ -579,8 +580,11 @@ function renderMain() {
   }
 
   view.append(h('div', { class: 'tree' }, branch(graph, root, ringed, flash)));
+  // Brought into view when the step changes; not whenever the tree is drawn
+  // again (a card chosen, new events), or it would undo the reader's scrolling.
   const ring = view.querySelector('.node.current');
-  if (ring) ring.scrollIntoView({ block: 'nearest' });
+  if (ring && (S.scrolledTo.graph !== graph || S.scrolledTo.id !== ringed)) ring.scrollIntoView({ block: 'nearest' });
+  S.scrolledTo = { graph, id: ringed };
 }
 
 /** A download link for a PNG of this session, at the step being viewed. */
