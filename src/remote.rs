@@ -38,6 +38,8 @@ use crate::reducer::{self, KEYFRAME_PART, Replay};
 pub const DEFAULT_URL: &str = "https://agentgraph.chofter.com";
 /// The most sent in one request; the site rejects bigger bodies.
 pub const MAX_CHUNK: usize = 256 * 1024;
+/// The longest password the site accepts, in bytes of UTF-8.
+pub const MAX_PASSWORD: usize = 1024;
 /// How often to look for new lines.
 const POLL: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -67,6 +69,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                 eprintln!("Cleared the saved default password.");
             }
             Some(p) => {
+                check_password(p)?;
                 save_default_password(&config, p)?;
                 eprintln!(
                     "Saved the password as the default for watch-remote ({}).",
@@ -79,6 +82,9 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         Some(p) => Some(p).filter(|p| !p.is_empty()),
         None => load_default_password(&config)?,
     };
+    if let Some(p) = &password {
+        check_password(p)?;
+    }
 
     let base = opts.url.trim_end_matches('/').to_string();
     if password.is_some() && base.starts_with("http://") && !is_local(&base) {
@@ -1030,6 +1036,18 @@ impl Client {
             }
         }
     }
+}
+
+/// Refuses a password the site would: it keeps none longer than
+/// `MAX_PASSWORD` bytes, since it unlocks with none longer.
+fn check_password(password: &str) -> Result<(), String> {
+    if password.len() > MAX_PASSWORD {
+        return Err(format!(
+            "The password is {} bytes; the site accepts at most {MAX_PASSWORD} bytes.",
+            password.len()
+        ));
+    }
+    Ok(())
 }
 
 fn is_local(base: &str) -> bool {

@@ -715,3 +715,36 @@ fn an_expired_log_stops_the_share() {
     assert!(!status.success());
     assert!(stderr.contains("no new events for a week"), "{stderr}");
 }
+
+/// R46: the site accepts passwords of up to 1024 bytes (of UTF-8), and
+/// unlocks with no longer one; a longer one is refused before anything's
+/// sent, or saved.
+#[test]
+fn a_password_too_long_for_the_site_is_refused() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("events")).unwrap();
+    // 1025 bytes, in 513 characters.
+    let long = format!("--password={}", "é".repeat(512) + "x");
+    let err = watch(home.path(), port, &[&long], &[]);
+    assert!(err.contains("at most 1024 bytes"), "{err}");
+    let err = watch(home.path(), port, &[&long, "--save-default-password"], &[]);
+    assert!(err.contains("at most 1024 bytes"), "{err}");
+    assert!(!home.path().join("remote.json").exists(), "not saved");
+    assert!(
+        requests.recv_timeout(Duration::from_millis(300)).is_err(),
+        "nothing sent"
+    );
+
+    // 1024 is fine.
+    let err = watch(
+        home.path(),
+        port,
+        &[&format!("--password={}", "é".repeat(512))],
+        &[],
+    );
+    let create = requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_else(|_| panic!("not shared: {err}"));
+    assert_eq!(create.path, "/api/logs");
+}

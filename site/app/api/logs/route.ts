@@ -1,5 +1,5 @@
-import { bodyText, MAX_CHUNK_BYTES, SOURCES, type Source, siteUrl } from "@/lib/config";
-import { hashPassword, newId, passwordFromHeader, writeToken } from "@/lib/crypto";
+import { bodyText, MAX_CHUNK_BYTES, MAX_PASSWORD_BYTES, SOURCES, type Source, siteUrl } from "@/lib/config";
+import { hashPassword, newId, PasswordTooLong, passwordFromHeader, writeToken } from "@/lib/crypto";
 import { IdTaken, createLog } from "@/lib/store";
 
 export const runtime = "nodejs";
@@ -11,7 +11,8 @@ export const dynamic = "force-dynamic";
  * Body: the first chunk of JSON Lines, raw (at most MAX_CHUNK_BYTES).
  * Headers:
  *   X-Agent-Graph-Source: watch | paste | upload
- *   X-Agent-Graph-Password: base64url(UTF-8 password), optional
+ *   X-Agent-Graph-Password: base64url(UTF-8 password), optional (at most
+ *   MAX_PASSWORD_BYTES)
  * Reply (201): { id, url, writeToken }. Send further chunks to
  * /api/logs/{id}/append with the write token.
  */
@@ -28,7 +29,10 @@ export async function POST(req: Request): Promise<Response> {
   let password: string | null;
   try {
     password = passwordFromHeader(req);
-  } catch {
+  } catch (err) {
+    if (err instanceof PasswordTooLong) {
+      return new Response(`A password may be at most ${MAX_PASSWORD_BYTES} bytes.`, { status: 400 });
+    }
     return new Response("Malformed X-Agent-Graph-Password header.", { status: 400 });
   }
   const pw = password ? await hashPassword(password) : undefined;

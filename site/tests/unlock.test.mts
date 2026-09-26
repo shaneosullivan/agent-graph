@@ -8,6 +8,7 @@ import { test } from "node:test";
 register("../scripts/resolve-ts.mjs", import.meta.url);
 const { unlock } = await import("../lib/unlock.ts");
 const { addressBlock, bodyText } = await import("../lib/config.ts");
+const { passwordFromHeader } = await import("../lib/crypto.ts");
 type Deps = import("../lib/unlock.ts").UnlockDeps;
 
 const ID = "AbCdEf123456";
@@ -84,6 +85,39 @@ test("a password that can't be right isn't counted or checked", async () => {
     const { deps, calls } = fakes();
     assert.equal((await unlock(request(password), ID, deps)).status, 401);
     assert.deepEqual(calls, []);
+  }
+});
+
+// R46: the passwords a log can be created with are exactly those unlocking
+// checks: up to 1024 bytes of UTF-8, however many characters that is.
+test("a password a log accepts can unlock it, and one it refuses can't", async () => {
+  const header = (password: string) =>
+    new Request("https://site.test/api/logs", {
+      method: "POST",
+      headers: { "X-Agent-Graph-Password": Buffer.from(password).toString("base64url") },
+    });
+  const passwords = [
+    "x".repeat(1024),
+    "é".repeat(512),
+    "😀".repeat(256),
+    "x".repeat(1025),
+    "x".repeat(1050),
+    "é".repeat(513),
+    "😀".repeat(300),
+  ];
+  for (const password of passwords) {
+    const bytes = Buffer.byteLength(password);
+    let accepted = true;
+    try {
+      assert.equal(passwordFromHeader(header(password)), password);
+    } catch {
+      accepted = false;
+    }
+    const { deps, calls } = fakes();
+    await unlock(request(password), ID, deps);
+    const checked = calls.includes("check");
+    assert.equal(accepted, bytes <= 1024, `${bytes} bytes: accepted by create`);
+    assert.equal(checked, bytes <= 1024, `${bytes} bytes: checked by unlock`);
   }
 });
 

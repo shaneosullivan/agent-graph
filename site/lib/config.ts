@@ -75,8 +75,15 @@ export const UNLOCKS_PER_LOG = 20;
 export const UNLOCKS_PER_ADDRESS = 30;
 export const UNLOCK_WINDOW_MS = 15 * 60 * 1000;
 /**
+ * The longest password, in bytes of UTF-8: a log is created with one only
+ * this long, so unlocking checks none longer. (The CLI refuses longer ones
+ * too; the upload page's field holds at most 200 characters.)
+ */
+export const MAX_PASSWORD_BYTES = 1024;
+
+/**
  * The largest unlock body: `{"password": "…"}`, with room for a password of
- * 1024 bytes written all in JSON escapes.
+ * `MAX_PASSWORD_BYTES` written all in JSON escapes.
  */
 export const UNLOCK_BODY_BYTES = 8 * 1024;
 /** How long to wait when too many guesses arrive at once to count them. */

@@ -1,5 +1,7 @@
 import { createHmac, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 
+import { MAX_PASSWORD_BYTES } from "./config";
+
 /**
  * Ids, tokens and password hashes.
  *
@@ -96,15 +98,22 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return safeEqual(actual.toString("base64url"), key);
 }
 
+export class PasswordTooLong extends Error {}
+
 /**
  * Reads the `X-Agent-Graph-Password` header: base64url-encoded UTF-8 (headers
- * must be ASCII). Returns null when absent, and throws when malformed.
+ * must be ASCII). Returns null when absent, and throws when malformed, or
+ * (`PasswordTooLong`) longer than `MAX_PASSWORD_BYTES`, which unlocking
+ * wouldn't check.
  */
 export function passwordFromHeader(req: Request): string | null {
   const value = req.headers.get("x-agent-graph-password");
   if (!value) return null;
-  if (!/^[A-Za-z0-9_-]{1,1400}$/.test(value)) throw new Error("malformed password header");
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("malformed password header");
+  if (value.length > Math.ceil((MAX_PASSWORD_BYTES * 4) / 3)) throw new PasswordTooLong();
+  // (Measured as decoded: bytes that aren't UTF-8 become U+FFFD, which is what's hashed.)
   const password = Buffer.from(value, "base64url").toString("utf8");
   if (!password) throw new Error("empty password");
+  if (Buffer.byteLength(password) > MAX_PASSWORD_BYTES) throw new PasswordTooLong();
   return password;
 }
