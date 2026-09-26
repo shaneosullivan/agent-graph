@@ -385,34 +385,49 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
     if opts.slash_command {
         let file = slash::command_file(client, scope, &cwd)?;
         inside_project(scope, &cwd, &file.path)?;
-        let existing = std::fs::read_to_string(&file.path).ok();
-        let ours = existing.as_deref().is_some_and(slash::is_ours);
-        match (opts.add, existing.as_deref()) {
-            (true, Some(_)) if !ours => notes.push(format!(
-                "Left {} alone: it isn't one Agent Graph wrote.",
-                file.path.display()
-            )),
-            (true, Some(text)) if text == file.contents => {}
-            (true, _) => changes.push(Change {
-                summary: vec![
-                    format!("Command file: {}", file.path.display()),
-                    format!("Adds the {} command.", file.invoke),
-                ],
-                path: file.path,
-                contents: Some(file.contents),
-                backup: false,
-            }),
-            (false, Some(_)) if ours => changes.push(Change {
-                summary: vec![format!(
-                    "Removes the {} command: {}",
-                    file.invoke,
+        // Only a missing file is absent. One that can't be read may be the
+        // user's own, so it's left alone; bytes that aren't UTF-8 are read
+        // as they are (it's still theirs unless it has our marker).
+        let existing = match std::fs::read(&file.path) {
+            Ok(bytes) => Some(Some(bytes)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Some(None),
+            Err(e) => {
+                notes.push(format!(
+                    "Left {} alone: can't read it ({e}).",
                     file.path.display()
-                )],
-                path: file.path,
-                contents: None,
-                backup: false,
-            }),
-            (false, _) => {}
+                ));
+                None
+            }
+        };
+        if let Some(existing) = existing {
+            let ours = existing.as_deref().is_some_and(slash::bytes_are_ours);
+            match (opts.add, existing.as_deref()) {
+                (true, Some(_)) if !ours => notes.push(format!(
+                    "Left {} alone: it isn't one Agent Graph wrote.",
+                    file.path.display()
+                )),
+                (true, Some(bytes)) if bytes == file.contents.as_bytes() => {}
+                (true, _) => changes.push(Change {
+                    summary: vec![
+                        format!("Command file: {}", file.path.display()),
+                        format!("Adds the {} command.", file.invoke),
+                    ],
+                    path: file.path,
+                    contents: Some(file.contents),
+                    backup: false,
+                }),
+                (false, Some(_)) if ours => changes.push(Change {
+                    summary: vec![format!(
+                        "Removes the {} command: {}",
+                        file.invoke,
+                        file.path.display()
+                    )],
+                    path: file.path,
+                    contents: None,
+                    backup: false,
+                }),
+                (false, _) => {}
+            }
         }
     }
 

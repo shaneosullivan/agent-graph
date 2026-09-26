@@ -39,8 +39,8 @@ Status is updated as each is done.
 ### R5. `install` overwrites a user's own command or skill file it can't read as UTF-8
 - **Where:** `src/cli.rs` (slash-command plan)
 - **Problem:** Any read error (not UTF-8, permission denied) is treated as "no file", so the user's own `agent-graph.toml` or `SKILL.md` is replaced without a backup, breaking the promise never to overwrite them.
-- **Fix:** only "not found" means absent; look for our marker in the raw bytes; refuse to touch a file we can't read.
-- **Status:** open
+- **Fix:** the file is read as bytes and our marker looked for in them; only a missing file counts as absent, and one that can't be read is left alone, with a note saying so.
+- **Status:** fixed. Test: `install_leaves_a_command_file_it_cant_read_alone` (tests/cli.rs). Reviewed.
 
 ## Medium
 

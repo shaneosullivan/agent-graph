@@ -104,6 +104,12 @@ pub fn is_ours(text: &str) -> bool {
     text.contains(MARKER)
 }
 
+/// `is_ours` for a file's raw bytes, which may not be UTF-8 (a file the
+/// user saved in another encoding is still theirs).
+pub fn bytes_are_ours(bytes: &[u8]) -> bool {
+    bytes.windows(MARKER.len()).any(|w| w == MARKER.as_bytes())
+}
+
 /// A skill's own folder (…/skills/agent-graph), which uninstalling removes
 /// once it's empty.
 pub fn is_own_folder(dir: &Path) -> bool {

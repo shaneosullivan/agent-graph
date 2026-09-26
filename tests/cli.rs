@@ -674,3 +674,65 @@ fn snapshot_out_never_replaces_a_file_unless_forced() {
     );
     assert!(read(dir.path().join("new.svg")).starts_with("<svg"));
 }
+
+/// R5: a command file that isn't ours stays untouched, even if it isn't
+/// UTF-8 (a Windows editor's encoding) or can't be read at all.
+#[test]
+fn install_leaves_a_command_file_it_cant_read_alone() {
+    let project = tempfile::tempdir().unwrap();
+    let toml = project.path().join(".gemini/commands/agent-graph.toml");
+    std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
+    let mine: &[u8] = b"description = \"r\xe9sum\xe9 of my agents\"\nprompt = \"mine\"\n";
+    std::fs::write(&toml, mine).unwrap();
+
+    let run = |args: &[&str]| {
+        bin()
+            .args(args)
+            .current_dir(project.path())
+            .output()
+            .unwrap()
+    };
+    let out = run(&["install", "gemini", "--scope", "project", "--yes"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        std::fs::read(&toml).unwrap() == mine,
+        "replaced the user's file"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("alone"));
+
+    let out = run(&["uninstall", "gemini", "--scope", "project", "--yes"]);
+    assert!(out.status.success());
+    assert!(
+        std::fs::read(&toml).unwrap() == mine,
+        "removed the user's file"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let skill = project.path().join(".claude/skills/agent-graph/SKILL.md");
+        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        std::fs::write(&skill, "my own skill").unwrap();
+        std::fs::set_permissions(&skill, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read(&skill).is_err(); // not when run as root
+        let out = run(&["install", "claude-code", "--scope", "project", "--yes"]);
+        std::fs::set_permissions(&skill, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if unreadable {
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(
+                read(&skill),
+                "my own skill",
+                "replaced a skill it couldn't read"
+            );
+            assert!(String::from_utf8_lossy(&out.stdout).contains("alone"));
+        }
+    }
+}
