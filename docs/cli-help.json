@@ -122,7 +122,7 @@
       "summary": "Remove what `install` added",
       "description": [
         { "text": "Remove what `install` added: Agent Graph's hooks from the agent's settings, and the /agent-graph command if Agent Graph wrote it." },
-        { "text": "Everything else in the settings file is kept, and so is the backup `install` made of it before it had the hooks (settings.json.agent-graph.bak). A settings file or folder that installing made goes too, once nothing else is in it. A command file you wrote yourself is left alone. Use the same --scope you installed with." },
+        { "text": "Everything else in the settings file is kept, and so is the backup `install` made of it before it had the hooks (settings.json.agent-graph.bak). A settings file left with nothing in it (`{}`) is removed too, unless there's a backup beside it, and so is a .claude, .agents, .gemini or .cursor folder left empty. A command file you wrote yourself is left alone. Use the same --scope you installed with." },
         { "text": "What's already been recorded stays in ~/.agent-graph; delete that folder to remove it." }
       ],
       "options": [
