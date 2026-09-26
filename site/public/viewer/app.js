@@ -13,6 +13,7 @@ const STATE_LABEL = {
 };
 const RECENT_MS = 24 * 60 * 60 * 1000;
 const THUMB = 18; // slider thumb width, px; matches app.css
+const CACHED_STEPS = 32; // past steps' graphs kept, the most recently shown
 
 const S = {
   live: null, // the graph now
@@ -25,7 +26,7 @@ const S = {
   showAll: false,
   connected: false,
   info: null,
-  cache: new Map(), // event id -> graph at that stop (a new map on each refresh)
+  cache: new Map(), // event id -> graph at that stop, least recently shown first (a new map on each refresh)
   seq: 0, // bumped whenever the view moves on, so a step still loading isn't shown
   lastFlashed: null,
   error: null,
@@ -334,6 +335,7 @@ function goTo(pos) {
   const id = S.stops[S.pos].id;
   const cached = S.cache.get(id);
   if (cached) {
+    remember(S.cache, id, cached);
     S.shown = cached;
     renderView();
     return;
@@ -344,7 +346,7 @@ function goTo(pos) {
   fetchTimer = setTimeout(async () => {
     try {
       const graph = await source.graph(id, S.root);
-      cache.set(id, graph);
+      remember(cache, id, graph);
       if (seq !== S.seq) return;
       S.shown = graph;
       renderView();
@@ -352,6 +354,17 @@ function goTo(pos) {
       if (seq === S.seq) setError(`Couldn't load that step: ${e.message}`);
     }
   }, 40);
+}
+
+/**
+ * Keeps step `id`'s graph in `cache` as the most recently shown, forgetting
+ * the least recently shown past `CACHED_STEPS`: a long timeline's graphs
+ * would otherwise pile up while the page stays open.
+ */
+function remember(cache, id, graph) {
+  cache.delete(id);
+  cache.set(id, graph);
+  while (cache.size > CACHED_STEPS) cache.delete(cache.keys().next().value);
 }
 
 function goLive() {

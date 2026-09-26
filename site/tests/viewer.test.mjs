@@ -676,3 +676,44 @@ test("R23: with no session named and none recent, none is shown", async (t) => {
   assert.equal(window.__viewer.S.root, null);
   assert.equal(window.document.querySelector("#view h2").textContent, "Nothing in the last 24 hours");
 });
+
+test("R34: only the most recently shown steps' graphs are kept", async (t) => {
+  const ids = Array.from({ length: 50 }, (_, i) => `e${i}`);
+  const stops = ids.map((id, i) => ({
+    id,
+    ts: new Date(Date.UTC(2026, 8, 25, 10, 0, i)).toISOString(),
+    label: id,
+    category: "status",
+  }));
+  const calls = {};
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => {
+        if (at) calls[at] = (calls[at] || 0) + 1;
+        return { ...graph([node("x:a")]), at: at || null };
+      },
+      timeline: async () => ({ stops }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  await until(() => v.S.stops.length === stops.length);
+  const show = async (pos) => {
+    v.goTo(pos);
+    await until(() => v.S.shown && v.S.shown.at === ids[pos]);
+  };
+  assert.ok(v.CACHED_STEPS < ids.length - 2, "more steps than are kept");
+  for (let pos = 0; pos < ids.length - 1; pos++) await show(pos);
+  assert.ok(v.S.cache.size <= v.CACHED_STEPS, `${v.S.cache.size} kept`);
+
+  // The first was shown long ago: it's asked for again. Going back to one
+  // shown lately keeps it among the most recent, as the others go.
+  await show(0);
+  assert.equal(calls.e0, 2, "asked for again");
+  await show(ids.length - 2);
+  for (let pos = 1; pos < v.CACHED_STEPS; pos++) await show(pos);
+  await show(ids.length - 2);
+  assert.equal(calls[ids.at(-2)], 1, "kept, as it was shown lately");
+  assert.ok(v.S.cache.size <= v.CACHED_STEPS, `${v.S.cache.size} kept`);
+});
