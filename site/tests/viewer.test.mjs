@@ -809,3 +809,54 @@ test("R37: long unbroken text wraps in cards and panels", async (t) => {
     assert.ok(wraps(el) || cut(el), `${el.className || el.tagName}: ${el.textContent.slice(0, 20)}`);
   }
 });
+
+test("R38: new events leave keyboard focus and selected text where they were", async (t) => {
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore", purpose: "Read the whole codebase" });
+  const tree = (headline) => [node("x:a", { children: ["x:a/b"], headline }), b, node("x:z", { cwd: "/w/z" })];
+  let live = graph(tree("one"));
+  let stops = stopsOf(["e1"]);
+  const window = loadViewer(t, { graph: async () => live, timeline: async () => ({ stops }) }, { hash: "#x:a" });
+  const v = window.__viewer;
+  const doc = window.document;
+  const arrive = async (nodes) => {
+    live = graph(nodes);
+    stops = [...stops, ...stopsOf([`e${stops.length + 1}`])];
+    v.scheduleRefresh();
+    await until(() => v.S.stops.length === stops.length && v.S.live === live);
+  };
+  await until(() => v.S.stops.length === 1);
+  v.selectNode("x:a/b");
+
+  // A card, focused from the keyboard.
+  const card = () => doc.querySelector('#view .node[data-id="x:a/b"]');
+  card().focus();
+  assert.equal(doc.activeElement, card());
+  await arrive(tree("two"));
+  assert.match(doc.querySelector("#view").textContent, /two/, "redrawn");
+  assert.equal(doc.activeElement, card(), "still focused");
+
+  // Text selected in the details.
+  const lead = doc.querySelector("#detail .lead");
+  const range = doc.createRange();
+  range.selectNodeContents(lead);
+  window.getSelection().removeAllRanges();
+  window.getSelection().addRange(range);
+  assert.equal(window.getSelection().toString(), "Read the whole codebase");
+  await arrive(tree("three"));
+  assert.match(doc.querySelector("#view").textContent, /three/, "redrawn");
+  assert.equal(window.getSelection().toString(), "Read the whole codebase", "still selected");
+
+  // A session in the list, focused, while a new one is listed above it: it
+  // stays with the session, and does what it says.
+  const item = (id) => doc.querySelector(`#session-list .session[data-id="${id}"]`);
+  item("x:z").focus();
+  await arrive([node("x:new"), ...tree("four")]);
+  assert.ok(item("x:new"), "listed");
+  assert.equal(doc.activeElement, item("x:z"), "still on x:z");
+  // (x:a's is the one that was x:z's.)
+  item("x:a").click();
+  await settle();
+  assert.equal(v.S.root, "x:a", "x:a's does what x:a's should");
+  doc.activeElement.click();
+  await until(() => v.S.root === "x:z" && v.S.live.root === "x:z");
+});
