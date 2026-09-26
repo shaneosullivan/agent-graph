@@ -72,6 +72,8 @@ agent-graph watch-remote
 
 This prints a link to a web viewer (the same one as `view`) and keeps it updated as your agents work, until you stop it. You can also paste or upload a log at [agentgraph.chofter.com](https://agentgraph.chofter.com).
 
+The site keeps a log's recent history: its last 1,000 to 2,000 events, with where everything stood before them. Your own log keeps everything.
+
 | Option | Effect |
 |---|---|
 | `--password=…` | Viewers must enter it. `--password=` shares without one, even if a default is saved. |

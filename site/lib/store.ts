@@ -36,6 +36,9 @@ import { firestore } from "./firebase";
  * order, and never read one twice, so a chunk never changes: a retry of the
  * same bytes is accepted, and different bytes at an offset already stored
  * are refused (checking costs a read, only then).
+ *
+ * A live share keeps only its last two keyframes' worth (see `trimLog`), so a
+ * log's first chunk isn't always at offset 0.
  */
 
 export type Meta = {
@@ -117,6 +120,42 @@ function holds(id: string, key: string, stored: Uint8Array, text: string): boole
   }
 }
 
+/** Chunks deleted in one batch, which Firestore applies all at once. */
+const TRIM_BATCH = 500;
+
+/**
+ * Deletes log `id`'s chunks that start before offset `before`: a live share
+ * keeps only its last two keyframes' worth, and when it sends a keyframe,
+ * asks for everything before the previous one to go. They're deleted
+ * newest first, a batch at a time (each all at once), so a reader never
+ * starts partway through what's being deleted; one that's reading across it
+ * sees a gap, and starts again (site-source.js). Returns how many went.
+ */
+export async function trimLog(id: string, before: number): Promise<number> {
+  // Their keys, oldest first (Firestore can't scan keys the other way).
+  const chunks = logDoc(id).collection("chunks");
+  const older = chunks.orderBy(FieldPath.documentId()).endBefore(chunkKey(before)).select();
+  const keys: string[] = [];
+  for (;;) {
+    const page = keys.length ? older.startAfter(keys[keys.length - 1]) : older;
+    const snap = await page.limit(TRIM_BATCH).get();
+    keys.push(...snap.docs.map((doc) => doc.id));
+    if (snap.size < TRIM_BATCH) break;
+  }
+  for (let end = keys.length; end > 0; end -= TRIM_BATCH) {
+    const batch = firestore().batch();
+    for (const key of keys.slice(Math.max(0, end - TRIM_BATCH), end)) batch.delete(chunks.doc(key));
+    await batch.commit();
+  }
+  return keys.length;
+}
+
+/** Where log `id`'s first chunk (the oldest kept) starts, or null if it has none. */
+export async function firstChunkOffset(id: string): Promise<number | null> {
+  const snap = await logDoc(id).collection("chunks").orderBy(FieldPath.documentId()).limit(1).select().get();
+  return snap.empty ? null : Number(snap.docs[0].id);
+}
+
 // Metadata never changes after creation, so each server instance keeps what
 // it has read. That saves a read on every viewer poll.
 const metaCache = new Map<string, Meta | null>();
@@ -148,8 +187,11 @@ export async function getMeta(id: string): Promise<Meta | null> {
 /**
  * The chunks after `after` (a chunk key, or "" for the start), joined in log
  * order, up to `CHUNKS_PER_READ` of them or `BYTES_PER_READ` (and the chunk
- * that crosses it). `last` is the key to pass as `after` next time; `more`
- * says whether there may be more chunks right now.
+ * that crosses it), stopping at a gap: chunks are stored one after another,
+ * so a gap means the log's start was trimmed while it was read (see
+ * `trimLog`). `first` is the first one's key (where the text starts);
+ * `last` is the key to pass as `after` next time; `more` says whether there
+ * may be more chunks right now.
  *
  * They're fetched `CHUNKS_PER_QUERY` at a time, so however the log's chunks
  * were written, a read holds at most that many at once, and stops at the
@@ -158,25 +200,31 @@ export async function getMeta(id: string): Promise<Meta | null> {
 export async function readChunks(
   id: string,
   after: string,
-): Promise<{ text: string; last: string | null; more: boolean }> {
+): Promise<{ text: string; first: string | null; last: string | null; more: boolean }> {
   const chunks = logDoc(id).collection("chunks").orderBy(FieldPath.documentId());
   const texts: string[] = [];
   let bytes = 0;
+  let first: string | null = null;
   let last: string | null = null;
+  // Where the next chunk should start.
+  let next: number | null = null;
   while (texts.length < CHUNKS_PER_READ) {
     const want = Math.min(CHUNKS_PER_QUERY, CHUNKS_PER_READ - texts.length);
     const cursor: string = last ?? after;
     const snap = await (cursor ? chunks.startAfter(cursor) : chunks).limit(want).get();
     for (const doc of snap.docs) {
+      if (next !== null && Number(doc.id) !== next) return { text: texts.join(""), first, last, more: true };
       const text = decryptChunk(id, doc.id, doc.get("e"));
       texts.push(text);
+      first ??= doc.id;
       last = doc.id;
+      next = Number(doc.id) + Buffer.byteLength(text);
       bytes += Buffer.byteLength(text);
-      if (bytes >= BYTES_PER_READ) return { text: texts.join(""), last, more: true };
+      if (bytes >= BYTES_PER_READ) return { text: texts.join(""), first, last, more: true };
     }
-    if (snap.size < want) return { text: texts.join(""), last, more: false };
+    if (snap.size < want) return { text: texts.join(""), first, last, more: false };
   }
-  return { text: texts.join(""), last, more: true };
+  return { text: texts.join(""), first, last, more: true };
 }
 
 /** A guess counted by `takeUnlockAttempt`, to give back if it was right. */

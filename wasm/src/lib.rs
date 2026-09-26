@@ -19,21 +19,37 @@
 //!   `"local"`, see `timeline::Environment`) and is required.
 //! - `{"op": "timeline", "root": …, "now_ms": …, "stale_minutes": …}`
 //! - `{"op": "info"}`
+//!
+//! Cutting a log to send to the site (its last two keyframes' worth:
+//! `keyframe::Trimmer`) is done a step at a time, so a page (a worker) can
+//! show how far along it is: `trim_start`, `trim_step` until it's done
+//! (`trim_progress` says how far along), then `trim_finish`.
+//!
+//! A log that starts from a keyframe (as one on the site does once its start
+//! is trimmed) starts there; a keyframe later in it stands for events
+//! already loaded, and is skipped.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 
-use agent_graph::event::Envelope;
+use agent_graph::event::{Envelope, Payload};
+use agent_graph::keyframe::Trimmer;
+use agent_graph::reducer::{self, KEYFRAME_PARTS, is_keyframe};
 use agent_graph::timeline::{self, ApiError, Environment, Timed};
 use serde::Deserialize;
 
 #[derive(Default)]
 struct Log {
+    /// Sorted, after the keyframe the log starts from, if it does.
     events: Vec<Timed>,
     /// Ids already loaded; an event sent twice (e.g. a retried upload) counts once.
     seen: HashSet<String>,
     skipped: usize,
+    /// The parts so far of the keyframe the log starts from, and whether
+    /// they came to nothing (after which none is looked for).
+    parts: Vec<Envelope>,
+    no_base: bool,
 }
 
 thread_local! {
@@ -75,6 +91,63 @@ pub extern "C" fn reset() {
     LOG.with(|log| *log.borrow_mut() = Log::default());
 }
 
+thread_local! {
+    static TRIMMER: RefCell<Option<Trimmer>> = const { RefCell::new(None) };
+}
+
+/// Starts cutting the JSON Lines in `ptr..ptr+len` to send to the site, with
+/// `every` events between keyframes (see `keyframe::Trimmer`). The bytes are
+/// copied: free them once it returns.
+///
+/// # Safety
+/// `ptr..ptr+len` must be readable memory, e.g. from `alloc`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trim_start(ptr: *const u8, len: usize, every: u32) {
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let trimmer = Trimmer::new(bytes.to_vec(), every as usize);
+    TRIMMER.with(|t| *t.borrow_mut() = Some(trimmer));
+}
+
+/// Does up to `lines` lines' work. Returns 1 when it's done (or there's
+/// nothing started).
+#[unsafe(no_mangle)]
+pub extern "C" fn trim_step(lines: u32) -> u32 {
+    TRIMMER.with(|t| {
+        t.borrow_mut()
+            .as_mut()
+            .is_none_or(|t| t.step(lines as usize)) as u32
+    })
+}
+
+/// How far along it is, from 0 to 1.
+#[unsafe(no_mangle)]
+pub extern "C" fn trim_progress() -> f64 {
+    TRIMMER.with(|t| t.borrow().as_ref().map_or(1.0, Trimmer::progress))
+}
+
+/// The log to send: a line of JSON, `{"events": <how many it sends>, "of":
+/// <how many there are>}`, then its lines. Its length is `result_len()`;
+/// free it with `dealloc`.
+#[unsafe(no_mangle)]
+pub extern "C" fn trim_finish() -> *mut u8 {
+    let trimmed = TRIMMER
+        .with(|t| t.borrow_mut().take())
+        .map(|t| t.finish().0);
+    let mut out = match &trimmed {
+        Some(t) => serde_json::json!({ "events": t.events, "of": t.of }),
+        None => serde_json::json!({ "events": 0, "of": 0 }),
+    }
+    .to_string()
+    .into_bytes();
+    out.push(b'\n');
+    if let Some(t) = trimmed {
+        out.extend(t.text);
+    }
+    let out = out.into_boxed_slice();
+    RESULT_LEN.with(|n| n.set(out.len()));
+    Box::into_raw(out) as *mut u8
+}
+
 /// Answers the JSON request in `ptr..ptr+len` and returns a pointer to the
 /// JSON reply; its length is `result_len()`. Free it with `dealloc`.
 ///
@@ -103,6 +176,40 @@ pub fn append_text(text: &str) -> usize {
         let mut added = 0;
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
             match serde_json::from_str::<Envelope>(line) {
+                // The keyframe the log starts from, once its parts are here;
+                // a later one stands for events already here.
+                Ok(event) if is_keyframe(&event) => {
+                    // One its sender says to start again at (an event came
+                    // late, and what came before hasn't it in its place): the
+                    // site now starts there, and so does this.
+                    let restart =
+                        matches!(event.payload(), Payload::Keyframe(k) if k.restart && k.part == 0);
+                    if restart && !log.events.is_empty() {
+                        let skipped = log.skipped;
+                        *log = Log {
+                            skipped,
+                            ..Log::default()
+                        };
+                    }
+                    if log.events.is_empty() && !log.no_base && log.seen.insert(event.id.clone()) {
+                        log.parts.push(event);
+                        let count = match log.parts[0].payload() {
+                            Payload::Keyframe(k) => k.parts,
+                            _ => 0,
+                        };
+                        // Merged once, when they're all here.
+                        if log.parts.len() >= count.min(KEYFRAME_PARTS) {
+                            match reducer::merge_keyframe(&log.parts) {
+                                Some(base) => {
+                                    log.events.push(Timed::new(base));
+                                    added += 1;
+                                }
+                                None => log.no_base = true,
+                            }
+                            log.parts.clear();
+                        }
+                    }
+                }
                 Ok(event) if log.seen.insert(event.id.clone()) => {
                     log.events.push(Timed::new(event));
                     added += 1;
@@ -282,6 +389,175 @@ mod tests {
         );
         assert_eq!(graph(r#"{"op":"graph"}"#)["status"], 400, "env is required");
         assert_eq!(graph(r#"{"op":"graph","env":"moon"}"#)["status"], 400);
+    }
+
+    fn event(n: usize, node: &str, kind: &str, data: &str) -> String {
+        format!(
+            r#"{{"v":1,"id":"01K{n:023}","ts":"2026-09-25T10:{:02}:{:02}.000Z","type":"{kind}","node":"{node}","data":{data}}}"#,
+            n / 60,
+            n % 60
+        ) + "\n"
+    }
+
+    /// A log with sessions coming and going, and tasks changing.
+    fn busy(n: usize) -> String {
+        (0..n)
+            .map(|i| match i % 5 {
+                0 => event(i, &format!("x:s{}", i / 10), "session.started", "{}"),
+                1 => event(
+                    i,
+                    &format!("x:s{}", i / 10),
+                    "status",
+                    r#"{"state":"working"}"#,
+                ),
+                2 => event(
+                    i,
+                    &format!("x:s{}", i / 10),
+                    "tasks.updated",
+                    &format!(r#"{{"items":[{{"id":"1","text":"t{i}","status":"in_progress"}}]}}"#),
+                ),
+                3 => event(i, &format!("x:s{}/a", i / 10), "agent.spawned", "{}"),
+                _ => event(
+                    i,
+                    &format!("x:s{}", i / 10),
+                    "status",
+                    r#"{"state":"idle"}"#,
+                ),
+            })
+            .collect()
+    }
+
+    fn query(request: &str) -> serde_json::Value {
+        serde_json::from_str(&answer(request)).unwrap()
+    }
+
+    /// Cuts `text` with the exports the page's worker uses, a few lines at a
+    /// time: `{events, of}`, and the text to send.
+    fn trim(text: &str, every: u32) -> (serde_json::Value, String) {
+        unsafe { trim_start(text.as_ptr(), text.len(), every) };
+        let mut last = -1.0;
+        while trim_step(7) == 0 {
+            let progress = trim_progress();
+            assert!(
+                progress >= last && progress <= 1.0,
+                "{last} then {progress}"
+            );
+            last = progress;
+        }
+        let out = trim_finish();
+        let bytes = unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                out,
+                RESULT_LEN.with(Cell::get),
+            ))
+        };
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        let (meta, lines) = text.split_once('\n').unwrap();
+        (serde_json::from_str(meta).unwrap(), lines.to_string())
+    }
+
+    /// What's cut to send, loaded again, shows the same: every session, as
+    /// it stands, from the keyframe it starts at.
+    #[test]
+    fn a_trimmed_log_shows_the_same() {
+        reset();
+        append_text(&busy(47));
+        let whole = query(r#"{"op":"graph","env":"site","root":"x:s4"}"#);
+        let (meta, text) = trim(&busy(47), 10);
+        assert_eq!(meta, serde_json::json!({"events": 17, "of": 47}));
+
+        reset();
+        append_text(&text);
+        let after = query(r#"{"op":"graph","env":"site","root":"x:s4"}"#);
+        assert_eq!(after["sessions"], whole["sessions"]);
+        assert_eq!(after["nodes"], whole["nodes"]);
+        let stops = query(r#"{"op":"timeline","root":"x:s4"}"#)["stops"].clone();
+        assert_eq!(stops[0]["label"], "Earlier history isn't included");
+
+        // Cut again: its own keyframe, and its events.
+        let (meta, again) = trim(&text, 1000);
+        assert_eq!(meta, serde_json::json!({"events": 17, "of": 17}));
+        reset();
+        append_text(&again);
+        assert_eq!(
+            query(r#"{"op":"graph","env":"site","root":"x:s4"}"#)["nodes"],
+            whole["nodes"]
+        );
+    }
+
+    /// Only a keyframe at the log's start is started from, merged once its
+    /// parts are all here, whichever reads they come in; a later keyframe
+    /// is skipped; and one that doesn't merge isn't tried again.
+    #[test]
+    fn only_a_starting_keyframe_counts() {
+        let (_, text) = trim(&busy(47), 10);
+        reset();
+        let mut added = 0;
+        for line in text.lines() {
+            added += append_text(line);
+        }
+        assert_eq!(added, 18, "the base, and the events");
+        assert_eq!(query(r#"{"op":"info"}"#)["events"], 18);
+        // Events first: no keyframe is started from.
+        reset();
+        append_text(&busy(3));
+        append_text(&text);
+        let stops = query(r#"{"op":"timeline","root":"x:s0"}"#)["stops"].clone();
+        assert_ne!(stops[0]["label"], "Earlier history isn't included");
+        // A keyframe that doesn't merge: then no other is tried.
+        let bad = text
+            .lines()
+            .next()
+            .unwrap()
+            .replace("~000000", "~999999")
+            .replace(r#""text":""#, r#""text":"!"#);
+        reset();
+        append_text(&(bad + "\n"));
+        append_text(&text);
+        let stops = query(r#"{"op":"timeline","root":"x:s4"}"#)["stops"].clone();
+        assert_ne!(stops[0]["label"], "Earlier history isn't included");
+    }
+
+    /// An event whose id comes right after the last one a keyframe stands
+    /// for (the next from the same hook) isn't taken for the keyframe.
+    #[test]
+    fn the_event_after_a_keyframe_is_kept() {
+        let first = event(0, "x:s", "session.started", "{}");
+        let next = first
+            .replace("01K00000000000000000000000", "01K00000000000000000000001")
+            .replace("session.started", "status")
+            .replace(r#""data":{}"#, r#""data":{"state":"input_required"}"#);
+        let (_, text) = trim(&(first + &next), 1);
+        reset();
+        append_text(&text);
+        let graph = query(r#"{"op":"graph","env":"site","root":"x:s"}"#);
+        assert_eq!(graph["nodes"]["x:s"]["state"], "input_required");
+    }
+
+    /// A keyframe its sender says to start again at, later in the log, is
+    /// started again from: a reader already reading has what the site now
+    /// has.
+    #[test]
+    fn a_restart_keyframe_is_started_again_from() {
+        let (_, text) = trim(&busy(47), 10);
+        let restart: String = text
+            .lines()
+            .rfind(|l| l.contains(r#""type":"keyframe""#))
+            .unwrap()
+            .replace(r#""data":{"#, r#""data":{"restart":true,"#)
+            + "\n";
+        reset();
+        append_text(&busy(3));
+        append_text(&restart);
+        // (Session 4 starts after it.)
+        let stops = query(r#"{"op":"timeline","root":"x:s3"}"#)["stops"].clone();
+        assert_eq!(stops[0]["label"], "Earlier history isn't included");
+        assert_eq!(query(r#"{"op":"info"}"#)["events"], 1, "just the base");
+        // Not one that isn't marked.
+        reset();
+        append_text(&busy(3));
+        append_text(&restart.replace(r#""restart":true,"#, ""));
+        assert_eq!(query(r#"{"op":"info"}"#)["events"], 3);
     }
 
     #[test]

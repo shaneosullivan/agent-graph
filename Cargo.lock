@@ -12,11 +12,13 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "agent-graph"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "clap",
  "crossterm",
  "humantime",
  "jsonschema",
  "libc",
+ "miniz_oxide 0.9.1",
  "resvg",
  "serde",
  "serde_json",

@@ -31,6 +31,27 @@ fn emitted_events_validate() {
     }
 }
 
+/// Keyframes, as sent to the site, validate too.
+#[test]
+fn keyframes_validate() {
+    let validator = validator();
+    let events = translate(
+        &fixture("claude-code/session.jsonl"),
+        Capture { bodies: true },
+    );
+    // Small parts, so there are several.
+    let parts = agent_graph::reducer::keyframe(None, &events, 200).unwrap();
+    assert!(parts.len() > 1);
+    for part in parts {
+        let line: Value = serde_json::to_value(&part).unwrap();
+        let errors: Vec<String> = validator
+            .iter_errors(&line)
+            .map(|e| e.to_string())
+            .collect();
+        assert!(errors.is_empty(), "{line}\n{errors:#?}");
+    }
+}
+
 #[test]
 fn schema_lists_every_event_type() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/event.schema.json");

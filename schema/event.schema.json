@@ -9,8 +9,8 @@
     "v": { "const": 1, "description": "Schema version." },
     "id": {
       "type": "string",
-      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
-      "description": "ULID. Sorts by time; unique across writers."
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}(~[0-9]{6})?$",
+      "description": "ULID. Sorts by time; unique across writers. A keyframe's is the last event's it stands for, with ~ and its part's number after it."
     },
     "ts": {
       "type": "string",
@@ -28,6 +28,7 @@
         "wait.started", "wait.ended",
         "message.sent",
         "activity",
+        "keyframe",
         "unknown"
       ]
     },
@@ -65,7 +66,8 @@
     { "if": { "properties": { "type": { "const": "wait.started" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/wait.started" } } } },
     { "if": { "properties": { "type": { "const": "wait.ended" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/wait.ended" } } } },
     { "if": { "properties": { "type": { "const": "message.sent" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/message.sent" } } } },
-    { "if": { "properties": { "type": { "const": "activity" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/activity" } } } }
+    { "if": { "properties": { "type": { "const": "activity" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/activity" } } } },
+    { "if": { "properties": { "type": { "const": "keyframe" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/keyframe" } } } }
   ],
   "$defs": {
     "nodeId": {
@@ -220,6 +222,17 @@
       "properties": {
         "tool": { "type": "string" },
         "label": { "type": "string" }
+      }
+    },
+    "keyframe": {
+      "type": "object",
+      "description": "Not written to events files: in a log sent to the site, the reducer's whole state at a point, so the log can carry on from there without what came before (the site keeps a log's last two keyframes' worth). It comes right after the last event it stands for. Its state is JSON, deflated, as base64, split into parts, each a line. Only a keyframe at a log's start is started from; one later on stands for events already there.",
+      "required": ["part", "parts", "text"],
+      "properties": {
+        "part": { "type": "integer", "minimum": 0 },
+        "parts": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string", "description": "This part of the state: base64 of its JSON, deflated (raw DEFLATE, unpacked to at most 64 MiB). The state's shape is the reducer's own, and may change between versions." },
+        "restart": { "type": "boolean", "description": "Its log's readers should start again here: an event came late, and the keyframe before hasn't it in its place. The site's log starts here once it's stored." }
       }
     }
   }

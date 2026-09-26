@@ -266,6 +266,20 @@ pub struct Activity {
     pub label: Option<String>,
 }
 
+/// The whole state of a log's reducer at a point, so the log can carry on
+/// from there without what came before (see `reducer::keyframe`): the
+/// state's JSON, as text, split into parts, each a line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Keyframe {
+    pub part: usize,
+    pub parts: usize,
+    pub text: String,
+    /// Its log's readers should start again here: an event came late, and
+    /// the keyframe before hasn't it in its place (see `remote::Stream`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Payload {
     SessionStarted(SessionStarted),
@@ -282,6 +296,7 @@ pub enum Payload {
     WaitEnded(WaitEnded),
     MessageSent(MessageSent),
     Activity(Activity),
+    Keyframe(Keyframe),
     /// An event type we don't know, or a known type whose data didn't parse.
     /// Consumers must ignore these rather than fail.
     Unknown(Value),
@@ -336,6 +351,7 @@ payload_types! {
     WaitEnded => "wait.ended",
     MessageSent => "message.sent",
     Activity => "activity",
+    Keyframe => "keyframe",
 }
 
 /// Shortens `s` to at most `max` characters, marking the cut with `…`.

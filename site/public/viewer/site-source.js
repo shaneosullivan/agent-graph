@@ -12,12 +12,16 @@
   const config = JSON.parse(document.getElementById("agent-graph-config").textContent);
   const enc = new TextEncoder();
   const dec = new TextDecoder();
+  const exact = new TextDecoder("utf-8", { ignoreBOM: true });
 
   const wasm = await loadWasm("/viewer/agent_graph.wasm");
 
   // Strings cross into WebAssembly as UTF-8 bytes in its memory.
   function put(text) {
-    const bytes = enc.encode(text);
+    return putBytes(enc.encode(text));
+  }
+
+  function putBytes(bytes) {
     const ptr = wasm.alloc(bytes.length);
     new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
     return [ptr, bytes.length];
@@ -41,6 +45,13 @@
 
   // Fetches the chunks we don't have yet. Returns whether any events arrived.
   let after = "";
+  // Where the next text read should start. A log's chunks are stored one
+  // after another, so a read that starts anywhere else, with a keyframe,
+  // means its start was trimmed as we read it (a live share keeps only its
+  // last two keyframes' worth), perhaps only partway so far: what we hold is
+  // broken, so we start again from that keyframe (a trim cuts only at one).
+  // A gap that isn't a trim's (a log written with one) is read past.
+  let next = null;
   async function pull() {
     let added = 0;
     for (;;) {
@@ -50,9 +61,21 @@
         return false;
       }
       if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-      const text = await res.text();
-      if (text) {
-        const [ptr, len] = put(text);
+      // Its bytes, as stored: a byte-order mark at its start is kept (text()
+      // would drop it, and so miscount where the next read starts).
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const first = res.headers.get("x-first-chunk");
+      if (bytes.length && first !== null) {
+        const line = bytes.indexOf(10);
+        const head = exact.decode(line < 0 ? bytes : bytes.subarray(0, line));
+        if (next !== null && Number(first) !== next && startsWithKeyframe(head)) {
+          wasm.reset();
+          added++;
+        }
+        next = Number(first) + bytes.length;
+      }
+      if (bytes.length) {
+        const [ptr, len] = putBytes(bytes);
         added += wasm.append(ptr, len);
         wasm.dealloc(ptr, len);
       }
@@ -116,6 +139,15 @@
   note.textContent = `Couldn't load this log: ${err.message}`;
   (document.getElementById("view") || document.body).prepend(note);
 });
+
+function startsWithKeyframe(text) {
+  const end = text.indexOf("\n");
+  try {
+    return JSON.parse(end < 0 ? text : text.slice(0, end)).type === "keyframe";
+  } catch {
+    return false;
+  }
+}
 
 async function loadWasm(url) {
   if (WebAssembly.instantiateStreaming) {

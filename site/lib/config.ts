@@ -6,6 +6,15 @@
  */
 export const MAX_CHUNK_BYTES = 512 * 1024;
 
+/**
+ * A request's body, as text, exactly as it was sent: a byte-order mark at
+ * its start is kept (`req.text()` drops one), so what's stored is the bytes
+ * sent, and chunks' offsets stay true.
+ */
+export async function bodyText(req: Request): Promise<string> {
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(await req.arrayBuffer());
+}
+
 /** The largest a log may grow, judged from the offset of each append. */
 export const MAX_LOG_BYTES = 64 * 1024 * 1024;
 

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 
+import { eventsShared, forSite } from "@/lib/trim";
 import { type Summary, share, summarize } from "@/lib/upload";
 
 type Mode = "paste" | "upload";
@@ -13,6 +14,7 @@ export function Uploader() {
   const [password, setPassword] = useState("");
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const text = mode === "paste" ? pasted : files.map((f) => f.text.trimEnd()).join("\n");
@@ -30,14 +32,23 @@ export function Uploader() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!ready) return;
+    if (!ready || !summary) return;
     setError(null);
-    setBusy("Creating your link…");
     try {
-      const id = await share(text, {
+      // Only its last two keyframes' worth: the site keeps no more.
+      setBusy("Preparing…");
+      setProgress(0);
+      const shared = await forSite(text, summary.events, setProgress);
+      setBusy("Creating your link…");
+      setProgress(null);
+      const id = await share(shared.text, {
         source: mode,
         password: password || undefined,
-        onProgress: (sent, total) => total > 1 && setBusy(`Uploading… ${sent} of ${total}`),
+        onProgress: (sent, total) => {
+          if (total <= 1) return;
+          setBusy(`Uploading… ${sent} of ${total}`);
+          setProgress(sent / total);
+        },
       });
       setBusy("Opening…");
       // A full page load: the viewer is a separate app with its own scripts.
@@ -45,6 +56,7 @@ export function Uploader() {
     } catch (err) {
       setError((err as Error).message);
       setBusy(null);
+      setProgress(null);
     }
   }
 
@@ -133,6 +145,8 @@ export function Uploader() {
                 </span>
                 {summary.skipped > 0 &&
                   ` · ${summary.skipped} line${summary.skipped === 1 ? "" : "s"} skipped`}
+                {eventsShared(summary.events) < summary.events &&
+                  ` · the last ${eventsShared(summary.events)} are shared: the site keeps a log's last two keyframes' worth`}
               </>
             ))}
         </p>
@@ -152,6 +166,7 @@ export function Uploader() {
             {busy ?? "Create shareable link"}
           </button>
         </div>
+        {progress !== null && <progress className="progress" max={1} value={progress} aria-label={busy ?? "Working"} />}
         {error && <p className="error">{error}</p>}
       </div>
     </form>

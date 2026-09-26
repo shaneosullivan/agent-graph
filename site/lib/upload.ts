@@ -8,7 +8,10 @@ const CHUNK_BYTES = 256 * 1024;
 
 export type Summary = { events: number; sessions: number; skipped: number };
 
-/** Counts the events (and the sessions they belong to) in some JSON Lines. */
+/**
+ * Counts the events (and the sessions they belong to) in some JSON Lines. A
+ * keyframe (in a log from the site) stands for events, and isn't one.
+ */
 export function summarize(text: string): Summary {
   const sessions = new Set<string>();
   let events = 0;
@@ -17,7 +20,14 @@ export function summarize(text: string): Summary {
     if (!line.trim()) continue;
     try {
       const e = JSON.parse(line);
-      if (e && typeof e.id === "string" && typeof e.type === "string" && typeof e.node === "string") {
+      if (e && e.type === "keyframe") continue;
+      // What the site reads as an event (src/event.rs's Envelope).
+      const event =
+        e &&
+        Number.isInteger(e.v) &&
+        e.v >= 0 &&
+        [e.id, e.ts, e.type, e.node].every((field) => typeof field === "string");
+      if (event) {
         events++;
         sessions.add(e.node.split("/")[0]);
       } else {
@@ -64,8 +74,8 @@ async function check(res: Response): Promise<Response> {
 }
 
 /**
- * Uploads `text` as a new log and returns its id. `onProgress` gets the
- * number of chunks sent so far and the total.
+ * Uploads `text` as a new log (cut first: lib/trim.ts), and returns its id.
+ * `onProgress` gets the number of chunks sent so far and the total.
  */
 export async function share(
   text: string,

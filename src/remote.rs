@@ -15,14 +15,24 @@
 //!
 //! Bodies are raw JSON Lines, never wrapped in JSON, and are cut only at line
 //! boundaries.
+//!
+//! The site keeps only a log's last two keyframes' worth (see `keyframe`):
+//! what's shared starts at the log's last keyframe but one, a keyframe
+//! follows every `keyframe::EVERY` events, each starting a chunk, and once
+//! one is sent, the site is asked to delete what's before the one before
+//! (`POST /api/logs/<id>/trim?before=<its offset>`, with the token).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+
+use crate::event::Envelope;
+use crate::keyframe;
+use crate::reducer::{self, KEYFRAME_PART, Replay};
 
 pub const DEFAULT_URL: &str = "https://agentgraph.chofter.com";
 /// The most sent in one request; the site rejects bigger bodies.
@@ -85,14 +95,17 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         None => (None, format!("every session in {}", root.display())),
     };
     let mut source = Lines::new(&events, only);
-    let mut pending = source
-        .poll()
-        .map_err(|e| format!("reading {}: {e}", events.display()))?;
+    let mut stream = Stream::start(
+        source
+            .poll()
+            .map_err(|e| format!("reading {}: {e}", events.display()))?,
+        keyframe::EVERY,
+    );
 
     let client = Client::new(&base);
-    let first = chunk_len(&pending, MAX_CHUNK);
+    let first = stream.next_len(MAX_CHUNK);
     let log = client
-        .create(&pending[..first], password.as_deref())
+        .create(&stream.pending[..first], password.as_deref())
         .map_err(|e| e.message())?;
     // The link first, so it can be shared straight away.
     println!("{}", log.url);
@@ -104,21 +117,26 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     };
     eprintln!("Sharing {what}, live. {who}. Press Ctrl+C to stop.");
 
+    stream.sent(first, 0);
     let mut sent = first as u64;
-    pending.drain(..first);
     let mut backoff = Duration::ZERO;
     let mut reading_failed = false;
     // The length of a chunk that failed: it's retried with exactly the same
     // bytes, whatever has arrived since, as the site may have stored it.
     let mut retrying: Option<usize> = None;
+    let mut trims = Trims::default();
     loop {
-        while !pending.is_empty() {
-            let n = retrying.unwrap_or_else(|| chunk_len(&pending, MAX_CHUNK));
-            match client.append(&log, sent, &pending[..n]) {
+        while !stream.pending.is_empty() {
+            let n = retrying.unwrap_or_else(|| stream.next_len(MAX_CHUNK));
+            match client.append(&log, sent, &stream.pending[..n]) {
                 Ok(()) => {
                     retrying = None;
+                    // As soon as a keyframe is stored, the site can let go of
+                    // what's before the last (so it never holds three).
+                    if let Some(before) = stream.sent(n, sent) {
+                        trims.ask(before, &client, &log);
+                    }
                     sent += n as u64;
-                    pending.drain(..n);
                     if !backoff.is_zero() {
                         eprintln!("Reconnected; caught up.");
                         backoff = Duration::ZERO;
@@ -136,12 +154,16 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                 }
             }
         }
+        trims.retry(&client, &log);
         std::thread::sleep(POLL);
         // A read error (say, the directory is briefly missing) is retried,
         // and said once.
         match source.poll() {
             Ok(new) => {
-                pending.extend(new);
+                stream.push(&new);
+                if stream.recut {
+                    stream.recut(source.read_all().ok());
+                }
                 reading_failed = false;
             }
             Err(e) => {
@@ -152,6 +174,339 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
             }
         }
     }
+}
+
+// ---------- keyframes ----------
+
+/// Asking the site to delete what's before a keyframe.
+#[derive(Default)]
+struct Trims {
+    /// Where to trim before, if a request is still to be made.
+    pending: Option<u64>,
+    /// After a failure, when to ask again, and how long it waited last.
+    at: Option<Instant>,
+    backoff: Duration,
+    /// The site can't (an older copy): it keeps everything sent.
+    refused: bool,
+}
+
+impl Trims {
+    /// Asks now (or once it can), to delete what's before `before`.
+    fn ask(&mut self, before: u64, client: &Client, log: &Created) {
+        self.pending = Some(before);
+        self.retry(client, log);
+    }
+
+    /// Makes the request still to be made, if it's time.
+    fn retry(&mut self, client: &Client, log: &Created) {
+        let Some(before) = self.pending.filter(|_| !self.refused) else {
+            return;
+        };
+        if self.at.is_some_and(|at| Instant::now() < at) {
+            return;
+        }
+        match client.trim(log, before) {
+            Ok(()) => {
+                self.pending = None;
+                self.at = None;
+                self.backoff = Duration::ZERO;
+            }
+            Err(SendError::Retry(_)) => {
+                self.backoff = (self.backoff * 2).clamp(Duration::from_secs(30), MAX_BACKOFF * 5);
+                self.at = Some(Instant::now() + self.backoff);
+            }
+            // It keeps everything; sharing carries on.
+            Err(SendError::Fatal(e)) => {
+                eprintln!(
+                    "The site can't trim the log ({e}), so it'll keep everything sent from here on."
+                );
+                self.refused = true;
+            }
+        }
+    }
+}
+
+/// Where an event sorts.
+type Key = (std::time::SystemTime, String);
+
+/// A state a keyframe was cut at, to work out later ones from.
+struct Checkpoint {
+    /// The last event it stands for, and where that sorts (none: before
+    /// everything).
+    last: Option<(Key, Envelope)>,
+    replay: Replay,
+    /// How many of the share's events had come when it was cut.
+    arrived: usize,
+}
+
+/// How many checkpoints are kept. An event that comes later than this many
+/// keyframes after where it sorts has the whole log read again (see
+/// `Stream::recut`).
+const CHECKPOINTS: usize = 3;
+
+/// What's to be sent: the log's last two keyframes' worth to start with,
+/// then new lines as they come, with a keyframe after every `every` events,
+/// each starting a chunk.
+struct Stream {
+    every: usize,
+    pending: Vec<u8>,
+    /// Where keyframes start in `pending` (a chunk starts at each), and
+    /// whether the site should start there (see `next_keyframe`).
+    breaks: VecDeque<(usize, bool)>,
+    /// The events since the oldest checkpoint, as they came: where each
+    /// sorts, and its line.
+    history: VecDeque<(Key, Vec<u8>)>,
+    /// How many events came before `history`'s first.
+    dropped: usize,
+    /// The states at the last few keyframes, oldest first.
+    checkpoints: VecDeque<Checkpoint>,
+    /// Events since the last keyframe.
+    since: usize,
+    /// The earliest an event has come, since the last keyframe, that sorts
+    /// before it (from a session joining a shared tree, say).
+    late: Option<Key>,
+    /// One has sorted before every checkpoint: the next keyframe needs the
+    /// whole log, read again (`recut`).
+    recut: bool,
+    /// Where on the site the last keyframe starts.
+    last_keyframe: Option<u64>,
+}
+
+impl Stream {
+    /// The log so far, cut to its last two keyframes' worth, in the order
+    /// its events apply in (`keyframe::Trimmer`).
+    fn start(raw: Vec<u8>, every: usize) -> Stream {
+        let (trimmed, text) = keyframe::Trimmer::new(valid_utf8(raw), every).finish();
+        let lines = &trimmed.lines;
+        let checkpoint = |at: usize, replay: Replay| {
+            let last = at.checked_sub(1).map(|i| {
+                let line = &text[lines[i].at.clone()];
+                (
+                    lines[i].key.clone(),
+                    serde_json::from_slice(line).expect("read before"),
+                )
+            });
+            Checkpoint {
+                last,
+                replay,
+                arrived: at,
+            }
+        };
+        let mut checkpoints = VecDeque::from([checkpoint(trimmed.from, trimmed.at_from)]);
+        if trimmed.last > trimmed.from {
+            checkpoints.push_back(checkpoint(trimmed.last, trimmed.replay));
+        }
+        let history = lines[trimmed.from..]
+            .iter()
+            .map(|line| {
+                let mut bytes = text[line.at.clone()].to_vec();
+                if !bytes.ends_with(b"\n") {
+                    bytes.push(b'\n');
+                }
+                (line.key.clone(), bytes)
+            })
+            .collect();
+        Stream {
+            every,
+            breaks: trimmed.keyframes.iter().map(|&k| (k, false)).collect(),
+            pending: trimmed.text,
+            history,
+            dropped: trimmed.from,
+            checkpoints,
+            since: lines.len() - trimmed.last,
+            late: None,
+            recut: false,
+            last_keyframe: None,
+        }
+    }
+
+    /// A keyframe to send, starting a chunk. If the site should start there
+    /// (`start_here`), it says so to readers already reading, too.
+    fn add_keyframe(&mut self, parts: &[Envelope], start_here: bool) {
+        if parts.is_empty() {
+            return;
+        }
+        self.breaks.push_back((self.pending.len(), start_here));
+        for part in parts {
+            let mut part = part.clone();
+            if start_here {
+                part.data["restart"] = serde_json::Value::Bool(true);
+            }
+            self.pending
+                .extend(serde_json::to_vec(&part).expect("serializable"));
+            self.pending.push(b'\n');
+        }
+    }
+
+    /// New lines, with a keyframe after every `every` events. A poll reads
+    /// its files one after another, so its events are sorted first.
+    fn push(&mut self, raw: &[u8]) {
+        let raw = valid_utf8(raw.to_vec());
+        let mut events = Vec::new();
+        for line in lines_of(&raw) {
+            match serde_json::from_slice::<Envelope>(line) {
+                Ok(event) if reducer::is_keyframe(&event) => {}
+                Ok(event) => events.push((reducer::sort_key(&event), line)),
+                // Not an event: sent as it is, for what it's worth.
+                Err(_) => self.pending.extend_from_slice(line),
+            }
+        }
+        events.sort_by(|a, b| a.0.cmp(&b.0));
+        for (key, line) in events {
+            self.pending.extend_from_slice(line);
+            let newest = self.checkpoints.back().and_then(|c| c.last.as_ref());
+            if newest.is_some_and(|(last, _)| key < *last) {
+                self.late = Some(
+                    self.late
+                        .take()
+                        .map_or(key.clone(), |late| late.min(key.clone())),
+                );
+            }
+            self.history.push_back((key, line.to_vec()));
+            self.since += 1;
+            if self.since == self.every {
+                self.since = 0;
+                self.next_keyframe();
+            }
+        }
+    }
+
+    /// A keyframe of everything so far, worked out from the last one and
+    /// the events since, as the site would. After a late event, it's worked
+    /// out from the newest checkpoint before where that sorts, so it has it
+    /// in its place; the site, whose last keyframe doesn't, is told to start
+    /// at this one. (One later than every checkpoint is placed where it
+    /// came.)
+    fn next_keyframe(&mut self) {
+        let newest = self.checkpoints.len() - 1;
+        let (from, start_here) = match &self.late {
+            Some(late) => {
+                let Some(i) = self
+                    .checkpoints
+                    .iter()
+                    .rposition(|c| c.last.as_ref().is_none_or(|(key, _)| key < late))
+                else {
+                    self.recut = true;
+                    return;
+                };
+                // Those after it haven't it in its place either.
+                self.checkpoints.truncate(i + 1);
+                (i, true)
+            }
+            None => (newest, false),
+        };
+        let checkpoint = &self.checkpoints[from];
+        let mut replay = checkpoint.replay.clone();
+        let mut order: Vec<&(Key, Vec<u8>)> = self
+            .history
+            .iter()
+            .skip(checkpoint.arrived - self.dropped)
+            .collect();
+        order.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut last = self.checkpoints.back().and_then(|c| c.last.clone());
+        for (key, line) in order {
+            let event: Envelope = serde_json::from_slice(line).expect("read before");
+            replay.apply(&event);
+            if last.as_ref().is_none_or(|(latest, _)| key > latest) {
+                last = Some((key.clone(), event));
+            }
+        }
+        let Some(last) = last else {
+            return;
+        };
+        let parts = replay.keyframe(&last.1, KEYFRAME_PART);
+        self.add_keyframe(&parts, start_here);
+        self.checkpoints.push_back(Checkpoint {
+            last: Some(last),
+            replay,
+            arrived: self.dropped + self.history.len(),
+        });
+        while self.checkpoints.len() > CHECKPOINTS {
+            self.checkpoints.pop_front();
+        }
+        let keep = self.checkpoints[0].arrived;
+        while self.dropped < keep {
+            self.history.pop_front();
+            self.dropped += 1;
+        }
+        self.late = None;
+    }
+
+    /// A keyframe of the whole log (`all`: everything read so far, of the
+    /// files shared), after an event that sorts before every checkpoint: so
+    /// it has it in its place, and the site starts there. Then it's the only
+    /// checkpoint. If the log couldn't be read again, it's placed where it
+    /// came, as the site would.
+    fn recut(&mut self, all: Option<Vec<u8>>) {
+        self.recut = false;
+        let Some((replay, last)) = all.and_then(|all| keyframe::replay_all(valid_utf8(all))) else {
+            self.late = None;
+            self.next_keyframe();
+            return;
+        };
+        self.add_keyframe(&replay.keyframe(&last, KEYFRAME_PART), true);
+        let arrived = self.dropped + self.history.len();
+        self.checkpoints = VecDeque::from([Checkpoint {
+            last: Some((reducer::sort_key(&last), last)),
+            replay,
+            arrived,
+        }]);
+        self.history.clear();
+        self.dropped = arrived;
+        self.late = None;
+    }
+
+    /// How much of `pending` to send next: whole lines, at most `max`, and
+    /// not past the next keyframe.
+    fn next_len(&self, max: usize) -> usize {
+        let limit = self
+            .breaks
+            .iter()
+            .map(|&(b, _)| b)
+            .find(|&b| b > 0)
+            .unwrap_or(self.pending.len());
+        chunk_len(&self.pending[..limit], max)
+    }
+
+    /// `n` bytes of `pending` were stored at `offset`. If they started with
+    /// a keyframe, returns where the site can delete what's before: the
+    /// keyframe before it, or this one, if the site should start there.
+    fn sent(&mut self, n: usize, offset: u64) -> Option<u64> {
+        let start_here = match self.breaks.front() {
+            Some(&(0, start_here)) => {
+                self.breaks.pop_front();
+                Some(start_here)
+            }
+            _ => None,
+        };
+        self.pending.drain(..n);
+        for (b, _) in &mut self.breaks {
+            *b -= n;
+        }
+        let start_here = start_here?;
+        let before = self.last_keyframe.replace(offset);
+        match start_here {
+            true => Some(offset),
+            false => before.filter(|&before| before > 0),
+        }
+    }
+}
+
+/// `raw` as valid UTF-8 (anything that isn't, replaced), so the site stores
+/// exactly the bytes sent, and chunks' offsets stay true.
+fn valid_utf8(raw: Vec<u8>) -> Vec<u8> {
+    match String::from_utf8(raw) {
+        Ok(text) => text.into_bytes(),
+        Err(e) => String::from_utf8_lossy(e.as_bytes())
+            .into_owned()
+            .into_bytes(),
+    }
+}
+
+/// The lines in `raw`, each with its newline.
+fn lines_of(raw: &[u8]) -> impl Iterator<Item = &[u8]> {
+    raw.split_inclusive(|&b| b == b'\n')
+        .filter(|line| line.iter().any(|b| !b.is_ascii_whitespace()))
 }
 
 // ---------- reading new lines ----------
@@ -351,6 +706,19 @@ impl Lines {
         let files = tree.files.clone();
         batches.retain(|b| files.contains(&b.path));
         Ok(self.commit(batches))
+    }
+
+    /// Everything read so far, of the files shared now: each from its start
+    /// up to where it's been read to.
+    pub fn read_all(&self) -> io::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        for (path, &offset) in &self.offsets {
+            if self.tree.as_ref().is_some_and(|t| !t.files.contains(path)) {
+                continue;
+            }
+            File::open(path)?.take(offset).read_to_end(&mut out)?;
+        }
+        Ok(out)
     }
 
     /// The batches' lines, in order, with their files' offsets moved on.
@@ -608,6 +976,26 @@ impl Client {
         }
     }
 
+    /// Asks the site to delete the log's chunks before `before` (where a
+    /// keyframe starts).
+    pub fn trim(&self, log: &Created, before: u64) -> Result<(), SendError> {
+        let mut res = self
+            .agent
+            .post(format!("{}/api/logs/{}/trim", self.base, log.id))
+            .query("before", before.to_string())
+            .header("Authorization", format!("Bearer {}", log.write_token))
+            .send_empty()
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        match res.status().as_u16() {
+            200 | 204 => Ok(()),
+            s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
+            s => {
+                let text = res.body_mut().read_to_string().unwrap_or_default();
+                Err(SendError::Fatal(format!("{s}: {}", text.trim())))
+            }
+        }
+    }
+
     pub fn append(&self, log: &Created, offset: u64, body: &[u8]) -> Result<(), SendError> {
         let mut res = self
             .agent
@@ -709,6 +1097,303 @@ pub fn clear_default_password(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Event `n`: a session starting, or working, `n` seconds in. Some are
+    /// written unusually (spaced out, with a field we don't know), as a
+    /// newer writer might.
+    fn event(n: usize) -> String {
+        let message = format!(r#"{{"message_id":"m{n}","to":"x:s0","summary":"hi"}}"#);
+        let (kind, data) = match n % 3 {
+            0 => ("session.started", "{}"),
+            1 => ("status", r#"{"state":"working"}"#),
+            _ => ("message.sent", message.as_str()),
+        };
+        let line = format!(
+            r#"{{"v":1,"id":"01K{n:023}","ts":"2026-09-25T10:{:02}:{:02}.000Z","type":"{kind}","node":"x:s{}","data":{data}}}"#,
+            n / 60,
+            n % 60,
+            n / 7
+        );
+        if n % 5 == 0 {
+            line.replace(r#""v":1,"#, r#""v": 1, "extra": [1], "#) + "\n"
+        } else {
+            line + "\n"
+        }
+    }
+
+    fn events(range: std::ops::Range<usize>) -> String {
+        range.map(event).collect()
+    }
+
+    /// Sends everything pending, a chunk at a time, from `offset`: the
+    /// chunks, and the trims asked for.
+    fn send_all(stream: &mut Stream, offset: &mut u64) -> (Vec<String>, Vec<u64>) {
+        let (mut chunks, mut trims) = (Vec::new(), Vec::new());
+        while !stream.pending.is_empty() {
+            let n = stream.next_len(MAX_CHUNK);
+            chunks.push(String::from_utf8(stream.pending[..n].to_vec()).unwrap());
+            trims.extend(stream.sent(n, *offset));
+            *offset += n as u64;
+        }
+        (chunks, trims)
+    }
+
+    fn is_keyframe_line(line: &str) -> bool {
+        line.contains(r#""type":"keyframe""#)
+    }
+
+    /// The graph a log's lines make, as the site makes it: from the
+    /// keyframe it starts with, if it does.
+    fn as_site(text: &str) -> serde_json::Value {
+        let parsed: Vec<Envelope> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let leading = parsed
+            .iter()
+            .take_while(|e| reducer::is_keyframe(e))
+            .count();
+        let base = (leading > 0).then(|| reducer::merge_keyframe(&parsed[..leading]).unwrap());
+        let rest = parsed[leading..]
+            .iter()
+            .filter(|e| !reducer::is_keyframe(e))
+            .cloned()
+            .collect();
+        let opts = reducer::Options {
+            now: std::time::UNIX_EPOCH + Duration::from_secs(1_790_000_000),
+            stale_after: Duration::from_secs(1800),
+        };
+        serde_json::to_value(reducer::reduce_from(base.as_ref(), rest, &opts)).unwrap()
+    }
+
+    /// Keyframes: the log is shared from its last keyframe but one, each
+    /// keyframe starts a chunk, and once one's sent, the site's asked to
+    /// delete what's before the one before. What it keeps shows the same.
+    #[test]
+    fn a_log_is_shared_from_its_last_but_one_keyframe() {
+        let mut stream = Stream::start(events(0..25).into_bytes(), 10);
+        let mut offset = 0;
+        let (chunks, trims) = send_all(&mut stream, &mut offset);
+        // A keyframe, events 10 to 19; a keyframe, events 20 to 24.
+        assert_eq!(chunks.len(), 2);
+        for (chunk, range) in chunks.iter().zip([10..20, 20..25]) {
+            let (first, rest) = chunk.split_once('\n').unwrap();
+            assert!(is_keyframe_line(first));
+            assert_eq!(rest, events(range), "the lines as written");
+        }
+        assert!(trims.is_empty(), "nothing before the first");
+        assert_eq!(as_site(&chunks.concat()), as_site(&events(0..25)));
+
+        // Five more make ten since the last keyframe: another, in a chunk
+        // of its own; then the site can let go of what's before the last.
+        let second = chunks[0].len() as u64;
+        stream.push(events(25..30).as_bytes());
+        stream.push(b"not an event\n");
+        let (more, trims) = send_all(&mut stream, &mut offset);
+        assert_eq!(more.len(), 2);
+        assert_eq!(more[0], events(25..30));
+        let (keyframe, after) = more[1].split_at(more[1].find("not an event").unwrap());
+        assert!(keyframe.lines().all(is_keyframe_line));
+        assert_eq!(
+            after, "not an event\n",
+            "sent, as it was, though not counted"
+        );
+        assert_eq!(trims, [second]);
+        let kept = chunks[1].clone() + &more.concat().replace("not an event\n", "");
+        assert_eq!(as_site(&kept), as_site(&events(0..30)));
+
+        // Each keyframe carries on from the last: the site, trimmed to the
+        // newest, shows the same.
+        stream.push(events(30..40).as_bytes());
+        let (last, _) = send_all(&mut stream, &mut offset);
+        let newest = last.last().unwrap();
+        assert!(newest.lines().all(is_keyframe_line));
+        assert_eq!(as_site(newest), as_site(&events(0..40)));
+    }
+
+    /// An idle for session `s`, `at` seconds in (between its events), which
+    /// sorts before the last keyframe when it comes.
+    fn late(at: &str, session: usize) -> String {
+        format!(
+            r#"{{"v":1,"id":"01KLATE0000000000000000000","ts":"2026-09-25T10:00:{at}Z","type":"status","node":"x:s{session}","data":{{"state":"idle"}}}}"#
+        ) + "\n"
+    }
+
+    /// An event that sorts before the last keyframe (from a session that's
+    /// just joined a shared tree, say) is in its place in the next one,
+    /// worked out from the checkpoint before it; and the site, whose last
+    /// keyframe hasn't it, is told to start at the new one.
+    #[test]
+    fn a_late_event_is_in_its_place_in_the_next_keyframe() {
+        // Checkpoints after events 9 and 19; session 1's events are 7 to 13.
+        let mut stream = Stream::start(events(0..25).into_bytes(), 10);
+        let mut offset = 0;
+        send_all(&mut stream, &mut offset);
+        assert!(stream.late.is_none());
+        let idle = late("12.500", 1);
+        stream.push(idle.as_bytes());
+        assert!(stream.late.is_some(), "it sorts before the last keyframe");
+        // Five came after the last keyframe: four more make ten.
+        stream.push(events(25..29).as_bytes());
+        let before = offset;
+        let (chunks, trims) = send_all(&mut stream, &mut offset);
+        let keyframe = chunks.last().unwrap();
+        assert!(keyframe.lines().all(is_keyframe_line));
+        let mut all = events(0..29);
+        all.push_str(&idle);
+        assert_eq!(as_site(keyframe), as_site(&all), "in its place");
+        assert_eq!(as_site(keyframe)["nodes"]["x:s1"]["state"], "working");
+        let at = before + chunks[..chunks.len() - 1].concat().len() as u64;
+        assert_eq!(trims, [at], "the site starts at the new keyframe");
+        assert!(
+            keyframe.lines().all(|l| l.contains(r#""restart":true"#)),
+            "and so do readers already reading"
+        );
+        assert!(stream.late.is_none());
+    }
+
+    /// Two late events in turn: the checkpoints between the first's and
+    /// the keyframe it made haven't it in their place, so the second isn't
+    /// worked out from them.
+    #[test]
+    fn late_events_in_turn_are_each_in_their_place() {
+        let mut stream = Stream::start(events(0..25).into_bytes(), 10);
+        let mut offset = 0;
+        send_all(&mut stream, &mut offset);
+        let (first, second) = (late("15.500", 2), late("22.500", 3));
+        stream.push(first.as_bytes());
+        stream.push(events(25..29).as_bytes());
+        send_all(&mut stream, &mut offset);
+        stream.push(second.as_bytes());
+        stream.push(events(29..38).as_bytes());
+        let (chunks, trims) = send_all(&mut stream, &mut offset);
+        let keyframe = chunks.last().unwrap();
+        assert!(keyframe.lines().all(is_keyframe_line));
+        let all = events(0..38) + &first + &second;
+        assert_eq!(as_site(keyframe), as_site(&all));
+        assert_eq!(as_site(keyframe)["nodes"]["x:s2"]["state"], "working");
+        assert_eq!(trims.len(), 1);
+    }
+
+    /// One later than every checkpoint has the whole log read again, for a
+    /// keyframe with it in its place, which the site starts at; or, if it
+    /// can't be read, is placed where it came, as the site would.
+    #[test]
+    fn a_very_late_event_has_the_log_read_again() {
+        for read in [true, false] {
+            let mut stream = Stream::start(events(0..25).into_bytes(), 10);
+            let mut offset = 0;
+            let (first, _) = send_all(&mut stream, &mut offset);
+            let idle = late("03.500", 0);
+            stream.push(idle.as_bytes());
+            stream.push(events(25..29).as_bytes());
+            assert!(stream.recut, "no keyframe yet: it needs the whole log");
+            let all = events(0..29) + &idle;
+            stream.recut(read.then(|| all.clone().into_bytes()));
+            assert!(!stream.recut);
+            let (chunks, trims) = send_all(&mut stream, &mut offset);
+            let keyframe = chunks.last().unwrap();
+            assert!(keyframe.lines().all(is_keyframe_line));
+            if read {
+                assert_eq!(as_site(keyframe), as_site(&all));
+                assert!(keyframe.contains(r#""restart":true"#));
+                assert_eq!(trims, [offset - keyframe.len() as u64]);
+                assert_eq!((stream.checkpoints.len(), stream.history.len()), (1, 0));
+            } else {
+                assert!(!keyframe.contains("restart"));
+                assert_eq!(trims, [first[0].len() as u64], "the keyframe before");
+            }
+        }
+    }
+
+    /// What's been read of the shared files, from their starts: whole lines,
+    /// and only the files shared.
+    #[test]
+    fn everything_read_can_be_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.jsonl");
+        std::fs::write(&a, events(0..2)).unwrap();
+        let mut lines = Lines::new(dir.path(), None);
+        lines.poll().unwrap();
+        crate::store::append(&a, (events(2..3) + "{\"half").as_bytes()).unwrap();
+        lines.poll().unwrap();
+        assert_eq!(
+            String::from_utf8(lines.read_all().unwrap()).unwrap(),
+            events(0..3)
+        );
+        // Sharing a tree, not the files of sessions that have left it.
+        let dir = tempfile::tempdir().unwrap();
+        let root = start("claude-code:p", "/a");
+        std::fs::write(dir.path().join("claude-code-p.jsonl"), &root).unwrap();
+        std::fs::write(
+            dir.path().join("claude-code-c.jsonl"),
+            under("claude-code:c", "claude-code:p", 1),
+        )
+        .unwrap();
+        let mut lines = Lines::new(dir.path(), Some("claude-code:p".into()));
+        lines.poll().unwrap();
+        lines.tree.as_mut().unwrap().checked = None;
+        lines.poll().unwrap();
+        let count = |all: Vec<u8>| all.split(|&b| b == b'\n').filter(|l| !l.is_empty()).count();
+        assert_eq!(count(lines.read_all().unwrap()), 2);
+        lines
+            .tree
+            .as_mut()
+            .unwrap()
+            .files
+            .retain(|f| !f.ends_with("claude-code-c.jsonl"));
+        assert_eq!(String::from_utf8(lines.read_all().unwrap()).unwrap(), root);
+    }
+
+    /// However long a share goes on, what's kept to work out keyframes from
+    /// is a few keyframes' worth.
+    #[test]
+    fn a_long_share_keeps_a_few_keyframes_worth() {
+        let mut stream = Stream::start(events(0..25).into_bytes(), 10);
+        let mut offset = 0;
+        for start in (25..2025).step_by(50) {
+            stream.push(events(start..start + 50).as_bytes());
+            send_all(&mut stream, &mut offset);
+            assert!(stream.checkpoints.len() <= CHECKPOINTS);
+            assert!(
+                stream.history.len() <= (CHECKPOINTS + 1) * 10,
+                "{}",
+                stream.history.len()
+            );
+        }
+        assert_eq!(stream.dropped + stream.history.len(), 2025);
+    }
+
+    /// A poll's lines come file by file: its events are sent in order; and
+    /// what isn't UTF-8 is replaced, so the site stores the bytes sent.
+    #[test]
+    fn new_lines_are_sent_in_order_as_utf8() {
+        let mut stream = Stream::start(Vec::new(), 10);
+        let mut bad = events(2..3).into_bytes();
+        bad.extend(b"\xff not an event\n");
+        stream.push(&[events(3..4).into_bytes(), events(1..2).into_bytes(), bad].concat());
+        let (chunks, _) = send_all(&mut stream, &mut 0);
+        let sent = chunks.concat();
+        assert_eq!(sent, "\u{fffd} not an event\n".to_string() + &events(1..4));
+    }
+
+    #[test]
+    fn a_short_log_is_shared_whole() {
+        let mut stream = Stream::start((events(0..5) + "not an event\n").into_bytes(), 10);
+        let (chunks, trims) = send_all(&mut stream, &mut 0);
+        assert_eq!(
+            chunks,
+            [events(0..5)],
+            "as written, but for what isn't an event"
+        );
+        assert!(trims.is_empty());
+        // Past ten, a keyframe follows; there's none before it to trim.
+        stream.push(events(5..12).as_bytes());
+        let (chunks, trims) = send_all(&mut stream, &mut 0);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[1].lines().next().is_some_and(is_keyframe_line));
+        assert!(trims.is_empty());
+    }
 
     fn start(session: &str, cwd: &str) -> String {
         format!(

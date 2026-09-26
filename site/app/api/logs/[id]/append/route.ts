@@ -1,6 +1,6 @@
-import { ID_PATTERN, MAX_CHUNK_BYTES, MAX_LOG_BYTES } from "@/lib/config";
+import { bodyText, ID_PATTERN, MAX_CHUNK_BYTES, MAX_LOG_BYTES } from "@/lib/config";
 import { canWrite } from "@/lib/crypto";
-import { appendChunk, ChunkTaken } from "@/lib/store";
+import { appendChunk, ChunkTaken, firstChunkOffset } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
  * This is the hot path while `agent-graph watch-remote` runs, so it does as
  * little as possible:
  * - the size is checked from the header before the body is read;
+ * - so is the log's: only past `MAX_LOG_BYTES` is its first chunk read, since
+ *   what's stored is what counts, and a live share trims its start (though
+ *   never all of it, nor adds before where it starts);
  * - the write token is checked by recomputing an HMAC, with no database read;
  * - the body is stored as it arrives (raw JSON Lines, never parsed);
  * - storing it is a single write of a new document keyed by the offset.
@@ -27,12 +30,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const offsetParam = new URL(req.url).searchParams.get("offset") ?? "";
   if (!/^\d{1,15}$/.test(offsetParam)) return new Response("Bad offset.", { status: 400 });
   const offset = Number(offsetParam);
-  if (offset > MAX_LOG_BYTES) return new Response("This log is full.", { status: 413 });
+  if (offset > MAX_LOG_BYTES) {
+    const first = await firstChunkOffset(id);
+    if (first === null || offset < first || offset - first > MAX_LOG_BYTES) {
+      return new Response("This log is full.", { status: 413 });
+    }
+  }
   if (Number(req.headers.get("content-length") ?? 0) > MAX_CHUNK_BYTES) {
     return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });
   }
 
-  const text = await req.text();
+  const text = await bodyText(req);
   if (!text) return new Response(null, { status: 204 });
   if (Buffer.byteLength(text) > MAX_CHUNK_BYTES) {
     return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });

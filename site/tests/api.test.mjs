@@ -46,9 +46,17 @@ async function content(id, after = "", cookie) {
   return {
     status: res.status,
     text: await res.text(),
+    first: res.headers.get("x-first-chunk"),
     last: res.headers.get("x-last-chunk"),
     more: res.headers.get("x-more") === "1",
   };
+}
+
+function trim(id, before, key) {
+  return fetch(`${BASE}/api/logs/${id}/trim?before=${before}`, {
+    method: "POST",
+    headers: key ? { Authorization: `Bearer ${key}` } : {},
+  });
 }
 
 test("create, append with the key, and read back in order", async () => {
@@ -237,6 +245,59 @@ test("right passwords don't use up the limits", async () => {
   // And wrong ones still count in full.
   for (let i = 0; i < 20; i++) assert.equal((await unlock(log.id, "nope", anAddress())).status, 401);
   assert.equal((await unlock(log.id, "pässwörd", anAddress())).status, 429);
+});
+
+// Keyframes: a live share keeps only its last two keyframes' worth.
+test("a log's start can be trimmed, with its key", async () => {
+  const log = await create(line(1));
+  const offsets = [0, line(1).length, line(1).length + line(2).length];
+  assert.equal((await append(log.id, offsets[1], line(2), log.writeToken)).status, 204);
+  assert.equal((await append(log.id, offsets[2], line(3), log.writeToken)).status, 204);
+  assert.equal((await content(log.id)).first, "000000000000000");
+
+  assert.equal((await trim(log.id, offsets[2])).status, 401, "no key");
+  assert.equal((await trim(log.id, offsets[2], "nope")).status, 401, "wrong key");
+  assert.equal((await trim(log.id, "abc", log.writeToken)).status, 400);
+  assert.equal((await trim("not-an-id", 1, log.writeToken)).status, 404);
+  assert.equal((await content(log.id)).text, line(1) + line(2) + line(3), "nothing gone");
+
+  assert.equal((await trim(log.id, offsets[2], log.writeToken)).status, 204);
+  const read = await content(log.id);
+  assert.equal(read.text, line(3));
+  assert.equal(read.first, String(offsets[2]).padStart(15, "0"));
+});
+
+// What's stored counts towards a log's size limit, not what was ever sent:
+// a trimmed live share can go on for good.
+test("a trimmed log can go on past the size limit", async () => {
+  const log = await create(line(1));
+  const kept = 63 * 1024 * 1024;
+  const past = 65 * 1024 * 1024;
+  assert.equal((await append(log.id, kept, line(2), log.writeToken)).status, 204, "within the limit");
+  assert.equal((await append(log.id, past, line(3), log.writeToken)).status, 413, "all still there");
+  assert.equal((await trim(log.id, kept, log.writeToken)).status, 204);
+  assert.equal((await append(log.id, past, line(3), log.writeToken)).status, 204);
+  // (A gap between them: a read stops there, and the next carries on.)
+  const read = await content(log.id);
+  assert.deepEqual([read.text, read.more], [line(2), true]);
+  assert.equal((await content(log.id, read.last)).text, line(3));
+  // But not before where it now starts, nor once it's all gone.
+  assert.equal((await trim(log.id, past, log.writeToken)).status, 204);
+  assert.equal((await append(log.id, past - 1000, line(4), log.writeToken)).status, 413);
+  assert.equal((await trim(log.id, past + 1, log.writeToken)).status, 204);
+  assert.equal((await append(log.id, past + 1000, line(4), log.writeToken)).status, 413);
+});
+
+// Stored as sent, so chunks' offsets stay true: a byte-order mark at a
+// chunk's start (Windows PowerShell writes them) is kept.
+test("a chunk is stored as it was sent, a byte-order mark and all", async () => {
+  const bom = "\uFEFF" + line(2);
+  const log = await create(line(1));
+  assert.equal((await append(log.id, line(1).length, bom, log.writeToken)).status, 204);
+  const next = line(1).length + Buffer.byteLength(bom);
+  assert.equal((await append(log.id, next, line(3), log.writeToken)).status, 204);
+  const read = await content(log.id);
+  assert.deepEqual([read.text, read.more], [line(1) + bom + line(3), false], "all of it, with no gap");
 });
 
 test("bad input is refused", async () => {

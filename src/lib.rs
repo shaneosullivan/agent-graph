@@ -7,6 +7,7 @@
 pub mod adapter;
 pub mod clock;
 pub mod event;
+pub mod keyframe;
 pub mod link;
 pub mod paths;
 pub mod reducer;

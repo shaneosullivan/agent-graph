@@ -135,6 +135,87 @@ test("a log isn't stored under its id, and its chunks are ciphertext", { skip, t
   assert.equal((await store.readChunks(id, "")).text, text + text, "the site still reads it");
 });
 
+// Keyframes: a live share keeps only its last two keyframes' worth, so it
+// asks for the chunks before one to be deleted.
+test("trimming deletes the chunks before an offset, and nothing from it on", { skip, timeout: 60_000 }, async () => {
+  const store = await import("../lib/store.ts");
+  const id = newId();
+  const part = (n) => `{"n":${n}}\n`;
+  await store.createLog(id, { source: "watch" }, part(0));
+  const offsets = [0];
+  let offset = Buffer.byteLength(part(0));
+  for (let i = 1; i < 6; i++) {
+    offsets.push(offset);
+    await store.appendChunk(id, offset, part(i));
+    offset += Buffer.byteLength(part(i));
+  }
+  assert.equal(await store.firstChunkOffset(id), 0);
+
+  assert.equal(await store.trimLog(id, offsets[3]), 3);
+  assert.equal(await store.firstChunkOffset(id), offsets[3]);
+  const page = await store.readChunks(id, "");
+  assert.equal(page.text, part(3) + part(4) + part(5));
+  assert.equal(page.first, store.chunkKey(offsets[3]), "where what's read starts");
+  // Nothing more before it, and appending carries on.
+  assert.equal(await store.trimLog(id, offsets[2]), 0);
+  await store.appendChunk(id, offset, part(6));
+  assert.equal((await store.readChunks(id, "")).text, part(3) + part(4) + part(5) + part(6));
+  // All of it.
+  assert.equal(await store.trimLog(id, offset + 100), 4);
+  assert.equal(await store.firstChunkOffset(id), null);
+});
+
+test("trimming more chunks than a batch holds deletes them all", { skip, timeout: 120_000 }, async () => {
+  const store = await import("../lib/store.ts");
+  const id = newId();
+  await store.createLog(id, { source: "watch" }, "");
+  const count = 620;
+  await Promise.all(Array.from({ length: count }, (_, i) => store.appendChunk(id, i * 10, `{"n":${i}}\n`)));
+  // Newest first: a reader starting from the first chunk left never starts
+  // partway through what's being deleted.
+  const { WriteBatch } = await import("firebase-admin/firestore");
+  const { delete: remove, commit } = WriteBatch.prototype;
+  const batches = [];
+  WriteBatch.prototype.delete = function (ref) {
+    (this.keys ??= []).push(ref.id);
+    return remove.call(this, ref);
+  };
+  WriteBatch.prototype.commit = function () {
+    batches.push(this.keys ?? []);
+    return commit.call(this);
+  };
+  try {
+    assert.equal(await store.trimLog(id, 600 * 10), 600);
+  } finally {
+    Object.assign(WriteBatch.prototype, { delete: remove, commit });
+  }
+  const key = (i) => store.chunkKey(i * 10);
+  assert.deepEqual(
+    batches.map((keys) => [keys.length, [...keys].sort()[0]]),
+    [
+      [500, key(100)],
+      [100, key(0)],
+    ],
+  );
+  assert.equal(await store.firstChunkOffset(id), 6000);
+  assert.equal((await store.readChunks(id, "")).first, store.chunkKey(6000));
+});
+
+// Chunks are stored one after another; a gap means the log's start was
+// trimmed while it was read, so a read stops there, and the viewer, seeing
+// the next read start somewhere else, starts again.
+test("a read stops at a gap", { skip, timeout: 60_000 }, async () => {
+  const store = await import("../lib/store.ts");
+  const id = newId();
+  await store.createLog(id, { source: "watch" }, "A\n");
+  await store.appendChunk(id, 2, "B\n");
+  await store.appendChunk(id, 10, "C\n");
+  const page = await store.readChunks(id, "");
+  assert.deepEqual(page, { text: "A\nB\n", first: store.chunkKey(0), last: store.chunkKey(2), more: true });
+  const next = await store.readChunks(id, page.last);
+  assert.deepEqual(next, { text: "C\n", first: store.chunkKey(10), last: store.chunkKey(10), more: false });
+});
+
 // R18: metadata changed in the database (a password removed, or another
 // log's metadata copied over) is refused, not trusted.
 test("metadata changed in the database is refused", { skip, timeout: 60_000 }, async () => {

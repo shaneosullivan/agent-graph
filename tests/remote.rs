@@ -535,3 +535,115 @@ fn a_retried_append_sends_the_same_bytes() {
     assert_eq!(next.body, line(3) + &line(4));
     replies.send(204).unwrap();
 }
+
+/// Event `n`, `n` seconds in, for a session that changes every 100.
+fn numbered(n: u32) -> String {
+    let at = std::time::UNIX_EPOCH + Duration::from_secs(1_790_000_000 + u64::from(n));
+    format!(
+        r#"{{"v":1,"id":"01K{n:023}","ts":"{}","type":"status","node":"x:s{}","data":{{"state":"working"}}}}"#,
+        humantime::format_rfc3339_millis(at),
+        n / 100
+    ) + "\n"
+}
+
+/// Keyframes: a long log is shared from its last keyframe but one, a
+/// keyframe starts a chunk, and as the log grows, once another is sent, the
+/// site's asked to delete what's before the one before.
+#[test]
+fn a_long_log_is_shared_from_its_last_keyframe_but_one() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let file = events.join("x-s.jsonl");
+    std::fs::write(&file, (0..2500).map(numbered).collect::<String>()).unwrap();
+    let _running = Stopped(
+        Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+            .args(["watch-remote", "--password=", "--url"])
+            .arg(format!("http://127.0.0.1:{port}"))
+            .env("AGENT_GRAPH_HOME", home.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let wait = Duration::from_secs(20);
+    let is_keyframe = |line: &str| line.contains(r#""type":"keyframe""#);
+    let event_lines = |body: &str| {
+        body.lines()
+            .filter(|l| !is_keyframe(l))
+            .map(String::from)
+            .collect::<Vec<_>>()
+    };
+
+    // A keyframe, then events 1000 to 1999; a keyframe, then 2000 to 2499.
+    let create = requests.recv_timeout(wait).unwrap();
+    assert_eq!(create.path, "/api/logs");
+    assert!(is_keyframe(create.body.lines().next().unwrap()));
+    assert_eq!(
+        event_lines(&create.body).concat(),
+        (1000..2000)
+            .map(|n| numbered(n).trim_end().to_string())
+            .collect::<String>()
+    );
+    let second = requests.recv_timeout(wait).unwrap();
+    assert_eq!(
+        second.path,
+        format!("/api/logs/abc123def456/append?offset={}", create.body.len())
+    );
+    assert!(is_keyframe(second.body.lines().next().unwrap()));
+    assert_eq!(event_lines(&second.body).len(), 500);
+
+    // Five hundred more: another keyframe, and the site's asked to delete
+    // what's before the one before (the second chunk).
+    agent_graph::store::append(
+        &file,
+        (2500..3000).map(numbered).collect::<String>().as_bytes(),
+    )
+    .unwrap();
+    let mut appended = String::new();
+    let trim = loop {
+        let r = requests.recv_timeout(wait).unwrap();
+        if r.path.contains("/trim") {
+            break r;
+        }
+        appended.push_str(&r.body);
+    };
+    assert_eq!(event_lines(&appended).len(), 500);
+    assert!(appended.lines().last().is_some_and(is_keyframe));
+    assert_eq!(
+        trim.path,
+        format!("/api/logs/abc123def456/trim?before={}", create.body.len())
+    );
+    assert_eq!(trim.headers["authorization"], "Bearer the-key");
+
+    // Two more keyframes' worth: the site's asked to let go of what's
+    // before the last keyframe as soon as the next is stored, before the one
+    // after is sent (so it never holds three).
+    agent_graph::store::append(
+        &file,
+        (3000..5300).map(numbered).collect::<String>().as_bytes(),
+    )
+    .unwrap();
+    let mut requested: Vec<Request> = Vec::new();
+    while requested
+        .iter()
+        .filter(|r| r.path.contains("/trim"))
+        .count()
+        < 2
+    {
+        requested.push(requests.recv_timeout(wait).unwrap());
+    }
+    let kinds: Vec<&str> = requested
+        .iter()
+        .map(
+            |r| match (r.path.contains("/trim"), r.body.lines().next()) {
+                (true, _) => "trim",
+                (false, Some(line)) if is_keyframe(line) => "keyframe",
+                _ => "events",
+            },
+        )
+        .collect();
+    assert_eq!(kinds, ["events", "keyframe", "trim", "keyframe", "trim"]);
+}

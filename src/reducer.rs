@@ -7,9 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, SystemTime};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::event::{Envelope, FinishStatus, Payload, SpawnKind, State, TaskStatus};
+use crate::event::{Envelope, FinishStatus, Keyframe, Payload, SpawnKind, State, TaskStatus};
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -39,14 +39,14 @@ pub struct Graph {
     pub late: BTreeSet<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
     Session,
     Agent,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
     pub kind: NodeKind,
@@ -103,7 +103,7 @@ pub struct Node {
     pub stale: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Task {
     pub id: String,
     pub text: String,
@@ -112,7 +112,7 @@ pub struct Task {
     pub status: TaskStatus,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Spawn {
     pub call_id: String,
     pub kind: SpawnKind,
@@ -127,7 +127,7 @@ pub struct Spawn {
     pub requested_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Wait {
     pub wait_id: String,
     /// The node waited on. `None` while a requested child hasn't started yet.
@@ -144,14 +144,14 @@ pub struct Wait {
     pub ended_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
     Sent,
     Received,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
     pub message_id: String,
     pub direction: Direction,
@@ -167,7 +167,7 @@ pub struct Message {
 }
 
 /// What stands between a node and continuing.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Blocked {
     /// Nodes this node is directly waiting on.
     pub on: Vec<String>,
@@ -192,16 +192,171 @@ pub fn sort_key(e: &Envelope) -> (SystemTime, String) {
     (event_time(e), e.id.clone())
 }
 
-pub fn reduce(mut events: Vec<Envelope>, opts: &Options) -> Graph {
+pub fn reduce(events: Vec<Envelope>, opts: &Options) -> Graph {
+    reduce_from(None, events, opts)
+}
+
+/// `reduce`, carrying on from `base`, a keyframe (with its parts merged:
+/// see `merge_keyframe`), as though from the events it stands for.
+pub fn reduce_from(base: Option<&Envelope>, mut events: Vec<Envelope>, opts: &Options) -> Graph {
     events.sort_by_cached_key(sort_key);
-    let mut reducer = Reducer::default();
+    let mut reducer = base.and_then(Reducer::from_keyframe).unwrap_or_default();
     for event in &events {
         reducer.apply(event);
     }
     reducer.finish(opts)
 }
 
-#[derive(Default)]
+/// The node keyframes are recorded under.
+pub const KEYFRAME_NODE: &str = "agent-graph:keyframe";
+
+/// The most bytes of state in one line of a keyframe: well within what's
+/// sent to the site in one request.
+pub const KEYFRAME_PART: usize = 192 * 1024;
+
+/// The most parts a keyframe can have: far more than a log the site keeps
+/// could need, and a bound on what a crafted one can make a reader hold.
+pub const KEYFRAME_PARTS: usize = 2048;
+
+/// The most a keyframe's state can be, unpacked: far more than a log the
+/// site keeps could need, and a bound on what a crafted one (a small packed
+/// text that unpacks to a great deal) can make a reader hold.
+pub const KEYFRAME_STATE: usize = 64 * 1024 * 1024;
+
+/// A state's JSON, packed as a keyframe holds it: deflated (it's very
+/// repetitive, so it packs about tenfold), as base64.
+pub fn pack_state(json: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(miniz_oxide::deflate::compress_to_vec(json, 6))
+}
+
+/// A keyframe's text, unpacked (at most `KEYFRAME_STATE` bytes of it).
+pub fn unpack_state(text: &str) -> Option<Vec<u8>> {
+    unpack_state_within(text, KEYFRAME_STATE)
+}
+
+/// A keyframe's text, unpacked, if it's at most `limit` bytes.
+pub fn unpack_state_within(text: &str, limit: usize) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let packed = base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .ok()?;
+    miniz_oxide::inflate::decompress_to_vec_with_limit(&packed, limit).ok()
+}
+
+pub fn is_keyframe(e: &Envelope) -> bool {
+    e.kind == "keyframe"
+}
+
+/// The reducer's state as events are applied to it in turn, to take
+/// keyframes from.
+#[derive(Default, Clone)]
+pub struct Replay(Reducer);
+
+impl Replay {
+    /// Carrying on from `base`, a merged keyframe (see `merge_keyframe`), if
+    /// there is one.
+    pub fn new(base: Option<&Envelope>) -> Replay {
+        Replay(base.and_then(Reducer::from_keyframe).unwrap_or_default())
+    }
+
+    pub fn apply(&mut self, e: &Envelope) {
+        self.0.apply(e);
+    }
+
+    /// A keyframe of the state now: the state's JSON, packed
+    /// (`pack_state`), in lines of at most `max_part` bytes of it, right
+    /// after `last`, the last event applied (or the base), with its time.
+    /// Its ids are `last`'s with `~` and the part's number after it, which
+    /// sort after `last`, and before any other event's.
+    pub fn keyframe(&self, last: &Envelope, max_part: usize) -> Vec<Envelope> {
+        let text = pack_state(&serde_json::to_vec(&self.0).expect("serializable"));
+        // Base64, so each character is a byte, and needs no escaping.
+        let pieces: Vec<&str> = text
+            .as_bytes()
+            .chunks(max_part.max(4))
+            .map(|piece| std::str::from_utf8(piece).expect("base64"))
+            .collect();
+        let parts = pieces.len();
+        pieces
+            .into_iter()
+            .enumerate()
+            .map(|(part, text)| {
+                let payload = Payload::Keyframe(Keyframe {
+                    part,
+                    parts,
+                    text: text.to_string(),
+                    restart: false,
+                });
+                Envelope {
+                    v: crate::event::SCHEMA_VERSION,
+                    id: format!("{}~{part:06}", last.id),
+                    ts: last.ts.clone(),
+                    kind: payload.type_name().to_string(),
+                    node: KEYFRAME_NODE.to_string(),
+                    parent: None,
+                    source: None,
+                    trace: None,
+                    data: payload.to_data(),
+                }
+            })
+            .collect()
+    }
+}
+
+/// A keyframe after `events` (sorted, carrying on from `base`, a merged
+/// keyframe, if there is one): see `Replay::keyframe`. None if there's
+/// nothing before it.
+pub fn keyframe(
+    base: Option<&Envelope>,
+    events: &[Envelope],
+    max_part: usize,
+) -> Option<Vec<Envelope>> {
+    let last = events.last().or(base)?;
+    let mut replay = Replay::new(base);
+    for event in events {
+        replay.apply(event);
+    }
+    Some(replay.keyframe(last, max_part))
+}
+
+/// A keyframe's parts (every one, once, in any order) as one event holding
+/// its whole state, once it's been checked (`Reducer::check`). None if any
+/// are missing or twice, they aren't one keyframe's, or it isn't a state
+/// the reducer could have made.
+pub fn merge_keyframe(parts: &[Envelope]) -> Option<Envelope> {
+    let frames: Vec<Keyframe> = parts
+        .iter()
+        .map(|e| match e.payload() {
+            Payload::Keyframe(k) => Some(k),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let count = frames.first()?.parts;
+    if count != frames.len() || count > KEYFRAME_PARTS || frames.iter().any(|k| k.parts != count) {
+        return None;
+    }
+    // As many as it has parts: one twice leaves another missing.
+    let mut ordered: Vec<Option<&str>> = vec![None; count];
+    for frame in &frames {
+        *ordered.get_mut(frame.part)? = Some(&frame.text);
+    }
+    let text: String = ordered.into_iter().collect::<Option<Vec<_>>>()?.concat();
+    Reducer::unpack(&text)?;
+    let first = parts.iter().zip(&frames).find(|(_, k)| k.part == 0)?.0;
+    let payload = Payload::Keyframe(Keyframe {
+        part: 0,
+        parts: 1,
+        text,
+        restart: false,
+    });
+    Some(Envelope {
+        data: payload.to_data(),
+        ..first.clone()
+    })
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct Reducer {
     nodes: BTreeMap<String, Node>,
     /// Which session each agent process (`<pid>@<start>`) belongs to: the
@@ -218,6 +373,7 @@ struct Reducer {
     /// When each session last started.
     started: BTreeMap<String, SystemTime>,
     /// Statuses ignored as late (see `LATE_STATUS`).
+    #[serde(skip)]
     late: BTreeSet<String>,
 }
 
@@ -236,7 +392,43 @@ fn family<'a>(
 }
 
 impl Reducer {
+    /// The reducer a keyframe (merged) holds, if it's one it could have
+    /// made (see `check`).
+    fn from_keyframe(e: &Envelope) -> Option<Reducer> {
+        match e.payload() {
+            Payload::Keyframe(k) if (k.part, k.parts) == (0, 1) => Reducer::unpack(&k.text),
+            _ => None,
+        }
+    }
+
+    /// The state a keyframe's text holds, if it's one the reducer could
+    /// have made.
+    fn unpack(text: &str) -> Option<Reducer> {
+        serde_json::from_slice::<Reducer>(&unpack_state(text)?)
+            .ok()
+            .filter(Reducer::check)
+    }
+
+    /// Whether this is a state the reducer could have made, as far as what
+    /// it relies on goes: each node under its own id, each request's call id
+    /// once per node, and indexes that name only nodes there are. (A keyframe
+    /// from a pasted log can say anything.)
+    fn check(&self) -> bool {
+        let known = |id: &String| self.nodes.contains_key(id);
+        self.nodes.iter().all(|(id, node)| {
+            let mut calls = BTreeSet::new();
+            *id == node.id && node.spawns.iter().all(|s| calls.insert(&s.call_id))
+        }) && self.processes.values().all(known)
+            && self.requesters.values().flatten().all(known)
+            && self.waiting_on.values().flatten().all(known)
+    }
+
     fn apply(&mut self, e: &Envelope) {
+        // A keyframe stands for the events before it: a log is only carried
+        // on from one at its start (see `reduce_from`).
+        if is_keyframe(e) {
+            return;
+        }
         let provider = e.source.as_ref().map(|s| s.provider.clone());
         self.ensure(&e.node, provider.as_deref(), &e.ts);
         // An explicit parent wins, unless a spawn binding already settled it.
@@ -509,7 +701,7 @@ impl Reducer {
                     });
                 }
             }
-            Payload::Activity(_) | Payload::Unknown(_) => {}
+            Payload::Activity(_) | Payload::Keyframe(_) | Payload::Unknown(_) => {}
         }
     }
 

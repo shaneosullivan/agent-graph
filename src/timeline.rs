@@ -28,8 +28,21 @@ impl Timed {
 }
 
 /// Sorts events into the order the reducer applies them.
+/// Sorts a log's events into the order they apply in, leaving a keyframe it
+/// starts from (see `split_base`) first.
 pub fn sort(events: &mut [Timed]) {
-    events.sort_by(|a, b| (a.at, &a.event.id).cmp(&(b.at, &b.event.id)));
+    let from = usize::from(split_base(events).0.is_some());
+    events[from..].sort_by(|a, b| (a.at, &a.event.id).cmp(&(b.at, &b.event.id)));
+}
+
+/// A log's base, the keyframe it starts from, if it starts from one (as a
+/// log on the site does once its start is trimmed): its first event, with
+/// its parts merged. Then the rest of its events.
+pub fn split_base(events: &[Timed]) -> (Option<&Envelope>, &[Timed]) {
+    match events.first() {
+        Some(t) if reducer::is_keyframe(&t.event) => (Some(&t.event), &events[1..]),
+        _ => (None, events),
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -319,10 +332,19 @@ pub fn timeline(
         return Err(ApiError::NotFound(format!("no node {root}")));
     }
     let members = subtree(&now, root);
-    let stops = events
-        .iter()
-        .filter(|t| members.contains(t.event.node.as_str()))
-        .map(|t| stop(&t.event, &now))
+    // A log that starts from a keyframe starts there.
+    let (base, rest) = split_base(events);
+    let base = base.map(|e| Stop {
+        node: root.to_string(),
+        ..stop(e, &now)
+    });
+    let stops = base
+        .into_iter()
+        .chain(
+            rest.iter()
+                .filter(|t| members.contains(t.event.node.as_str()))
+                .map(|t| stop(&t.event, &now)),
+        )
         .collect();
     Ok(to_json(&TimelineResponse { root, stops }))
 }
@@ -335,7 +357,9 @@ fn position(events: &[Timed], id: &str) -> Result<usize, ApiError> {
 }
 
 fn reduce(events: &[Timed], now: SystemTime, stale_after: Duration) -> Graph {
-    reducer::reduce(
+    let (base, events) = split_base(events);
+    reducer::reduce_from(
+        base,
         events.iter().map(|t| t.event.clone()).collect(),
         &reducer::Options { now, stale_after },
     )
@@ -552,6 +576,7 @@ pub fn describe(e: &Envelope, graph: &Graph) -> (&'static str, String) {
             )
         }
         Payload::Activity(d) => ("other", format!("Used {}", d.tool)),
+        Payload::Keyframe(_) => ("lifecycle", "Earlier history isn't included".to_string()),
         Payload::Unknown(_) => ("other", "Unrecognised event".to_string()),
     }
 }

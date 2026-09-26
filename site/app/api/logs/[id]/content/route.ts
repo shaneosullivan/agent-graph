@@ -13,6 +13,8 @@ export const dynamic = "force-dynamic";
  *
  * Returns the chunks after `after`, joined, as JSON Lines, up to about
  * `BYTES_PER_READ` (the viewer pages through the rest). Headers:
+ *   X-First-Chunk: the first chunk's key, its offset: where the text starts
+ *     (a trimmed log's first chunk isn't at 0; see `trimLog`)
  *   X-Last-Chunk: the key to pass as `after` next time (absent if none)
  *   X-More: 1 if there are more chunks to fetch right away
  * Password-protected logs need the cookie set by /unlock.
@@ -40,11 +42,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     console.error(`reading logs/${storageId(id)}:`, err);
     return new Response("This log couldn't be read.", { status: 500 });
   }
-  const { text, last, more } = chunks;
+  const { text, first, last, more } = chunks;
   const headers: Record<string, string> = {
     "Content-Type": "application/x-ndjson; charset=utf-8",
     "Cache-Control": "private, no-store",
   };
+  if (first) headers["X-First-Chunk"] = first;
   if (last) headers["X-Last-Chunk"] = last;
   if (more) headers["X-More"] = "1";
   return new Response(text, { headers });

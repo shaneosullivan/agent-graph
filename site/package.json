@@ -19,7 +19,7 @@
     "test:store": "node --experimental-strip-types --no-warnings --test tests/store.test.mjs",
     "migrate:storage-ids": "node --experimental-strip-types --no-warnings scripts/migrate-storage-ids.mjs",
     "test:ci": "firebase emulators:exec --only firestore --project demo-agent-graph 'sh scripts/ci-api-test.sh'",
-    "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/unlock.test.mts tests/viewer.test.mjs tests/wasm.test.mjs"
+    "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/unlock.test.mts tests/viewer.test.mjs tests/wasm.test.mjs tests/site-source.test.mjs tests/trim.test.mts"
   },
   "dependencies": {
     "firebase-admin": "^14.5.0",

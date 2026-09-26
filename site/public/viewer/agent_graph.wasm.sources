@@ -7,6 +7,7 @@
     "src/adapter/shell.rs",
     "src/clock.rs",
     "src/event.rs",
+    "src/keyframe.rs",
     "src/lib.rs",
     "src/link.rs",
     "src/paths.rs",
@@ -18,14 +19,17 @@
     "wasm/src/lib.rs"
   ],
   "crates": [
+    "adler2 v2.0.1",
     "agent-graph v0.1.0",
     "agent-graph-wasm v0.1.0",
+    "base64 v0.23.1 alloc,default,simd-unsafe,std",
     "equivalent v1.0.2",
     "hashbrown v0.17.1",
     "humantime v2.4.0",
     "indexmap v2.14.2 default,std",
     "itoa v1.0.18",
     "memchr v2.8.3 alloc,std",
+    "miniz_oxide v0.9.1 default,with-alloc",
     "proc-macro2 v1.0.107 proc-macro",
     "quote v1.0.47 proc-macro",
     "serde v1.0.229 default,derive,serde_derive,std",
@@ -40,5 +44,5 @@
     "[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true",
     "[profile.wasm]\ninherits = \"release\"\nopt-level = \"z\"\nlto = true\npanic = \"abort\""
   ],
-  "hash": "10ccfc00de7a977f1c323df4ae4b5f27f650b2a81a11ef94c6ee3de1905c7f94"
+  "hash": "4e3e34415e319e27f0c983844150afc162cbcb4ce5fef0b628eff0141e79d260"
 }

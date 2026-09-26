@@ -1,4 +1,4 @@
-import { MAX_CHUNK_BYTES, SOURCES, type Source, siteUrl } from "@/lib/config";
+import { bodyText, MAX_CHUNK_BYTES, SOURCES, type Source, siteUrl } from "@/lib/config";
 import { hashPassword, newId, passwordFromHeader, writeToken } from "@/lib/crypto";
 import { IdTaken, createLog } from "@/lib/store";
 
@@ -19,7 +19,7 @@ export async function POST(req: Request): Promise<Response> {
   if (Number(req.headers.get("content-length") ?? 0) > MAX_CHUNK_BYTES) {
     return tooLarge();
   }
-  const text = await req.text();
+  const text = await bodyText(req);
   if (Buffer.byteLength(text) > MAX_CHUNK_BYTES) return tooLarge();
 
   const header = req.headers.get("x-agent-graph-source") as Source | null;
