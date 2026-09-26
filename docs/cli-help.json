@@ -239,13 +239,13 @@
           "table": [
             ["--session <id>", "That session: its id, or the first few characters of it."],
             ["--all", "Every session active in the last day, one after another."],
-            ["--session current", "The Claude Code session this runs in, then the latest session in this folder, then the latest anywhere. This is also the default."]
+            ["--session current", "The Claude Code session this runs in, then the latest session in this folder, then the latest anywhere. This is also the default for a picture."]
           ]
         },
-        { "text": "Only the file's path is printed, so scripts can use it. By default the picture goes in ~/.agent-graph/images/ with a new name each time. --out chooses the file, and its extension chooses the format: .png, .svg, or .json (the whole graph as data, like --json). It won't replace a file that's already there unless you add --force." }
+        { "text": "Only the file's path is printed, so scripts can use it. By default the picture goes in ~/.agent-graph/images/ with a new name each time. --out chooses the file, and its extension chooses the format: .png, .svg, or .json. As .json, it's the graph as data: with --session or --all, just the sessions they choose and any they exchanged messages with, plus any of those wait on (directly or not); with neither, every session, as --json prints. It won't replace a file that's already there unless you add --force." }
       ],
       "options": [
-        { "id": "session", "flag": "--session <SESSION>", "text": "The session to draw: its id, the first few characters of it, or `current` (the default)." },
+        { "id": "session", "flag": "--session <SESSION>", "text": "The session to draw: its id, the first few characters of it, or `current` (the default for a picture)." },
         { "id": "all", "flag": "--all", "text": "Draw every session active in the last day instead." },
         { "id": "out", "flag": "-o, --out <FILE>", "text": "Where to write it. The extension picks the format: .png, .svg or .json. An existing file is left alone unless you add --force." },
         { "id": "force", "flag": "--force", "text": "Replace the file at --out if there is one." },

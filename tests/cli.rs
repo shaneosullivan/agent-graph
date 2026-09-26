@@ -1163,3 +1163,99 @@ const GIT_REPO_VARS: [&str; 5] = [
     "GIT_OBJECT_DIRECTORY",
     "GIT_COMMON_DIR",
 ];
+
+/// R31: `snapshot --session X` (or --all) as JSON is that session (or
+/// those), as a picture would be; with neither, it's the whole graph.
+#[test]
+fn snapshot_json_is_the_sessions_asked_for() {
+    let home = tempfile::tempdir().unwrap();
+    let payloads = fixture("claude-code/session.jsonl");
+    for payload in payloads.iter().take(14) {
+        emit(
+            home.path(),
+            &["--provider", "claude-code"],
+            &payload.to_string(),
+            &[],
+        );
+    }
+    // Another session, from long ago.
+    let mut other = payloads[0].clone();
+    other["session_id"] = "0ther-session".into();
+    emit(
+        home.path(),
+        &["--provider", "claude-code"],
+        &other.to_string(),
+        &[],
+    );
+    let json = |args: &[&str]| -> serde_json::Value {
+        let path = home.path().join(format!("out{}.json", args.join("_")));
+        let out = bin()
+            .arg("snapshot")
+            .args(args)
+            .arg("--out")
+            .arg(&path)
+            .env("AGENT_GRAPH_HOME", home.path())
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    };
+    // Ids are the provider's, prefixed.
+    let own = |id: &str| id.rsplit(['/', ':']).next().unwrap().to_string();
+    let has = |graph: &serde_json::Value, id: &str| {
+        graph["nodes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| own(k).starts_with(id))
+    };
+
+    let whole = json(&[]);
+    assert_eq!(whole["roots"].as_array().unwrap().len(), 2);
+
+    let one = json(&["--session", "5f2c"]);
+    let roots = one["roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 1);
+    assert!(own(roots[0].as_str().unwrap()).starts_with("5f2c"));
+    assert!(has(&one, "5f2c"), "the session");
+    assert!(
+        one["nodes"].as_object().unwrap().len() > 1,
+        "and its agents"
+    );
+    assert!(!has(&one, "0ther"), "not the other: {one}");
+
+    let other = json(&["--session", "0ther"]);
+    assert_eq!(other["nodes"].as_object().unwrap().len(), 1);
+}
+
+/// R31: asked for some sessions as data with none recorded, it says so, as
+/// a picture does; the whole graph, empty, is fine.
+#[test]
+fn snapshot_json_of_sessions_needs_some() {
+    let home = tempfile::tempdir().unwrap();
+    let snapshot = |args: &[&str]| {
+        bin()
+            .arg("snapshot")
+            .args(args)
+            .current_dir(home.path())
+            .env("AGENT_GRAPH_HOME", home.path())
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .output()
+            .unwrap()
+    };
+    for args in [["--session", "current"].as_slice(), &["--all"]] {
+        let out = snapshot(&[args, &["--out", "some.json", "--force"]].concat());
+        assert!(!out.status.success(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("no sessions recorded yet"),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    assert!(snapshot(&["--out", "all.json"]).status.success());
+}
