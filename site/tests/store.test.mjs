@@ -378,6 +378,44 @@ test("the migration copies logs, then deletes the old copies", { skip, timeout: 
   assert.match((await migrate(["--delete-old"])).stdout, /Deleted the old copies of 0 logs\./);
 });
 
+// R44: a log's count of what it stores is exact across the migration: what
+// the old site stored, and what the new one added before the copy (not
+// counted then: the log had no count), are counted once it's copied, once
+// each, however often it's copied; and trims give back what they delete.
+test("the size count is exact across the migration", { skip, timeout: 60_000 }, async () => {
+  const store = await import("../lib/store.ts");
+  const a = await oldLog();
+  const big = (c) => `${c.repeat(10 * 1024 - 1)}\n`;
+  // What its chunks hold, all of them (a read stops at a gap).
+  const total = async () => {
+    const { decryptChunk, storageId } = await import("../lib/encryption.ts");
+    const { firestore } = await import("../lib/firebase.ts");
+    const chunks = await firestore().collection("logs").doc(storageId(a.id)).collection("chunks").get();
+    return chunks.docs.reduce((sum, doc) => sum + decryptChunk(a.id, doc.id, doc.get("e")).length, 0);
+  };
+  let offset = a.offset;
+  for (const c of ["a", "b"]) {
+    await store.appendChunk(a.id, offset, big(c));
+    offset += big(c).length;
+  }
+  const trimAt = a.offset + big("a").length;
+
+  assert.equal((await migrate()).status, 0);
+  assert.equal((await copyOf(a.id)).get("stored"), a.offset + 20 * 1024);
+  assert.equal((await migrate()).status, 0);
+  assert.equal((await copyOf(a.id)).get("stored"), a.offset + 20 * 1024, "copied again, counted once");
+
+  await store.appendChunk(a.id, offset, big("c"));
+  assert.equal((await copyOf(a.id)).get("stored"), await total());
+  await store.trimLog(a.id, trimAt);
+  assert.equal(await total(), 20 * 1024);
+  assert.equal((await copyOf(a.id)).get("stored"), 20 * 1024, "what's still there");
+  // Copying again brings back the old copy's chunk that was trimmed (a
+  // gap before the rest, which reads past it), and counts it.
+  assert.equal((await migrate()).status, 0);
+  assert.equal((await copyOf(a.id)).get("stored"), await total(), "and copying again keeps it exact");
+});
+
 test("the migration changes nothing with the wrong key, or none", { skip, timeout: 60_000 }, async () => {
   const { firestore } = await import("../lib/firebase.ts");
   const log = await oldLog();

@@ -66,6 +66,30 @@ function newMeta(id, data) {
 }
 
 /**
+ * Counts the chunks of `target` (a copy) that aren't counted in its
+ * `stored` yet, those without a length (`n`: see lib/store.ts), a page at a
+ * time: each page in a transaction that gives them their length and adds it
+ * to the count, so a chunk deleted meanwhile (a trim) isn't counted, and
+ * none is counted twice.
+ */
+async function count(id, target) {
+  for await (const chunks of pages(target)) {
+    const refs = chunks.filter((chunk) => chunk.get("n") === undefined).map((chunk) => chunk.ref);
+    if (!refs.length) continue;
+    await db.runTransaction(async (tx) => {
+      const snaps = (await tx.getAll(...refs)).filter((snap) => snap.exists && snap.get("n") === undefined);
+      let added = 0;
+      for (const snap of snaps) {
+        const n = Buffer.byteLength(decryptChunk(id, snap.id, snap.get("e")));
+        tx.update(snap.ref, { n });
+        added += n;
+      }
+      if (added) tx.update(target, { stored: FieldValue.increment(added) });
+    });
+  }
+}
+
+/**
  * Writes with a BulkWriter, a page at a time: `write` queues writes, and
  * each page's must all succeed before the next (a failed write rejects only
  * its own promise, never `flush`).
@@ -84,7 +108,12 @@ async function inPages(write) {
   }
 }
 
-/** Copies log `id`: its chunks first, then its metadata, so it only shows once complete. */
+/**
+ * Copies log `id`: its chunks first, then its metadata, so it only shows
+ * once complete; then counts what it stores (`count`). A chunk the copy
+ * already has (copied before, or stored by the new site) is kept as it is:
+ * it may be counted, and viewers may have read it.
+ */
 async function copy(id, old, meta) {
   const target = logs.doc(storageId(id));
   await inPages(async (page) => {
@@ -95,10 +124,19 @@ async function copy(id, old, meta) {
         decryptChunk(id, chunks[0].id, chunks[0].get("e"));
         checked = true;
       }
-      await page((writer) => chunks.map((chunk) => writer.set(target.collection("chunks").doc(chunk.id), chunk.data())));
+      const copies = await db.getAll(...chunks.map((chunk) => target.collection("chunks").doc(chunk.id)));
+      await page((writer) =>
+        chunks.flatMap((chunk, i) => (copies[i].exists ? [] : [writer.create(copies[i].ref, chunk.data())])),
+      );
     }
-    if (meta.exists) await page((writer) => [writer.set(target, newMeta(id, meta.data()))]);
+    // Merged, and the count started at nothing but never reset: since
+    // it's been there, appends have been counted in it.
+    if (meta.exists) {
+      const data = { ...newMeta(id, meta.data()), stored: FieldValue.increment(0) };
+      await page((writer) => [writer.set(target, data, { merge: true })]);
+    }
   });
+  if (meta.exists) await count(id, target);
 }
 
 /** Deletes log `id`'s old documents, each once its copy is checked. */

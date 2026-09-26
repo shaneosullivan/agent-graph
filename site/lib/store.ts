@@ -44,9 +44,11 @@ import { firestore } from "./firebase";
  *
  * `stored` is how many bytes of text the log's chunks hold, which is what
  * `MAX_LOG_BYTES` limits: kept up to date in the transaction that stores or
- * deletes a chunk, with each chunk's length (`n`) saying what deleting it
- * gives back. (Chunks stored before it was counted have no `n`, and don't
- * count.)
+ * deletes a chunk, and exactly the sum of its chunks' lengths (`n`), which
+ * say what deleting them gives back. A chunk without one isn't counted:
+ * stored before counting began, or while the log was still stored as it was
+ * before storage ids (it had no count to add to; the migration counts those
+ * as it copies it).
  */
 
 export type Meta = {
@@ -94,9 +96,12 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   }
 }
 
-/** A chunk's document: its text, encrypted; its length; and when it was written. */
-function chunkData(id: string, key: string, text: string) {
-  return { e: encryptChunk(id, key, text), n: Buffer.byteLength(text), t: Timestamp.now() };
+/**
+ * A chunk's document: its text, encrypted; its length, if it's `counted` in
+ * the log's `stored`; and when it was written.
+ */
+function chunkData(id: string, key: string, text: string, counted = true) {
+  return { e: encryptChunk(id, key, text), ...(counted ? { n: Buffer.byteLength(text) } : {}), t: Timestamp.now() };
 }
 
 export class ChunkTaken extends Error {}
@@ -165,7 +170,8 @@ export async function appendChunk(id: string, offset: number, text: string): Pro
         tx.update(log, { stored: stored + bytes });
       }
       // When it was written: a log with none newer than a week is deleted.
-      tx.create(doc, chunkData(id, key, text));
+      // (Without its length where it isn't counted, as it isn't subtracted.)
+      tx.create(doc, chunkData(id, key, text, found !== undefined));
     });
   } catch (err) {
     // gRPC ALREADY_EXISTS
