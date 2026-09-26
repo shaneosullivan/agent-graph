@@ -3,6 +3,7 @@
 //! Everything here is pure: events and a clock in, JSON out.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -15,14 +16,16 @@ use crate::resume;
 #[derive(Debug, Clone)]
 pub struct Timed {
     pub at: SystemTime,
-    pub event: Envelope,
+    /// Shared, so a copy of a list of them (the local viewer's, changed
+    /// while a request holds it) copies only pointers.
+    pub event: Arc<Envelope>,
 }
 
 impl Timed {
     pub fn new(event: Envelope) -> Timed {
         Timed {
             at: reducer::event_time(&event),
-            event,
+            event: Arc::new(event),
         }
     }
 }
@@ -375,7 +378,7 @@ fn reduce(events: &[Timed], now: SystemTime, stale_after: Duration) -> Graph {
     let (base, events) = split_base(events);
     reducer::reduce_from(
         base,
-        events.iter().map(|t| t.event.clone()).collect(),
+        events.iter().map(|t| (*t.event).clone()).collect(),
         &reducer::Options { now, stale_after },
     )
 }
@@ -954,8 +957,10 @@ mod tests {
         );
     }
 
-    /// R23 (and R54): a child another session's request also claims is
-    /// named, though it's in that session's tree.
+    /// R23: a child a request claims is named, though it's in another
+    /// session's tree (moved there by a call that session returned without
+    /// having asked for it; since R54, not by one it did ask for, which
+    /// takes the child from the first).
     #[test]
     fn a_child_claimed_from_outside_the_tree_is_named() {
         let events = events_of(&[
@@ -969,11 +974,6 @@ mod tests {
             ),
             ("x:s/a", "agent.spawned", "{}"),
             ("x:t", "session.started", "{}"),
-            (
-                "x:t",
-                "spawn.requested",
-                r#"{"call_id":"c","kind":"agent"}"#,
-            ),
             (
                 "x:t",
                 "spawn.returned",

@@ -281,8 +281,8 @@ fn cpu_time() -> f64 {
 
 /// R22: reducing grows in step with the number of sessions, not with its
 /// square: an agent's or a session's start and finish look only at its own
-/// session (and the waits on it), not at every node. (Within one session,
-/// they still look at its nodes and waits: see R53.)
+/// session (and the waits on it), not at every node. (Nor, since R53, at
+/// every node of its session: see below.)
 #[test]
 fn reducing_grows_in_step_with_the_history() {
     let (small, large) = (100, 1600);
@@ -337,6 +337,179 @@ fn reducing_grows_in_step_with_the_history() {
             assert_eq!(child.parent.as_deref(), Some(session.id.as_str()));
         }
     }
+}
+
+/// One session's `turns` turns: in each, it starts four agents, which it
+/// waits on (each guessed as its own, then named when it returns), and a
+/// session from its shell; then it goes idle, and is prompted again.
+fn busy_session(turns: usize) -> Vec<Envelope> {
+    let s = "x:s";
+    let mut events = vec![ev(0, s, "session.started", json!({}))];
+    for t in 0..turns {
+        let at = 1 + 10 * t as u64;
+        events.push(ev(at, s, "status", json!({"state": "working"})));
+        for a in 0..4 {
+            let agent = format!("{s}/a{t}-{a}");
+            let call = format!("c{t}-{a}");
+            events.extend([
+                ev(
+                    at,
+                    s,
+                    "spawn.requested",
+                    json!({"call_id": call, "kind": "agent"}),
+                ),
+                ev(
+                    at,
+                    s,
+                    "wait.started",
+                    json!({"wait_id": format!("w{t}-{a}"), "on": agent}),
+                ),
+                ev(at + 1, &agent, "agent.spawned", json!({})),
+                ev(
+                    at + 2,
+                    &agent,
+                    "agent.finished",
+                    json!({"status": "completed"}),
+                ),
+                ev(
+                    at + 3,
+                    s,
+                    "spawn.returned",
+                    json!({"call_id": call, "child": agent}),
+                ),
+            ]);
+        }
+        let child = format!("x:c{t}");
+        let call = format!("k{t}");
+        events.extend([
+            ev(
+                at,
+                s,
+                "spawn.requested",
+                json!({"call_id": call, "kind": "session"}),
+            ),
+            under(ev(at + 1, &child, "session.started", json!({})), s),
+            ev(at + 2, &child, "session.ended", json!({})),
+            ev(at + 3, s, "spawn.returned", json!({"call_id": call})),
+            ev(at + 4, s, "status", json!({"state": "idle"})),
+        ]);
+    }
+    events
+}
+
+/// One session's `turns` turns: in each, it launches a run in the
+/// background that never starts (it failed, say), and a session from its
+/// shell in the foreground; then it goes idle.
+fn dead_launches(turns: usize) -> Vec<Envelope> {
+    let s = "x:s";
+    let mut events = vec![ev(0, s, "session.started", json!({}))];
+    for t in 0..turns {
+        let at = 1 + 10 * t as u64;
+        let (dead, call, child) = (format!("d{t}"), format!("k{t}"), format!("x:c{t}"));
+        events.extend([
+            ev(
+                at,
+                s,
+                "spawn.requested",
+                json!({"call_id": dead, "kind": "session", "background": true, "run": true}),
+            ),
+            ev(at, s, "spawn.returned", json!({"call_id": dead})),
+            ev(
+                at,
+                s,
+                "spawn.requested",
+                json!({"call_id": call, "kind": "session"}),
+            ),
+            under(ev(at + 1, &child, "session.started", json!({})), s),
+            ev(at + 2, &child, "session.ended", json!({})),
+            ev(at + 3, s, "spawn.returned", json!({"call_id": call})),
+            ev(at + 4, s, "status", json!({"state": "idle"})),
+        ]);
+    }
+    events
+}
+
+/// R53: a background launch that never starts stays a request that may
+/// yet be paired, but only for as long as a launch takes to start
+/// (`BACKGROUND_START`): a session's start doesn't look at every one there
+/// has ever been.
+#[test]
+fn reducing_grows_in_step_with_launches_that_never_start() {
+    let (small, large) = (256, 4096);
+    let histories = [dead_launches(small), dead_launches(large)];
+    let mut best = [f64::MAX; 2];
+    for _ in 0..3 {
+        for (i, events) in histories.iter().enumerate() {
+            let events = events.clone();
+            let start = cpu_time();
+            let graph = reduce_at(events, 0);
+            best[i] = best[i].min(cpu_time() - start);
+            assert_eq!(graph.nodes.len(), 1 + [small, large][i]);
+        }
+    }
+    let ratio = best[1] / best[0];
+    // 16 times the turns: about 16× as long in step with them, 256× with their square.
+    assert!(
+        ratio < 48.0,
+        "16× the turns took {ratio:.1}× as long ({:.3}, then {:.3})",
+        best[0],
+        best[1]
+    );
+
+    // And each session is still paired with its own request, and a launch
+    // that never started with nothing.
+    let graph = reduce_at(dead_launches(100), 0);
+    for spawn in &graph.nodes["x:s"].spawns {
+        let own = spawn.call_id.strip_prefix('k').map(|t| format!("x:c{t}"));
+        assert_eq!(spawn.child, own, "{}", spawn.call_id);
+    }
+}
+
+/// R53: within one session, reducing grows in step with its agents (and
+/// the sessions it starts), not with their square: an agent's start finds
+/// the session's unpaired requests directly, a finish the waits on it, and
+/// a turn's end its calls still open.
+#[test]
+fn reducing_grows_in_step_with_a_sessions_agents() {
+    let (small, large) = (64, 1024);
+    let histories = [busy_session(small), busy_session(large)];
+    let mut best = [f64::MAX; 2];
+    for _ in 0..3 {
+        for (i, events) in histories.iter().enumerate() {
+            let events = events.clone();
+            let start = cpu_time();
+            let graph = reduce_at(events, 0);
+            best[i] = best[i].min(cpu_time() - start);
+            assert_eq!(graph.nodes.len(), 1 + [small, large][i] * 5);
+        }
+    }
+    let ratio = best[1] / best[0];
+    // 16 times the agents: about 16× as long in step with them, 256× with their square.
+    assert!(
+        ratio < 48.0,
+        "16× the agents took {ratio:.1}× as long ({:.3}, then {:.3})",
+        best[0],
+        best[1]
+    );
+
+    // And it's still right: every child is paired with its own request, and
+    // every wait closed.
+    let graph = reduce_at(busy_session(50), 0);
+    let s = &graph.nodes["x:s"];
+    assert!(s.waits.iter().all(|w| !w.open), "{:?}", s.waits);
+    for spawn in &s.spawns {
+        let child = spawn.child.as_deref().expect("paired");
+        let own = match spawn.call_id.strip_prefix('k') {
+            Some(t) => format!("x:c{t}"),
+            None => format!("x:s/a{}", &spawn.call_id[1..]),
+        };
+        assert_eq!(child, own);
+        assert_eq!(
+            graph.nodes[child].spawned_by.as_deref(),
+            Some(spawn.call_id.as_str())
+        );
+    }
+    assert_eq!(s.spawns.len(), 250);
 }
 
 fn under(mut e: Envelope, parent: &str) -> Envelope {
@@ -464,6 +637,52 @@ fn correcting_a_guess_leaves_other_sessions_requests_alone() {
     assert_eq!(child("x:s", "d").as_deref(), Some("x:s/a"));
     assert_eq!(child("x:t", "c").as_deref(), Some("x:t/a"), "x:t's is kept");
     assert_eq!(graph.nodes["x:t/a"].spawned_by.as_deref(), Some("c"));
+}
+
+/// R54: a child named by a request with the same call id as the one it was
+/// paired with, but another session's, is taken from that one: only one
+/// request claims it.
+#[test]
+fn a_child_named_by_another_sessions_request_with_the_same_call_id_is_taken() {
+    let graph = reduce_at(
+        vec![
+            ev(0, "x:p", "session.started", json!({})),
+            ev(0, "x:q", "session.started", json!({})),
+            ev(
+                1,
+                "x:p",
+                "spawn.requested",
+                json!({"call_id": "k", "kind": "session"}),
+            ),
+            ev(
+                1,
+                "x:q",
+                "spawn.requested",
+                json!({"call_id": "k", "kind": "session"}),
+            ),
+            // Guessed as x:p's, then named as x:q's.
+            under(ev(2, "x:c", "session.started", json!({})), "x:p"),
+            ev(
+                3,
+                "x:q",
+                "spawn.returned",
+                json!({"call_id": "k", "child": "x:c"}),
+            ),
+        ],
+        4,
+    );
+    let claims: Vec<&str> = graph
+        .nodes
+        .values()
+        .filter(|n| n.spawns.iter().any(|s| s.child.as_deref() == Some("x:c")))
+        .map(|n| n.id.as_str())
+        .collect();
+    assert_eq!(claims, ["x:q"]);
+    let p = &graph.nodes["x:p"];
+    assert!(p.waits.iter().all(|w| w.on.is_none()), "{:?}", p.waits);
+    let c = &graph.nodes["x:c"];
+    assert_eq!(c.parent.as_deref(), Some("x:q"));
+    assert_eq!(c.spawned_by.as_deref(), Some("k"));
 }
 
 /// A session `child` (from provider `provider`, with `data`) started under `x:p`.
@@ -739,6 +958,171 @@ fn at_once(mut events: Vec<Envelope>) -> Vec<Envelope> {
     events
 }
 
+/// R41: a session request is paired with a run of a session that starts
+/// after it, not only with a session's first: one resumed from the shell
+/// (`claude --resume …`), whether it ran on its own before or from another
+/// request, which keeps the run it started; and one whose start lands in
+/// the request's millisecond but sorts before it.
+#[test]
+fn a_session_request_is_paired_with_any_run_it_starts() {
+    let claude = |secs: u64, data: Value| shell_child(secs, "claude-code:c", "claude-code", data);
+    let on_its_own = |secs: u64| {
+        let mut e = claude(secs, json!({}));
+        e.parent = None;
+        e
+    };
+    let ended = |secs: u64| ev(secs, "claude-code:c", "session.ended", json!({}));
+    let children = |events: Vec<Envelope>| {
+        let graph = reduce_at(events, 100_000);
+        let p = &graph.nodes["x:p"];
+        let spawns = p
+            .spawns
+            .iter()
+            .map(|s| (s.call_id.clone(), s.child.clone()));
+        let waits = p.waits.iter().map(|w| (w.wait_id.clone(), w.on.clone()));
+        let c = &graph.nodes["claude-code:c"];
+        (
+            spawns.collect::<Vec<_>>(),
+            waits.collect::<Vec<_>>(),
+            c.spawned_by.clone(),
+            c.parent.clone(),
+        )
+    };
+    let start = || ev(0, "x:p", "session.started", json!({}));
+    let c = || Some("claude-code:c".to_string());
+    let s = |call: &str| call.to_string();
+
+    // It ran on its own first.
+    let (spawns, waits, by, parent) = children(vec![
+        start(),
+        on_its_own(1),
+        ended(2),
+        session_request(5, "k", Some("claude"), false),
+        claude(6, json!({"source": "resume"})),
+    ]);
+    assert_eq!(spawns, [(s("k"), c())]);
+    assert_eq!(waits, [(s("k"), c())]);
+    assert_eq!((by.as_deref(), parent.as_deref()), (Some("k"), Some("x:p")));
+
+    // It ran from another request: that one keeps the run it started.
+    let (spawns, _, by, _) = children(vec![
+        start(),
+        session_request(1, "k1", Some("claude"), false),
+        claude(2, json!({})),
+        ended(3),
+        session_request(5, "k2", Some("claude"), false),
+        claude(6, json!({"source": "resume"})),
+    ]);
+    assert_eq!(spawns, [(s("k1"), c()), (s("k2"), c())]);
+    assert_eq!(by.as_deref(), Some("k2"));
+    // Resumed on its own, it's still the first's.
+    let (spawns, _, by, _) = children(vec![
+        start(),
+        session_request(1, "k1", Some("claude"), true),
+        claude(2, json!({})),
+        ended(3),
+        session_request(5, "k2", Some("claude"), true),
+        on_its_own(6),
+    ]);
+    assert_eq!(spawns, [(s("k1"), c()), (s("k2"), None)]);
+    assert_eq!(by.as_deref(), Some("k1"));
+    // A restart mid-run (after compaction, say) isn't a new run: a request
+    // made since isn't for it.
+    for (first, restart) in [
+        (json!({}), json!({"source": "compact"})),
+        (
+            json!({"process": "10@1"}),
+            json!({"source": "compact", "process": "10@1"}),
+        ),
+    ] {
+        let (spawns, _, by, _) = children(vec![
+            start(),
+            claude(2, first),
+            session_request(3, "k", Some("claude"), true),
+            claude(4, restart),
+        ]);
+        assert_eq!(spawns, [(s("k"), None)]);
+        assert_eq!(by, None);
+    }
+    // But a start in a new process is a new run, though the last had no
+    // end (its process was killed, say).
+    for restart in [
+        json!({"source": "resume", "process": "11@1"}),
+        json!({"process": "11@1"}),
+    ] {
+        let (spawns, waits, by, _) = children(vec![
+            start(),
+            session_request(1, "k1", Some("claude"), false),
+            claude(2, json!({"process": "10@1"})),
+            session_request(5, "k2", Some("claude"), false),
+            claude(6, restart.clone()),
+        ]);
+        assert_eq!(spawns, [(s("k1"), c()), (s("k2"), c())], "{restart}");
+        assert_eq!(waits, [(s("k1"), c()), (s("k2"), c())], "{restart}");
+        assert_eq!(by.as_deref(), Some("k2"), "{restart}");
+    }
+    // Not the same start recorded twice (hooks installed in two settings
+    // files), which says "startup" both times: with two requests, it and a
+    // session started after have one each.
+    let twice = || claude(2, json!({"source": "startup", "process": "10@1"}));
+    let d = shell_child(
+        3,
+        "claude-code:d",
+        "claude-code",
+        json!({"source": "startup", "process": "12@1"}),
+    );
+    let mut events = vec![start(), twice(), twice(), d];
+    events.extend(at_once(vec![
+        session_request(1, "k1", Some("claude"), false),
+        session_request(1, "k2", Some("claude"), false),
+    ]));
+    let graph = reduce_at(events, 100_000);
+    let spawns: Vec<_> = graph.nodes["x:p"]
+        .spawns
+        .iter()
+        .map(|s| (s.call_id.as_str(), s.child.as_deref()))
+        .collect();
+    assert_eq!(
+        spawns,
+        [("k1", Some("claude-code:c")), ("k2", Some("claude-code:d"))]
+    );
+    // Nor one in the same process, or whose process isn't known, whatever
+    // it says.
+    for restart in [
+        json!({"source": "startup", "process": "10@1"}),
+        json!({"source": "resume"}),
+        json!({"source": "startup"}),
+    ] {
+        let (spawns, _, by, _) = children(vec![
+            start(),
+            session_request(1, "k1", Some("claude"), false),
+            claude(2, json!({"process": "10@1"})),
+            session_request(5, "k2", Some("claude"), false),
+            claude(6, restart.clone()),
+        ]);
+        assert_eq!(spawns, [(s("k1"), c()), (s("k2"), None)], "{restart}");
+        assert_eq!(by.as_deref(), Some("k1"), "{restart}");
+    }
+    // Its start sorts before the request, in the same millisecond.
+    let mut events = vec![start()];
+    events.extend(at_once(vec![
+        claude(5, json!({})),
+        session_request(5, "k", Some("claude"), false),
+    ]));
+    let (spawns, waits, by, _) = children(events);
+    assert_eq!(spawns, [(s("k"), c())]);
+    assert_eq!(waits, [(s("k"), c())]);
+    assert_eq!(by.as_deref(), Some("k"));
+    // But not a start before it.
+    let (spawns, _, by, _) = children(vec![
+        start(),
+        claude(4, json!({})),
+        session_request(5, "k", Some("claude"), false),
+    ]);
+    assert_eq!(spawns, [(s("k"), None)]);
+    assert_eq!(by, None);
+}
+
 /// R28: a headless session's Stop and SessionEnd can land in the same
 /// millisecond, in either order. A status sorted just after
 /// `session.ended` (within `LATE_STATUS`) is a late one, and doesn't bring
@@ -870,4 +1254,26 @@ fn a_late_status_doesnt_revive_an_ended_session() {
     let g = reduce_at(events, 10);
     assert_eq!(g.nodes["x:s/a"].state, State::Working);
     assert_eq!(g.nodes["x:s"].state, State::Working);
+}
+
+/// R43: a node id with thousands of `/` (every level a placeholder) is made
+/// without a call per level, so it doesn't overflow the stack: here, one of
+/// 1 MiB, as the site's WebAssembly has.
+#[test]
+fn a_node_id_with_thousands_of_levels_doesnt_overflow_the_stack() {
+    let levels = 3000;
+    let id = |levels: usize| format!("x:s{}", "/a".repeat(levels));
+    let node = id(levels);
+    let graph = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || reduce_at(vec![ev(0, &node, "status", json!({"state": "working"}))], 1))
+        .expect("thread")
+        .join()
+        .expect("reduced");
+    assert_eq!(graph.nodes.len(), levels + 1);
+    assert_eq!(graph.roots, ["x:s"]);
+    for level in [1, levels] {
+        let parent = graph.nodes[&id(level)].parent.clone();
+        assert_eq!(parent, Some(id(level - 1)), "{level}");
+    }
 }
