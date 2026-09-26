@@ -256,7 +256,7 @@ The adapter turns that into:
 | `PostToolUse` on `TaskCreate` / `TaskUpdate` | `task.upserted` (the new id comes from `tool_response.task.id`), or `task.deleted` |
 | `PostToolUse` on `TodoWrite` | `tasks.updated` with the full list |
 | `PostToolUse` on `SendMessage` | `message.sent` with `to`, `summary` and `msg_id`. The body only with body capture on |
-| `PreToolUse` on `Bash`, when the command starts another agent | `spawn.requested` with `kind: session`, the program as `agent_type`, the call's `description` as the purpose, and `background` for `&` or `run_in_background` |
+| `PreToolUse` on `Bash`, when the command starts another agent | `spawn.requested` with `kind: session`, the program as `agent_type`, the call's `description` as the purpose, and `background` for `&` (unless a `wait` follows) or `run_in_background` |
 | `PostToolUse` on `Bash`, for the same command | `spawn.returned`, without a `child`: the reducer pairs it (below) |
 | `PreToolUse`/`PostToolUse` on any other `Bash` command | Nothing |
 | `Notification`: `permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog` | `status: input_required`, with the notification's message |
