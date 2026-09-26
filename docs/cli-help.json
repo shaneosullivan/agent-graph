@@ -282,7 +282,7 @@
         { "text": "A password is only sent over HTTPS, or to your own machine." },
         { "heading": "Who can change it" },
         { "text": "Only this run. The site gives it a key when the log is created, every update must carry it, and it's kept only in memory." },
-        { "text": "It checks for new events once a second and sends them together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why." }
+        { "text": "It checks for new events once a second and sends them together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why. The site deletes a log that has had no new events for a week: sharing it then stops." }
       ],
       "options": [
         { "id": "url", "flag": "--url <URL>", "text": "The site to share on." },

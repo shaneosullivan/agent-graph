@@ -31,7 +31,7 @@ if (!process.env.AGENT_GRAPH_ENCRYPTION_KEY && !process.env.FIRESTORE_EMULATOR_H
 }
 
 const { getApps } = await import("firebase-admin/app");
-const { FieldPath } = await import("firebase-admin/firestore");
+const { FieldPath, FieldValue } = await import("firebase-admin/firestore");
 const { ID_PATTERN } = await import("../lib/config.ts");
 const { decryptChunk, metaTag, storageId } = await import("../lib/encryption.ts");
 const { firestore } = await import("../lib/firebase.ts");
@@ -53,11 +53,16 @@ async function* pages(log) {
   }
 }
 
-/** The metadata as it's stored now, from the old document; throws if it's incomplete. */
+/**
+ * The metadata as it's stored now, from the old document; throws if it's
+ * incomplete. `oldCopy` says the old documents are still there: until
+ * they're deleted, the site's cron deletes the copy with them
+ * (lib/cleanup.ts), so a log isn't half deleted.
+ */
 function newMeta(id, data) {
   const { source, pw, createdAt } = data;
   if (typeof source !== "string" || !createdAt) throw new Error("its metadata has no source or creation time");
-  return { source, ...(pw ? { pw } : {}), createdAt, mac: metaTag(id, { source, pw }) };
+  return { source, ...(pw ? { pw } : {}), createdAt, mac: metaTag(id, { source, pw }), oldCopy: true };
 }
 
 /**
@@ -117,8 +122,9 @@ async function removeOld(id, old, meta) {
       });
       await page((writer) => chunks.map((chunk) => writer.delete(chunk.ref)));
     }
-    if (meta.exists) await page((writer) => [writer.delete(old)]);
   });
+  // The old metadata last, and with it the copy's mark (above), at once.
+  if (meta.exists) await db.batch().delete(old).update(target, { oldCopy: FieldValue.delete() }).commit();
 }
 
 /** Whether log `id`'s copy has a chunk (the new site stored it) that decrypts: proof of the key. */

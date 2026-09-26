@@ -300,6 +300,24 @@ test("a chunk is stored as it was sent, a byte-order mark and all", async () => 
   assert.deepEqual([read.text, read.more], [line(1) + bom + line(3), false], "all of it, with no gap");
 });
 
+// The daily cron that deletes logs with no event for a week (lib/cleanup.ts)
+// runs only for Vercel Cron, which sends the secret.
+test("the cleanup cron needs its secret", async () => {
+  const run = (auth) =>
+    fetch(`${BASE}/api/cron/cleanup`, { headers: auth ? { Authorization: auth } : {} });
+  assert.equal((await run()).status, 401);
+  assert.equal((await run("Bearer nope")).status, 401);
+  const secret = process.env.CRON_SECRET;
+  assert.ok(secret, "the tests run with CRON_SECRET set (scripts/ci-api-test.sh)");
+  const log = await create(line(1));
+  const res = await run(`Bearer ${secret}`);
+  assert.equal(res.status, 200);
+  const result = await res.json();
+  assert.equal(result.done, true);
+  assert.ok(result.checked >= 1);
+  assert.equal((await content(log.id)).text, line(1), "a log in use is kept");
+});
+
 test("bad input is refused", async () => {
   const log = await create(line(1));
   assert.equal((await append(log.id, "abc", line(2), log.writeToken)).status, 400, "bad offset");

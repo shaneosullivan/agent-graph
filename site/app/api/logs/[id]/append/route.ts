@@ -1,6 +1,6 @@
-import { bodyText, ID_PATTERN, MAX_CHUNK_BYTES, MAX_LOG_BYTES } from "@/lib/config";
+import { bodyText, gone, ID_PATTERN, MAX_CHUNK_BYTES, MAX_LOG_BYTES } from "@/lib/config";
 import { canWrite } from "@/lib/crypto";
-import { appendChunk, ChunkTaken, firstChunkOffset } from "@/lib/store";
+import { appendChunk, ChunkTaken, firstChunkOffset, LogGone } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +16,9 @@ export const dynamic = "force-dynamic";
  *   never all of it, nor adds before where it starts);
  * - the write token is checked by recomputing an HMAC, with no database read;
  * - the body is stored as it arrives (raw JSON Lines, never parsed);
- * - storing it is a single write of a new document keyed by the offset.
+ * - storing it is a single write of a new document keyed by the offset,
+ *   with one read, that the log's still there (410 if it's been deleted:
+ *   lib/cleanup.ts).
  *
  * A chunk never changes once stored (viewers don't read one twice): the same
  * bytes again (a retry) are accepted, different ones (or any, where the stored
@@ -49,6 +51,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   try {
     await appendChunk(id, offset, text);
   } catch (err) {
+    if (err instanceof LogGone) return gone();
     if (err instanceof ChunkTaken) {
       return new Response("Other events are already stored at this offset.", { status: 409 });
     }

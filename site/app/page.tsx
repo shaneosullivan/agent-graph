@@ -25,9 +25,9 @@ export default function Home() {
         <section className="hero">
           <h1>See what your AI coding agents are doing, and share it.</h1>
           <p>
-            Paste or upload an Agent Graph log to get a permanent link. It opens a viewer you can step
-            through: which session started which agents, who&rsquo;s waiting on whom, what looks stuck, and
-            what needs you.
+            Paste or upload an Agent Graph log to get a link. It opens a viewer you can step through: which
+            session started which agents, who&rsquo;s waiting on whom, what looks stuck, and what needs you.
+            A log is deleted once it has had no new events for a week.
           </p>
         </section>
 

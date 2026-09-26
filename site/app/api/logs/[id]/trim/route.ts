@@ -1,6 +1,6 @@
-import { ID_PATTERN } from "@/lib/config";
+import { gone, ID_PATTERN } from "@/lib/config";
 import { canWrite } from "@/lib/crypto";
-import { trimLog } from "@/lib/store";
+import { LogGone, trimLog } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +19,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!canWrite(req, id)) return new Response("Bad or missing write token.", { status: 401 });
   const before = new URL(req.url).searchParams.get("before") ?? "";
   if (!/^\d{1,15}$/.test(before)) return new Response("Bad offset.", { status: 400 });
-  await trimLog(id, Number(before));
+  try {
+    await trimLog(id, Number(before));
+  } catch (err) {
+    if (err instanceof LogGone) return gone();
+    throw err;
+  }
   return new Response(null, { status: 204 });
 }

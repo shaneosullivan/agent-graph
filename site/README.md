@@ -1,6 +1,6 @@
 # Agent Graph site
 
-The site behind `https://agentgraph.chofter.com`: a pastebin for Agent Graph logs. You paste or upload a log, or stream one live with `agent-graph watch-remote`, and get a permanent link to a viewer. The viewer is the same one `agent-graph view` serves locally, and anyone with the link can step through the log. Logs can be password protected.
+The site behind `https://agentgraph.chofter.com`: a pastebin for Agent Graph logs. You paste or upload a log, or stream one live with `agent-graph watch-remote`, and get a link to a viewer, kept until the log has had no new events for a week. The viewer is the same one `agent-graph view` serves locally, and anyone with the link can step through the log. Logs can be password protected.
 
 It's a Next.js app with Firestore for storage. The viewer's graph logic isn't reimplemented here: it's the Rust reducer, compiled to WebAssembly and run in the browser.
 
@@ -36,6 +36,7 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 | `POST /api/logs/{id}/append?offset=<bytes so far>` | Appends a chunk. Requires `Authorization: Bearer <writeToken>`. Replies `204`, also for the same bytes again (a retry); `409` if other bytes are already stored at that offset. |
 | `POST /api/logs/{id}/trim?before=<offset>` | Deletes the chunks that start before `offset`. Requires the `writeToken`. A live share keeps only its last two keyframes' worth: see `docs/design.md` §9. |
 | `GET /api/logs/{id}/content?after=<chunk key>` | Chunks after `after`, joined, up to about 2 MB, stopping at a gap (a trim). `X-First-Chunk` is where the text starts (its offset); `X-Last-Chunk` is the next cursor; `X-More: 1` means fetch again now. Protected logs need the unlock cookie. |
+| `GET /api/cron/cleanup` | Deletes logs that have had no event for a week (`lib/cleanup.ts`). Run daily by Vercel Cron; requires `Authorization: Bearer <CRON_SECRET>`. Replies `{checked, deleted, done}`. |
 | `POST /api/logs/{id}/unlock` | `{"password": "…"}`. Sets an HttpOnly cookie for this log. |
 
 **Only the creator can add to a log.**
@@ -48,7 +49,7 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 - The size is checked from the header before the body is read.
 - The key is checked by recomputing an HMAC: no database read.
 - The body is never parsed.
-- Storage is a single write of a new document. Each chunk is its own document, `logs/{sid}/chunks/{offset}` (`sid` is an HMAC of the log's id, below), zero-padded so ids sort in order, so the cost doesn't grow with the log. A chunk never changes once stored: a retry of the same bytes is accepted, and different bytes at a stored offset are refused (409).
+- Storage is a single write of a new document, in a transaction with one read, that the log is still there (one not in use is deleted: an append to it is refused with 410, and the sharer stops). Each chunk is its own document, `logs/{sid}/chunks/{offset}` (`sid` is an HMAC of the log's id, below), zero-padded so ids sort in order, so the cost doesn't grow with the log. A chunk never changes once stored: a retry of the same bytes is accepted, and different bytes at a stored offset are refused (409).
 
 **Reading:**
 - Each viewer polls every 3 s while events are arriving, backing off to 15 s when quiet or when the tab is hidden.
@@ -67,7 +68,7 @@ Firestore's security rules (`firestore.rules`) deny all direct access; only the 
 - **Binding:** each chunk is bound to its log and position, so chunks can't be swapped or reordered undetected.
 - **The links aren't stored.** A log's id is its link, so logs are stored under an HMAC of it (keyed from the master key), which can't be turned back into the link. Someone with the database can't open the logs through the site. (Except from an export or backup made before logs were stored this way: see Deploy.)
 - **The metadata is authenticated.** Each log's metadata carries a MAC bound to its id, so a password removed from it, or another log's metadata copied over it, is refused.
-- **Cost:** a fraction of a millisecond per chunk, and appends still make no database reads.
+- **Cost:** a fraction of a millisecond per chunk.
 - **Not encrypted:** the metadata (when a log was created, how it was shared, the password *hash*) and the chunk ids, which reveal a log's size. (When a log was created isn't authenticated either; nothing depends on it.)
 - **The server can still read logs.** It holds the key; this isn't end-to-end encryption.
 
@@ -136,6 +137,7 @@ npm run test:ci
    - `AGENT_GRAPH_ENCRYPTION_KEY`: another 32 random bytes, generated the same way. **Back it up and never change it**: without it, stored logs can't be decrypted.
    - `FIREBASE_SERVICE_ACCOUNT`: the service account's JSON key, on one line.
    - `NEXT_PUBLIC_SITE_URL`: `https://agentgraph.chofter.com`
+   - `CRON_SECRET`: 32+ random bytes, generated the same way. Vercel Cron sends it to `/api/cron/cleanup` (see `vercel.json`), the daily deletion of logs with no event for a week, which does nothing without it.
 5. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
 6. **Optional:** add a Firestore TTL policy on the `unlock-attempts` collection's `expireAt` field, so counts of password guesses are cleared away once their window is over.
 7. **Logs from before storage ids.** Logs created before logs were stored under an HMAC of their id can't be found by the new site until they're copied. Run the migration with the production environment: the same `AGENT_GRAPH_ENCRYPTION_KEY`, and `FIREBASE_SERVICE_ACCOUNT`. It refuses to run without the key, prints the project, and checks that the key decrypts the logs before writing anything.
@@ -148,6 +150,8 @@ npm run test:ci
       ```bash
       npm run migrate:storage-ids -- --delete-old
       ```
+
+   Copies are marked until their old copy is deleted, so the deletion of logs not in use (`CRON_SECRET`, above) deletes the two together. Copies made by the migration before it marked them aren't: if you copied logs then and haven't done step 3 yet, copy them again (step 1's command) once the cron is deployed, which marks them.
 
    Rolling the site back past this deploy loses the logs created since (the old site can't find them), and after step 3, all of them. Exports, backups and point-in-time recovery (which keeps deleted documents for up to 7 days) from before step 3 still name every log by its link: delete them, or keep them as safe as the logs.
 

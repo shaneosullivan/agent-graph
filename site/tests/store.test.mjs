@@ -129,7 +129,8 @@ test("a log isn't stored under its id, and its chunks are ciphertext", { skip, t
   const chunks = await doc.collection("chunks").get();
   assert.equal(chunks.size, 2);
   for (const chunk of chunks.docs) {
-    assert.deepEqual(Object.keys(chunk.data()), ["e"], "only ciphertext");
+    assert.deepEqual(Object.keys(chunk.data()).sort(), ["e", "t"], "ciphertext, and when it was written");
+    assert.ok(Math.abs(chunk.get("t").toMillis() - Date.now()) < 60_000);
     assert.ok(!Buffer.from(chunk.get("e")).includes(Buffer.from("recognisable")));
   }
   assert.equal((await store.readChunks(id, "")).text, text + text, "the site still reads it");
@@ -281,6 +282,13 @@ async function migrate(args = [], env = {}) {
   );
 }
 
+/** Log `id`'s copy's metadata document. */
+async function copyOf(id) {
+  const { storageId } = await import("../lib/encryption.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  return firestore().collection("logs").doc(storageId(id)).get();
+}
+
 async function gone(doc) {
   return !(await doc.get()).exists && (await doc.collection("chunks").listDocuments()).length === 0;
 }
@@ -304,6 +312,7 @@ test("the migration copies logs, then deletes the old copies", { skip, timeout: 
     assert.equal(meta?.source, log.meta.source);
     assert.equal(meta?.pw, log.meta.pw);
     assert.ok((await log.doc.get()).exists, "copying deletes nothing");
+    assert.equal((await copyOf(log.id)).get("oldCopy"), true, "marked as having an old copy");
   }
   assert.equal((await store.readChunks(a.id, "")).text, a.chunks.join("") + late);
   assert.equal((await store.readChunks(b.id, "")).text, b.chunks.join(""));
@@ -327,7 +336,10 @@ test("the migration copies logs, then deletes the old copies", { skip, timeout: 
   const deleted = await migrate(["--delete-old"]);
   assert.equal(deleted.status, 0, deleted.stderr);
   assert.match(deleted.stdout, /Deleted the old copies of 2 logs\./);
-  for (const log of [a, b]) assert.ok(await gone(log.doc), "the old copy is gone");
+  for (const log of [a, b]) {
+    assert.ok(await gone(log.doc), "the old copy is gone");
+    assert.equal((await copyOf(log.id)).get("oldCopy"), undefined, "and its mark");
+  }
   assert.equal((await store.readChunks(a.id, "")).text, a.chunks.join("") + late, "and it still reads the same");
   assert.equal((await store.readChunks(b.id, "")).text, b.chunks.join("") + more);
   assert.match((await migrate(["--delete-old"])).stdout, /Deleted the old copies of 0 logs\./);
@@ -546,4 +558,18 @@ test("guesses that can't be counted just now wait a moment", { skip, timeout: 60
   await bucket.update({ at: Timestamp.fromMillis(Date.now() - 60_000) });
   const later = await store.takeUnlockAttempt(id, anAddress());
   assert.ok(later.wait > 60, `full a while: ${later.wait}s`);
+});
+
+// Metadata can go (a log not in use is deleted): each instance's cache of it
+// is kept only so long.
+test("cached metadata is read again after a while", { skip, timeout: 60_000 }, async () => {
+  const store = await import("../lib/store.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const { storageId } = await import("../lib/encryption.ts");
+  const id = newId();
+  await store.createLog(id, { source: "watch" }, "");
+  assert.ok(await store.getMeta(id));
+  await firestore().collection("logs").doc(storageId(id)).delete();
+  assert.ok(await store.getMeta(id), "still cached");
+  assert.equal(await store.getMeta(id, Date.now() + store.META_CACHE_MS + 1), null);
 });

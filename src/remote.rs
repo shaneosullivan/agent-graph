@@ -9,7 +9,8 @@
 //!    far>` with `Authorization: Bearer <token>`. The site checks the token
 //!    by recomputing an HMAC (no database read) and stores the chunk as one
 //!    document keyed by its offset, so it never reads or rewrites what's
-//!    already there. A failed chunk is retried with exactly the same bytes
+//!    already there. (A log with no new events for a week is deleted; what's
+//!    sent to it then is refused, and this stops.) A failed chunk is retried with exactly the same bytes
 //!    (the site may have stored it); the site keeps the first copy, and
 //!    refuses different bytes at an offset it already has.
 //!
@@ -134,7 +135,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                     // As soon as a keyframe is stored, the site can let go of
                     // what's before the last (so it never holds three).
                     if let Some(before) = stream.sent(n, sent) {
-                        trims.ask(before, &client, &log);
+                        trims.ask(before, &client, &log)?;
                     }
                     sent += n as u64;
                     if !backoff.is_zero() {
@@ -142,7 +143,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                         backoff = Duration::ZERO;
                     }
                 }
-                Err(SendError::Fatal(e)) => return Err(e),
+                Err(SendError::Fatal(e) | SendError::Expired(e)) => return Err(e),
                 Err(SendError::Retry(e)) => {
                     retrying = Some(n);
                     if backoff.is_zero() {
@@ -154,7 +155,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                 }
             }
         }
-        trims.retry(&client, &log);
+        trims.retry(&client, &log)?;
         std::thread::sleep(POLL);
         // A read error (say, the directory is briefly missing) is retried,
         // and said once.
@@ -192,18 +193,19 @@ struct Trims {
 
 impl Trims {
     /// Asks now (or once it can), to delete what's before `before`.
-    fn ask(&mut self, before: u64, client: &Client, log: &Created) {
+    fn ask(&mut self, before: u64, client: &Client, log: &Created) -> Result<(), String> {
         self.pending = Some(before);
-        self.retry(client, log);
+        self.retry(client, log)
     }
 
-    /// Makes the request still to be made, if it's time.
-    fn retry(&mut self, client: &Client, log: &Created) {
+    /// Makes the request still to be made, if it's time. An error if the
+    /// log's gone, which ends the share.
+    fn retry(&mut self, client: &Client, log: &Created) -> Result<(), String> {
         let Some(before) = self.pending.filter(|_| !self.refused) else {
-            return;
+            return Ok(());
         };
         if self.at.is_some_and(|at| Instant::now() < at) {
-            return;
+            return Ok(());
         }
         match client.trim(log, before) {
             Ok(()) => {
@@ -222,7 +224,9 @@ impl Trims {
                 );
                 self.refused = true;
             }
+            Err(SendError::Expired(e)) => return Err(e),
         }
+        Ok(())
     }
 }
 
@@ -922,12 +926,14 @@ pub enum SendError {
     Retry(String),
     /// Won't work however often it's tried (bad token, deleted log, …).
     Fatal(String),
+    /// The log's gone: the site deletes one with no new events for a week.
+    Expired(String),
 }
 
 impl SendError {
     fn message(self) -> String {
         match self {
-            SendError::Retry(m) | SendError::Fatal(m) => m,
+            SendError::Retry(m) | SendError::Fatal(m) | SendError::Expired(m) => m,
         }
     }
 }
@@ -991,7 +997,14 @@ impl Client {
             s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
             s => {
                 let text = res.body_mut().read_to_string().unwrap_or_default();
-                Err(SendError::Fatal(format!("{s}: {}", text.trim())))
+                let text = text.trim();
+                Err(match s {
+                    410 => SendError::Expired(
+                        "the site has deleted this log: it had no new events for a week. Start a new share to share again."
+                            .to_string(),
+                    ),
+                    _ => SendError::Fatal(format!("{s}: {text}")),
+                })
             }
         }
     }

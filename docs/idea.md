@@ -11,4 +11,4 @@ When multiple agents are interoperating, it can be difficult to understand their
 
 This project aims to solve this problem in an implementation agnostic manner.
 It should work with open standards to provide an interface for any
-AI coding provider to continually have each active session update local JSON files, which a simple standalone program reads to show the state. Everything stays on the local machine for full privacy, unless you choose to share a log on the Agent Graph site, which gives a permanent link (optionally password protected) that can be opened anywhere, including a phone.
+AI coding provider to continually have each active session update local JSON files, which a simple standalone program reads to show the state. Everything stays on the local machine for full privacy, unless you choose to share a log on the Agent Graph site, which gives a link (optionally password protected, and kept while the log is in use) that can be opened anywhere, including a phone.

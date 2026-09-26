@@ -647,3 +647,71 @@ fn a_long_log_is_shared_from_its_last_keyframe_but_one() {
         .collect();
     assert_eq!(kinds, ["events", "keyframe", "trim", "keyframe", "trim"]);
 }
+
+/// The site deletes a log that has had no new events for a week: a trim
+/// refused for that (410) stops the share, saying so.
+#[test]
+fn an_expired_log_stops_the_share() {
+    let (port, requests, replies) = scripted_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let file = events.join("x-s.jsonl");
+    std::fs::write(&file, (0..2500).map(numbered).collect::<String>()).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", "--password=", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .env("AGENT_GRAPH_HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let wait = Duration::from_secs(20);
+    requests.recv_timeout(wait).unwrap();
+    // The rest of the start, then another keyframe's worth.
+    assert!(
+        requests
+            .recv_timeout(wait)
+            .unwrap()
+            .path
+            .contains("/append")
+    );
+    replies.send(204).unwrap();
+    agent_graph::store::append(
+        &file,
+        (2500..3000).map(numbered).collect::<String>().as_bytes(),
+    )
+    .unwrap();
+    loop {
+        let r = requests.recv_timeout(wait).unwrap();
+        if r.path.contains("/trim") {
+            replies.send(410).unwrap();
+            break;
+        }
+        replies.send(204).unwrap();
+    }
+    // (Failing, not hanging, if it doesn't stop.)
+    let mut status = None;
+    for _ in 0..200 {
+        status = child.try_wait().unwrap();
+        if status.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("it didn't stop");
+    };
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(!status.success());
+    assert!(stderr.contains("no new events for a week"), "{stderr}");
+}

@@ -5,6 +5,9 @@
 # FIRESTORE_EMULATOR_HOST.
 set -e
 
+# The cleanup cron refuses to run without its secret.
+export CRON_SECRET="${CRON_SECRET:-ci-only-cron-secret}"
+
 npx next start -p 3000 &
 server=$!
 trap 'kill $server 2>/dev/null' EXIT

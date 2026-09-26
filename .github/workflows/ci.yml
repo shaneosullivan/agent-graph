@@ -46,6 +46,7 @@ jobs:
         working-directory: site
     env:
       AGENT_GRAPH_SECRET: ci-only-secret
+      CRON_SECRET: ci-only-cron-secret
       # 32 bytes of 0x03, base64url: a throwaway key for tests only.
       AGENT_GRAPH_ENCRYPTION_KEY: AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM
       FIREBASE_PROJECT_ID: demo-agent-graph

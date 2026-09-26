@@ -455,7 +455,7 @@ The `hostile-text` example checks all of this.
 
 ## 9. Sharing on the web
 
-The site (`site/`, deployed at `https://agentgraph.chofter.com`) is a pastebin for Agent Graph logs. A log can get there two ways, and either way you get a permanent link to a viewer:
+The site (`site/`, deployed at `https://agentgraph.chofter.com`) is a pastebin for Agent Graph logs. A log can get there two ways, and either way you get a link to a viewer, kept until the log has had no new events for a week (see "Logs not in use are deleted", below):
 - **Paste or upload** it on the home page.
 - **Stream it live** with `agent-graph watch-remote`.
 
@@ -480,9 +480,9 @@ Viewers can step through the log exactly as they can locally, over its recent hi
 3. The site handles an append like this:
    - checks the size from the header;
    - verifies the key by recomputing an HMAC of the id, with no database read;
-   - stores the raw body, never parsed, as one new Firestore document, `logs/{sid}/chunks/{offset}`, where `sid` is an HMAC of the log's id.
+   - stores the raw body, never parsed, as one new Firestore document, `logs/{sid}/chunks/{offset}`, where `sid` is an HMAC of the log's id, in a transaction that reads one thing, that the log is still there (one not in use is deleted: an append or trim to it is refused with `410`, and the sharer stops and says so).
 
-   Nothing already stored is rewritten, and nothing is read unless the offset is already taken, so an append costs the same however big the log is. A failed chunk is retried with exactly the same bytes, whatever has arrived since; the site accepts the same bytes again, but refuses (`409`) different ones at an offset it already has, since a viewer never reads a chunk twice. The viewer drops any event it has already seen.
+   Nothing already stored is rewritten, and nothing else is read unless the offset is already taken, so an append costs the same however big the log is. A failed chunk is retried with exactly the same bytes, whatever has arrived since; the site accepts the same bytes again, but refuses (`409`) different ones at an offset it already has, since a viewer never reads a chunk twice. The viewer drops any event it has already seen.
 4. Viewers read `GET /api/logs/{id}/content?after=<last chunk key>`. For a live log they poll every 3 s while events are arriving, backing off to 15 s when quiet or when the tab is hidden.
 5. Once a keyframe is stored (below), the client asks the site to delete what's before the one before: `POST /api/logs/{id}/trim?before=<its offset>`, with the write key.
 
@@ -500,7 +500,7 @@ Viewers can step through the log exactly as they can locally, over its recent hi
 - What's stored counts towards a log's 64 MiB limit, not what was ever sent: past that offset, an append reads where the log's first chunk starts, and must be at or after it, within 64 MiB of it. A log with nothing left (a live share never trims everything) is full.
 
 **Who can do what:**
-- **Only the creator can add to a log.** The write key comes back only from the create call, the CLI and the upload page keep it only in memory, and every append must present it. It's derived from the site's secret, so it can't be guessed or forged, and it isn't stored anywhere. There's no API to change a log, or delete one but for trimming its start, which also needs the key.
+- **Only the creator can add to a log.** The write key comes back only from the create call, the CLI and the upload page keep it only in memory, and every append must present it. It's derived from the site's secret, so it can't be guessed or forged, and it isn't stored anywhere. There's no API to change a log, or delete one but for trimming its start, which also needs the key (logs not in use are deleted by the site itself, below).
 - **Viewing** needs only the link, unless a password was set:
   - `--password=…` (or the upload page's field) is sent base64url-encoded in a header, over HTTPS; the CLI refuses a password over plain HTTP except to localhost.
   - The site stores only a scrypt hash.
@@ -516,6 +516,8 @@ Viewers can step through the log exactly as they can locally, over its recent hi
   - Each log's metadata carries a MAC bound to its id, so removing its password, or copying another log's metadata over it, is refused.
   - Metadata and chunk sizes aren't hidden.
   - The server holds the key, so this protects stored data; it isn't end-to-end encryption.
+
+**Logs not in use are deleted.** A daily Vercel Cron (`site/vercel.json`, `GET /api/cron/cleanup`, which needs `CRON_SECRET`) deletes each log that has had no event for a week (`site/lib/cleanup.ts`). It judges each log again in a transaction that marks it `deleting`, with its newest chunk, so an append that lands meanwhile either comes first (and the log is kept) or finds it marked and is refused (410, and `watch-remote` stops and says why). Then its chunks go, and its metadata last, so a deletion that stops partway leaves the log marked, and the next run finishes it. A log still stored as it was before storage ids is judged and deleted the same way, with what's been added to it since (stored under its storage id); and with its copy, if the migration made one, which is marked `oldCopy` until the old one's deleted and isn't deleted before it (the old one would still take appends that no one could read). Each chunk records when it was written (`t`, in the write that stores it, so an append is still one write), and a log's last event is its newest chunk's; a pasted log has no more after it's made, so it goes a week later. Chunks stored before that was recorded have none: such a log counts as in use when the cron first ran (`cleanup/state.since`), so none is deleted for at least a week after. A run works through the logs for up to 45 s, a page at a time, and the next carries on where it stopped (`cleanup/state.cursor`).
 
 **Live vs pasted.**
 - A streamed log is judged against the viewer's clock, so a share that stopped long ago shows as stale.

@@ -19,7 +19,7 @@ import { firestore } from "./firebase";
  * How logs are kept in Firestore:
  *
  *   logs/{sid}                 { source, pw?, createdAt, mac }
- *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes> }
+ *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, t: <when written> }
  *   unlock-attempts/{bucket}   { n, since, expireAt }  (password guesses)
  *
  * `sid` is an HMAC of the log's id (lib/encryption.ts), not the id itself:
@@ -74,7 +74,7 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   });
   if (text) {
     const key = chunkKey(0);
-    batch.set(log.collection("chunks").doc(key), { e: encryptChunk(id, key, text) });
+    batch.set(log.collection("chunks").doc(key), { e: encryptChunk(id, key, text), t: Timestamp.now() });
   }
   try {
     await batch.commit();
@@ -88,15 +88,43 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
 export class ChunkTaken extends Error {}
 
 /**
- * Encrypts and stores one chunk at `offset`. One write, no reads, unless a
- * chunk is already stored there: then it's read, and anything but the same
- * bytes (or one that can't be decrypted) is refused with `ChunkTaken`.
+ * Encrypts and stores one chunk at `offset`, if the log's still there
+ * (`LogGone` if not). One write, and one read, of the log's metadata, unless
+ * a chunk is already stored there: then it's read, and anything but the
+ * same bytes (or one that can't be decrypted) is refused with `ChunkTaken`.
  */
+/** The log isn't there (any more): one not in use is deleted (lib/cleanup.ts). */
+export class LogGone extends Error {}
+
+/**
+ * Whether log `id` is there to add to: stored, and not being deleted
+ * (lib/cleanup.ts marks one first), or, until it's moved, stored as it was
+ * before storage ids (scripts/migrate-storage-ids.mjs). `get` reads a
+ * document (in a transaction, say).
+ */
+async function there(
+  id: string,
+  get: (ref: FirebaseFirestore.DocumentReference) => Promise<FirebaseFirestore.DocumentSnapshot>,
+): Promise<boolean> {
+  const log = await get(logDoc(id));
+  if (log.exists) return !log.get("deleting");
+  const old = await get(logs().doc(id));
+  return old.exists && !old.get("deleting");
+}
+
 export async function appendChunk(id: string, offset: number, text: string): Promise<void> {
   const key = chunkKey(offset);
-  const doc = logDoc(id).collection("chunks").doc(key);
+  const log = logDoc(id);
+  const doc = log.collection("chunks").doc(key);
   try {
-    await doc.create({ e: encryptChunk(id, key, text) });
+    // Only while the log's there (read with it, so a deletion as it's
+    // written makes it try again, and fail): otherwise what's sent after
+    // it's deleted would be kept for good.
+    await firestore().runTransaction(async (tx) => {
+      if (!(await there(id, (ref) => tx.get(ref)))) throw new LogGone(id);
+      // When it was written: a log with none newer than a week is deleted.
+      tx.create(doc, { e: encryptChunk(id, key, text), t: Timestamp.now() });
+    });
   } catch (err) {
     // gRPC ALREADY_EXISTS
     if ((err as { code?: number }).code !== 6) throw err;
@@ -132,6 +160,7 @@ const TRIM_BATCH = 500;
  * sees a gap, and starts again (site-source.js). Returns how many went.
  */
 export async function trimLog(id: string, before: number): Promise<number> {
+  if (!(await there(id, (ref) => ref.get()))) throw new LogGone(id);
   // Their keys, oldest first (Firestore can't scan keys the other way).
   const chunks = logDoc(id).collection("chunks");
   const older = chunks.orderBy(FieldPath.documentId()).endBefore(chunkKey(before)).select();
@@ -158,16 +187,26 @@ export async function firstChunkOffset(id: string): Promise<number | null> {
 
 // Metadata never changes after creation, so each server instance keeps what
 // it has read. That saves a read on every viewer poll.
-const metaCache = new Map<string, Meta | null>();
+// Metadata doesn't change, but can go (a log not in use is deleted), so
+// what's kept is read again after a while, and forgotten by an instance
+// that deletes it.
+const metaCache = new Map<string, { meta: Meta; at: number }>();
+export const META_CACHE_MS = 10 * 60 * 1000;
 const META_CACHE_LIMIT = 5000;
 
+/** Forgets log `sid`'s cached metadata: it's been deleted. */
+export function forgetMeta(sid: string): void {
+  metaCache.delete(sid);
+}
+
 /** Log `id`'s metadata; null if there's no such log, or if it was changed. */
-export async function getMeta(id: string): Promise<Meta | null> {
-  const cached = metaCache.get(id);
-  if (cached) return cached;
+export async function getMeta(id: string, now = Date.now()): Promise<Meta | null> {
+  const cached = metaCache.get(storageId(id));
+  if (cached && now - cached.at <= META_CACHE_MS) return cached.meta;
   const snap = await logDoc(id).get();
   let meta: Meta | null = null;
-  if (snap.exists) {
+  // (One being deleted is gone.)
+  if (snap.exists && !snap.get("deleting")) {
     const { source, pw, createdAt, mac } = snap.data() as Meta & { mac?: unknown };
     if (typeof mac === "string" && safeEqual(mac, metaTag(id, { source, pw }))) {
       meta = { source, ...(pw ? { pw } : {}), createdAt };
@@ -177,9 +216,10 @@ export async function getMeta(id: string): Promise<Meta | null> {
     }
   }
   // Don't cache "not found": the log may be created a moment later.
+  if (!meta) metaCache.delete(storageId(id));
   if (meta) {
     if (metaCache.size >= META_CACHE_LIMIT) metaCache.delete(metaCache.keys().next().value!);
-    metaCache.set(id, meta);
+    metaCache.set(storageId(id), { meta, at: now });
   }
   return meta;
 }

@@ -6,6 +6,11 @@
  */
 export const MAX_CHUNK_BYTES = 512 * 1024;
 
+/** A log not in use is deleted (lib/cleanup.ts); its sharer stops, and says so. */
+export function gone(): Response {
+  return new Response("This log has expired: it had no new events for a week, so it was deleted.", { status: 410 });
+}
+
 /**
  * A request's body, as text, exactly as it was sent: a byte-order mark at
  * its start is kept (`req.text()` drops one), so what's stored is the bytes
