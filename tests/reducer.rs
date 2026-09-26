@@ -1028,14 +1028,41 @@ fn a_session_request_is_paired_with_any_run_it_starts() {
     assert_eq!(by.as_deref(), Some("k1"));
     // A restart mid-run (after compaction, say) isn't a new run: a request
     // made since isn't for it.
-    let (spawns, _, by, _) = children(vec![
-        start(),
-        claude(2, json!({})),
-        session_request(3, "k", Some("claude"), true),
-        claude(4, json!({"source": "compact"})),
-    ]);
-    assert_eq!(spawns, [(s("k"), None)]);
-    assert_eq!(by, None);
+    for (first, restart) in [
+        (json!({}), json!({"source": "compact"})),
+        (
+            json!({"process": "10@1"}),
+            json!({"source": "compact", "process": "10@1"}),
+        ),
+    ] {
+        let (spawns, _, by, _) = children(vec![
+            start(),
+            claude(2, first),
+            session_request(3, "k", Some("claude"), true),
+            claude(4, restart),
+        ]);
+        assert_eq!(spawns, [(s("k"), None)]);
+        assert_eq!(by, None);
+    }
+    // But a start in a new process, or one that says it's a launch, is a
+    // new run, though the last had no end (its process was killed, say).
+    for restart in [
+        json!({"source": "resume", "process": "11@1"}),
+        json!({"source": "resume"}),
+        json!({"source": "startup"}),
+        json!({"process": "11@1"}),
+    ] {
+        let (spawns, waits, by, _) = children(vec![
+            start(),
+            session_request(1, "k1", Some("claude"), false),
+            claude(2, json!({"process": "10@1"})),
+            session_request(5, "k2", Some("claude"), false),
+            claude(6, restart.clone()),
+        ]);
+        assert_eq!(spawns, [(s("k1"), c()), (s("k2"), c())], "{restart}");
+        assert_eq!(waits, [(s("k1"), c()), (s("k2"), c())], "{restart}");
+        assert_eq!(by.as_deref(), Some("k2"), "{restart}");
+    }
 
     // Its start sorts before the request, in the same millisecond.
     let mut events = vec![start()];
