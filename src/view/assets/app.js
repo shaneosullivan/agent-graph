@@ -241,7 +241,6 @@ function scheduleRefresh() {
 }
 
 async function refresh() {
-  const currentId = S.stops[S.pos] && S.stops[S.pos].id;
   // A new map: a step still loading lands in the old one.
   S.cache = new Map();
   S.live = await source.graph(null);
@@ -255,19 +254,41 @@ async function refresh() {
     S.following = true;
     S.shown = S.live;
     S.stops = [];
+    S.pos = -1;
+    renderAll();
   }
-  S.stops = S.root ? (await source.timeline(S.root)).stops : [];
+  const root = S.root;
+  let stops;
+  try {
+    stops = root ? (await source.timeline(root)).stops : [];
+  } catch (e) {
+    if (root !== S.root) return; // no longer shown: nothing to say
+    throw e;
+  }
+  // Another session was chosen meanwhile; the refresh that follows shows it.
+  if (root !== S.root) return;
 
-  if (S.following || !currentId) {
+  // Where the timeline is now, after the requests: it may have been moved.
+  const old = S.stops;
+  const currentId = old[S.pos] && old[S.pos].id;
+  S.stops = stops;
+  let gone = false;
+  if (S.following || !currentId || !stops.length) {
+    if (!S.following) forgetLoads();
     S.following = true;
     S.pos = S.stops.length - 1;
     S.shown = S.live;
   } else {
-    // Stay on the same event while new ones arrive.
-    const i = S.stops.findIndex((s) => s.id === currentId);
-    S.pos = i >= 0 ? i : clamp(S.pos, 0, S.stops.length - 1);
+    // Stay on the same event while new ones arrive; if it has left the
+    // timeline, go back to the nearest one before it that's still there.
+    const at = new Map(stops.map((s, i) => [s.id, i]));
+    let i = at.get(currentId) ?? -1;
+    gone = i < 0;
+    for (let k = S.pos - 1; i < 0 && k >= 0; k--) i = at.get(old[k].id) ?? -1;
+    S.pos = Math.max(0, i);
   }
   renderAll();
+  if (gone) goTo(S.pos);
 }
 
 let fetchTimer = null;
@@ -319,7 +340,8 @@ function goLive() {
 }
 
 function selectRoot(id) {
-  if (id === S.root) return;
+  // Not a session the live graph has (it may have gone since the list was drawn).
+  if (id === S.root || !S.live || !S.live.nodes[id]) return;
   forgetLoads();
   S.root = id;
   S.selected = id;
@@ -327,8 +349,10 @@ function selectRoot(id) {
   // Live, until its timeline comes: not a step of the session left.
   S.shown = S.live;
   S.stops = [];
+  S.pos = -1;
   history.replaceState(null, '', `#${encodeURIComponent(id)}`);
   scheduleRefresh();
+  renderAll();
 }
 
 function selectNode(id) {

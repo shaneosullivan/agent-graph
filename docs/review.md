@@ -138,7 +138,7 @@ Status is updated as each is done.
 - **Where:** `src/view/assets/app.js` (`refresh`)
 - **Problem:** `refresh` remembers the current step before its requests, so stepping meanwhile is undone, leaving the slider and the graph out of step.
 - **Fix:** read the position after the requests return.
-- **Status:** open
+- **Status:** fixed. `refresh` reads which stop is being viewed only once its requests are back, so a move made meanwhile stands (mapped by id onto the new timeline). When that stop has left the timeline, it goes back to the nearest earlier one still there and loads it (through `goTo`, which also forgets the old one's load), rather than on by index, which could land on the newest and go live; an empty timeline goes live. A refresh overtaken by a change of session shows nothing of the old session's timeline, and says nothing if it fails; the one that follows shows the new session, which `selectRoot` (and a refresh that finds the session gone) renders straight away, with the timeline's controls reset; `selectRoot` ignores a session the live graph no longer has. Tests: "R21: stepping while a refresh is in flight isn't undone", "R21: when the step being viewed leaves the timeline, the nearest one before it is shown", "R21: a refresh overtaken by a change of session shows nothing of the old one's timeline", "R21: choosing a session that has just gone is ignored, and the page recovers", "R21: a session's controls start afresh when it's chosen" (site/tests/viewer.test.mjs), and the R20 test's session-gone step. Reviewed (three rounds).
 
 ### R22. The reducer is quadratic in the number of nodes
 - **Where:** `src/reducer.rs` (`bind_by_guess`, `close_waits_on`)

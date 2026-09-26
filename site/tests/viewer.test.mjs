@@ -150,6 +150,8 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   slow.resolve(late);
   await settle();
   assert.equal(v.S.shown, v.S.live, "live, not the step of the session that went");
+  assert.equal(window.document.querySelector("#step-count").textContent, "No events yet", "and the page says so");
+  assert.equal(window.document.querySelector("#prev").disabled, true, "with nothing to step back to");
   v.goTo(1);
   await settle();
   assert.equal(v.S.shown, v.S.live, "not a step of the session that went");
@@ -211,4 +213,225 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   slow.reject(new Error("503 busy"));
   await settle();
   assert.equal(banner.hidden, false, "the step being viewed failed");
+});
+
+test("R21: stepping while a refresh is in flight isn't undone", async (t) => {
+  const live = graph([node("x:a")]);
+  const step = graph([node("x:a")]);
+  let stops = stopsOf(["e1", "e2", "e3"]);
+  let hold = null;
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => (at ? step : live),
+      timeline: async () => {
+        if (hold) await hold.promise;
+        return { stops };
+      },
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  await until(() => v.S.stops.length === stops.length);
+  assert.equal(v.S.following, true);
+
+  // The refresh brings a new event, while the user steps back to the first.
+  hold = deferred();
+  v.scheduleRefresh();
+  await settle();
+  v.goTo(0);
+  await until(() => v.S.shown === step);
+  stops = stopsOf(["e1", "e2", "e3", "e4"]);
+  hold.resolve();
+  await until(() => v.S.stops.length === 4);
+  assert.equal(v.S.pos, 0, "still where it was moved to");
+  assert.equal(v.S.following, false);
+  assert.equal(v.S.shown, step);
+  assert.equal(window.document.querySelector("#step-count").textContent, "Step 1 of 4");
+});
+
+test("R21: when the step being viewed leaves the timeline, the nearest one before it is shown", async (t) => {
+  const live = graph([node("x:a")]);
+  const ids = ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8"];
+  const graphs = Object.fromEntries(ids.map((id) => [id, graph([node("x:a")])]));
+  const all = stopsOf(ids);
+  const without = all.filter((s) => !["e3", "e4", "e5"].includes(s.id));
+  let stops = all;
+  let slow = null;
+  const calls = {};
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => {
+        if (!at) return live;
+        calls[at] = (calls[at] || 0) + 1;
+        if (at === "e5" && slow) return slow.promise;
+        return graphs[at];
+      },
+      timeline: async () => ({ stops }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const count = () => window.document.querySelector("#step-count").textContent;
+  await until(() => v.S.stops.length === all.length);
+  v.goTo(4);
+  await until(() => v.S.shown === graphs.e5);
+
+  // e3 to e5 go (they moved to another tree, say): back to e2, still in the
+  // past, not on to e8 (live).
+  stops = without;
+  v.scheduleRefresh();
+  await until(() => v.S.stops.length === without.length && v.S.shown === graphs.e2);
+  assert.equal(v.S.pos, 1);
+  assert.equal(v.S.following, false);
+  assert.equal(count(), "Step 2 of 5");
+
+  // Again while e5 is still loading: it isn't shown under e2's label.
+  stops = all;
+  v.scheduleRefresh();
+  await until(() => v.S.stops.length === all.length);
+  slow = deferred();
+  v.goTo(4);
+  await settle();
+  assert.equal(calls.e5, 2, "e5 is loading");
+  stops = without;
+  v.scheduleRefresh();
+  await until(() => v.S.stops.length === without.length && v.S.shown === graphs.e2);
+  slow.resolve(graphs.e5);
+  await settle();
+  assert.equal(v.S.shown, graphs.e2, "e2's graph under e2's label");
+
+  // Nothing left, while a past step is still loading: live, and the step
+  // isn't shown when it comes.
+  stops = all;
+  v.scheduleRefresh();
+  await until(() => v.S.stops.length === all.length);
+  slow = deferred();
+  v.goTo(4);
+  await settle();
+  assert.equal(calls.e5, 3, "e5 is loading");
+  stops = [];
+  v.scheduleRefresh();
+  await until(() => v.S.following);
+  slow.resolve(graphs.e5);
+  await settle();
+  assert.equal(v.S.shown, v.S.live);
+  assert.equal(count(), "No events yet");
+});
+
+test("R21: a refresh overtaken by a change of session shows nothing of the old one's timeline", async (t) => {
+  const live = graph([node("x:a"), node("x:b")]);
+  const stopsFor = { "x:a": stopsOf(["a1", "a2", "a3"]), "x:b": stopsOf(["b1", "b2"]) };
+  const holds = {};
+  const window = loadViewer(
+    t,
+    {
+      graph: async () => live,
+      timeline: async (root) => {
+        if (holds[root]) await holds[root].promise;
+        return { stops: stopsFor[root] };
+      },
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const count = () => window.document.querySelector("#step-count").textContent;
+  const banner = window.document.querySelector("#banner");
+  await until(() => v.S.stops.length === 3);
+  assert.equal(count(), "Step 3 of 3");
+
+  // The overtaken refresh comes back: x:a's timeline isn't shown under x:b.
+  holds["x:a"] = deferred();
+  holds["x:b"] = deferred();
+  v.scheduleRefresh();
+  await settle();
+  v.selectRoot("x:b");
+  assert.equal(count(), "No events yet", "the page leaves x:a's timeline straight away");
+  holds["x:a"].resolve();
+  await settle();
+  // (Array.from: the page's arrays are from its own realm.)
+  assert.deepEqual(Array.from(v.S.stops, (s) => s.id), [], "not x:a's timeline under x:b");
+  assert.equal(count(), "No events yet");
+  holds["x:b"].resolve();
+  await until(() => v.S.stops.length === 2);
+  assert.deepEqual(Array.from(v.S.stops, (s) => s.id), ["b1", "b2"]);
+  assert.equal(count(), "Step 2 of 2");
+
+  // The overtaken refresh fails: nothing to say, it's no longer shown.
+  holds["x:a"] = deferred();
+  holds["x:b"] = deferred();
+  v.scheduleRefresh();
+  await settle();
+  v.selectRoot("x:a");
+  holds["x:b"].reject(new Error("404 gone"));
+  await settle();
+  assert.equal(banner.hidden, true, banner.textContent);
+  holds["x:a"].resolve();
+  await until(() => v.S.stops.length === 3);
+  assert.equal(count(), "Step 3 of 3");
+  assert.equal(banner.hidden, true, banner.textContent);
+});
+
+test("R21: choosing a session that has just gone is ignored, and the page recovers", async (t) => {
+  let live = graph([node("x:a"), node("x:b")]);
+  const stops = stopsOf(["a1", "a2"]);
+  let hold = null;
+  const window = loadViewer(
+    t,
+    {
+      graph: async () => live,
+      timeline: async () => {
+        if (hold) await hold.promise;
+        return { stops };
+      },
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const count = () => window.document.querySelector("#step-count").textContent;
+  await until(() => v.S.stops.length === 2);
+
+  // x:b goes; while the refresh that finds out waits for x:a's timeline,
+  // x:b (still listed) is chosen.
+  live = graph([node("x:a")]);
+  hold = deferred();
+  v.scheduleRefresh();
+  await until(() => v.S.live === live);
+  v.selectRoot("x:b");
+  assert.equal(v.S.root, "x:a", "not a session that has gone");
+  hold.resolve();
+  hold = null;
+  await settle();
+  assert.equal(v.S.root, "x:a");
+  assert.equal(count(), "Step 2 of 2");
+  assert.equal(window.document.querySelector("#banner").hidden, true);
+});
+
+test("R21: a session's controls start afresh when it's chosen", async (t) => {
+  const live = graph([node("x:a"), node("x:b")]);
+  let hold = null;
+  const window = loadViewer(
+    t,
+    {
+      graph: async () => live,
+      timeline: async () => {
+        if (hold) await hold.promise;
+        return { stops: stopsOf(["e1", "e2", "e3"]) };
+      },
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const $ = (sel) => window.document.querySelector(sel);
+  await until(() => v.S.stops.length === 3);
+  v.goTo(2);
+  hold = deferred();
+  v.selectRoot("x:b");
+  assert.equal($("#prev").disabled, true, "nothing to go back to yet");
+  assert.equal($("#next").disabled, true);
+  assert.equal(v.S.pos, -1);
+  hold.resolve();
+  await until(() => v.S.stops.length === 3);
+  assert.equal($("#step-count").textContent, "Step 3 of 3");
 });
