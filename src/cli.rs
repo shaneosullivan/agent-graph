@@ -612,15 +612,25 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
             install::our_events(&before).join(", ")
         ));
     }
+    let backup = link.with_extension("json.agent-graph.bak");
+    // Settings that were only ever our hooks (installing made the file, so
+    // there's no backup of one) go, rather than staying behind empty.
+    let remove = !opts.add
+        && !is_link
+        && after == serde_json::json!({})
+        && std::fs::symlink_metadata(&backup).is_err();
+    if remove {
+        summary.push("Removes the settings file: nothing else is in it.".into());
+    }
     Ok(Some(Change {
         path,
-        contents: Some(serde_json::to_string_pretty(&after).expect("serializable") + "\n"),
+        contents: (!remove)
+            .then(|| serde_json::to_string_pretty(&after).expect("serializable") + "\n"),
         summary,
         // Only a file without our hooks is backed up: the settings as they
         // were without Agent Graph, which installing again (or
         // uninstalling) mustn't replace with a copy that has them.
-        backup: (existed && install::our_events(&before).is_empty())
-            .then(|| link.with_extension("json.agent-graph.bak")),
+        backup: (existed && install::our_events(&before).is_empty()).then_some(backup),
     }))
 }
 
@@ -670,17 +680,23 @@ fn apply(change: &Change) -> Result<(), String> {
     let Some(text) = &change.contents else {
         std::fs::remove_file(path).map_err(|e| format!("removing {}: {e}", path.display()))?;
         // Don't leave empty folders behind: a skill's own folder, then the
-        // skills/commands folder if nothing else is in it (remove_dir only
-        // removes empty folders).
+        // skills/commands folder, then the agent's (.claude, .agents...),
+        // each if nothing else is in it (remove_dir only removes empty
+        // folders).
+        let named = |d: &Path, names: &[&str]| {
+            d.file_name()
+                .is_some_and(|n| names.iter().any(|name| n == *name))
+        };
         let mut dir = path.parent();
         if let Some(d) = dir.filter(|d| slash::is_own_folder(d)) {
             let _ = std::fs::remove_dir(d);
             dir = d.parent();
         }
-        if let Some(d) = dir.filter(|d| {
-            d.file_name()
-                .is_some_and(|n| n == "skills" || n == "commands")
-        }) {
+        if let Some(d) = dir.filter(|d| named(d, &["skills", "commands"])) {
+            let _ = std::fs::remove_dir(d);
+            dir = d.parent();
+        }
+        if let Some(d) = dir.filter(|d| named(d, &[".claude", ".agents", ".gemini", ".cursor"])) {
             let _ = std::fs::remove_dir(d);
         }
         return Ok(());

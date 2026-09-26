@@ -1465,3 +1465,54 @@ fn the_settings_backup_keeps_the_original() {
     run(&["install", "claude-code"]);
     assert_eq!(read(&backup), r#"{"model": "sonnet"}"#);
 }
+
+/// R51: uninstalling leaves a project as it was before installing, without
+/// the folders (.claude/, .agents/ ...) that installing made. Settings that
+/// were there before stay, even if they're empty.
+#[test]
+fn uninstall_leaves_no_empty_folders_behind() {
+    let project = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let out = bin()
+            .args(args)
+            .args(["--scope", "project", "--yes"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let clients = ["claude-code", "codex", "gemini", "cursor"];
+    for client in clients {
+        run(&["install", client]);
+    }
+    assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 4);
+    for client in clients {
+        run(&["uninstall", client]);
+    }
+    let left: Vec<_> = walkdir(project.path());
+    assert!(left.is_empty(), "left behind: {left:?}");
+
+    // Settings that were already there are the user's, even empty ones.
+    let settings = project.path().join(".claude/settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, "{}").unwrap();
+    run(&["install", "claude-code"]);
+    run(&["uninstall", "claude-code"]);
+    assert_eq!(read(&settings), "{}\n");
+}
+
+/// Every file and folder under `dir`.
+fn walkdir(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut all = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        all.push(entry.path());
+        if entry.file_type().unwrap().is_dir() {
+            all.extend(walkdir(&entry.path()));
+        }
+    }
+    all
+}
