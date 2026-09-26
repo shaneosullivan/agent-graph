@@ -2,10 +2,11 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 process.env.AGENT_GRAPH_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64url");
-const { decryptChunk, encryptChunk } = await import("../lib/encryption.ts");
+const { decryptChunk, encryptChunk, metaTag, storageId } = await import("../lib/encryption.ts");
 
 const LOG = "AbCdEf123456";
 const CHUNK = "000000000000000";
@@ -73,4 +74,55 @@ test("rejects a master key of the wrong size", () => {
   );
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /must be 32 bytes/);
+});
+
+/** Runs `expr` against lib/encryption.ts under another master key; returns its JSON. */
+function underAnotherKey(expr: string): unknown {
+  const other = spawnSync(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "--no-warnings",
+      "--input-type=module",
+      "-e",
+      `const { metaTag, storageId } = await import(${JSON.stringify(new URL("../lib/encryption.ts", import.meta.url).href)});
+       console.log(JSON.stringify(${expr}));`,
+    ],
+    { env: { ...process.env, AGENT_GRAPH_ENCRYPTION_KEY: Buffer.alloc(32, 2).toString("base64url") }, encoding: "utf8" },
+  );
+  assert.equal(other.status, 0, other.stderr);
+  return JSON.parse(other.stdout);
+}
+
+// R18: where a log is stored can't be worked out from its id without the
+// master key, and can't be turned back into the id.
+test("a log's storage id is keyed", () => {
+  const sid = storageId(LOG);
+  assert.match(sid, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(storageId(LOG), sid, "the same every time");
+  assert.notEqual(storageId("ZZZZZZZZZZZZ"), sid);
+  assert.notEqual(sid, createHash("sha256").update(LOG).digest("base64url"), "not an unkeyed hash");
+  assert.notEqual(underAnotherKey(`storageId(${JSON.stringify(LOG)})`), sid, "another master key");
+});
+
+// R18: a log's metadata tag covers its id, source and password, and needs
+// the master key.
+test("a metadata tag covers the id, the source and the password", () => {
+  const meta = { source: "watch", pw: "s1$salt$hash" };
+  const tag = metaTag(LOG, meta);
+  assert.match(tag, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(metaTag(LOG, { ...meta }), tag);
+  assert.notEqual(metaTag("ZZZZZZZZZZZZ", meta), tag, "another log");
+  assert.notEqual(metaTag(LOG, { ...meta, source: "paste" }), tag, "another source");
+  assert.notEqual(metaTag(LOG, { ...meta, pw: "s1$salt$other" }), tag, "another password");
+  assert.notEqual(metaTag(LOG, { source: "watch" }), tag, "no password");
+  assert.equal(metaTag(LOG, { source: "watch", pw: "" }), metaTag(LOG, { source: "watch" }), "an empty password is none");
+  assert.notEqual(underAnotherKey(`metaTag(${JSON.stringify(LOG)}, ${JSON.stringify(meta)})`), tag, "another master key");
+});
+
+// R18: the storage id and the tags use keys of their own, so neither can
+// stand in for the other.
+test("storage ids and tags are keyed apart", () => {
+  const meta = { source: "watch" };
+  assert.notEqual(storageId(JSON.stringify(["meta/1", LOG, "watch", null])), metaTag(LOG, meta));
 });

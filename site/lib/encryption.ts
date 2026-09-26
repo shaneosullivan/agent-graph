@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
 
 /**
  * Encrypts log chunks before they're stored, so Firestore only ever holds
@@ -11,12 +11,18 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:cr
  *   AGENT_GRAPH_ENCRYPTION_KEY and the log's id.
  * - Each chunk is bound to its log and position (the GCM associated data),
  *   so chunks can't be moved between logs or reordered without detection.
+ * - Logs are stored under an HMAC of their id (`storageId`), not the id: the
+ *   id is the link that opens a log, so the database mustn't hold it.
+ * - Each log's metadata carries a MAC (`metaTag`) bound to its id, so it
+ *   can't be changed (a password removed, say) or copied from another log.
  *
  * Stored layout: [version: 1 byte][iv: 12 bytes][ciphertext][tag: 16 bytes].
  *
  * The master key is separate from AGENT_GRAPH_SECRET (which signs write keys
  * and cookies): rotating one doesn't touch the other. Changing the master key
- * makes existing logs unreadable, so treat it like the data itself.
+ * makes existing logs unreadable, so treat it like the data itself. Nor can
+ * logs be re-encrypted under a new key: that needs their ids, which aren't
+ * stored (so the key and the database alone don't open anything either).
  */
 
 const VERSION = 1;
@@ -58,6 +64,30 @@ function logKey(id: string): Buffer {
   return key;
 }
 
+// Keys for other purposes, derived from the master key like the logs' own.
+const subKeys = new Map<string, Buffer>();
+
+function subKey(purpose: "storage-id" | "meta"): Buffer {
+  let key = subKeys.get(purpose);
+  if (!key) {
+    key = Buffer.from(hkdfSync("sha256", masterKey(), "agent-graph", purpose, KEY_BYTES));
+    subKeys.set(purpose, key);
+  }
+  return key;
+}
+
+/** Where log `id` is stored: an HMAC of it, from which the id can't be had. */
+export function storageId(id: string): string {
+  return createHmac("sha256", subKey("storage-id")).update(id).digest("base64url");
+}
+
+/** The MAC of log `id`'s metadata, which is stored with it. */
+export function metaTag(id: string, meta: { source: string; pw?: string }): string {
+  return createHmac("sha256", subKey("meta"))
+    .update(JSON.stringify(["meta/1", id, meta.source, meta.pw || null]))
+    .digest("base64url");
+}
+
 /** What a chunk is bound to: its log and its place in it. */
 function associatedData(id: string, chunk: string): Buffer {
   return Buffer.from(`agent-graph:${id}/${chunk}`);
@@ -76,7 +106,8 @@ export function encryptChunk(id: string, chunk: string, text: string): Buffer {
 export function decryptChunk(id: string, chunk: string, stored: Uint8Array): string {
   const data = Buffer.from(stored);
   if (data.length < 1 + IV_BYTES + TAG_BYTES || data[0] !== VERSION) {
-    throw new Error(`chunk ${chunk} of log ${id} isn't in a format this site can read`);
+    // Not the log's id: it's what lets people read the log, and errors get logged.
+    throw new Error(`chunk ${chunk} isn't in a format this site can read`);
   }
   const iv = data.subarray(1, 1 + IV_BYTES);
   const tag = data.subarray(data.length - TAG_BYTES);

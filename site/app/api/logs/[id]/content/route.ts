@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 
 import { ID_PATTERN, viewCookieName } from "@/lib/config";
 import { safeEqual, viewToken } from "@/lib/crypto";
+import { storageId } from "@/lib/encryption";
 import { getMeta, readChunks } from "@/lib/store";
 
 export const runtime = "nodejs";
@@ -35,7 +36,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   try {
     chunks = await readChunks(id, after);
   } catch (err) {
-    console.error(`reading log ${id}:`, err);
+    // Named by where it's stored: the log's id is what lets people read it.
+    console.error(`reading logs/${storageId(id)}:`, err);
     return new Response("This log couldn't be read.", { status: 500 });
   }
   const { text, last, more } = chunks;

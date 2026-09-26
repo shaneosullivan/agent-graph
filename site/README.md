@@ -47,7 +47,7 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 - The size is checked from the header before the body is read.
 - The key is checked by recomputing an HMAC: no database read.
 - The body is never parsed.
-- Storage is a single write of a new document. Each chunk is its own document, `logs/{id}/chunks/{offset}`, zero-padded so ids sort in order, so the cost doesn't grow with the log. A chunk never changes once stored: a retry of the same bytes is accepted, and different bytes at a stored offset are refused (409).
+- Storage is a single write of a new document. Each chunk is its own document, `logs/{sid}/chunks/{offset}` (`sid` is an HMAC of the log's id, below), zero-padded so ids sort in order, so the cost doesn't grow with the log. A chunk never changes once stored: a retry of the same bytes is accepted, and different bytes at a stored offset are refused (409).
 
 **Reading:**
 - Each viewer polls every 3 s while events are arriving, backing off to 15 s when quiet or when the tab is hidden.
@@ -59,8 +59,10 @@ Passwords are hashed with scrypt. Firestore's security rules (`firestore.rules`)
 - **Cipher:** AES-256-GCM, which also detects any change to stored data.
 - **Per-log keys:** each log's key is derived (HKDF) from the master key `AGENT_GRAPH_ENCRYPTION_KEY` and the log's id.
 - **Binding:** each chunk is bound to its log and position, so chunks can't be swapped or reordered undetected.
+- **The links aren't stored.** A log's id is its link, so logs are stored under an HMAC of it (keyed from the master key), which can't be turned back into the link. Someone with the database can't open the logs through the site. (Except from an export or backup made before logs were stored this way: see Deploy.)
+- **The metadata is authenticated.** Each log's metadata carries a MAC bound to its id, so a password removed from it, or another log's metadata copied over it, is refused.
 - **Cost:** a fraction of a millisecond per chunk, and appends still make no database reads.
-- **Not encrypted:** the metadata (when a log was created, how it was shared, the password *hash*) and the chunk ids, which reveal a log's size.
+- **Not encrypted:** the metadata (when a log was created, how it was shared, the password *hash*) and the chunk ids, which reveal a log's size. (When a log was created isn't authenticated either; nothing depends on it.)
 - **The server can still read logs.** It holds the key; this isn't end-to-end encryption.
 
 ## Develop
@@ -129,8 +131,20 @@ npm run test:ci
    - `FIREBASE_SERVICE_ACCOUNT`: the service account's JSON key, on one line.
    - `NEXT_PUBLIC_SITE_URL`: `https://agentgraph.chofter.com`
 5. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
+6. **Logs from before storage ids.** Logs created before logs were stored under an HMAC of their id can't be found by the new site until they're copied. Run the migration with the production environment: the same `AGENT_GRAPH_ENCRYPTION_KEY`, and `FIREBASE_SERVICE_ACCOUNT`. It refuses to run without the key, prints the project, and checks that the key decrypts the logs before writing anything.
+   1. Before deploying, copy the logs. The old site doesn't see the copies.
+      ```bash
+      npm run migrate:storage-ids
+      ```
+   2. Deploy, and straight away copy again, for what the old site stored in between: until then, logs it created since the first copy aren't found, and those it added to lack their latest events. (Someone who opened a log being shared live in those minutes may need to reload it.)
+   3. Once the site works, delete the old copies. Each log's are deleted only once they're all copied.
+      ```bash
+      npm run migrate:storage-ids -- --delete-old
+      ```
+
+   Rolling the site back past this deploy loses the logs created since (the old site can't find them), and after step 3, all of them. Exports, backups and point-in-time recovery (which keeps deleted documents for up to 7 days) from before step 3 still name every log by its link: delete them, or keep them as safe as the logs.
 
 Not built yet:
 - rate limiting on log creation;
 - a way to delete a log;
-- rotating the encryption key (the stored format carries a version byte, so a second key can be added later).
+- rotating the encryption key. The stored format carries a version byte, so a second key can be added later, but existing logs can't be re-encrypted with it: that needs each log's id, which isn't stored. The same goes for anyone who gets the key and the database without the links: they can't decrypt anything.

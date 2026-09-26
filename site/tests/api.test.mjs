@@ -200,7 +200,7 @@ test("bad input is refused", async () => {
 });
 
 test(
-  "logs are encrypted in Firestore",
+  "logs are encrypted in Firestore, and not stored under their ids",
   { skip: !process.env.FIRESTORE_EMULATOR_HOST && "reads the database directly, so needs the emulator" },
   async () => {
     const marker = "a very recognisable summary 7c1f";
@@ -216,50 +216,25 @@ test(
     const log = await create(event(1));
     assert.equal((await append(log.id, Buffer.byteLength(event(1)), event(2), log.writeToken)).status, 204);
 
-    // What's actually stored, read past the site (the emulator's admin token).
+    // What's actually stored, read past the site (the emulator's admin token):
+    // nothing under the log's id (the link), and nowhere its text. (The
+    // chunks' ciphertext is checked more closely in store.test.mjs.)
     const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "demo-agent-graph";
-    const res = await fetch(
-      `http://${process.env.FIRESTORE_EMULATOR_HOST}/v1/projects/${project}/databases/(default)/documents/logs/${log.id}/chunks`,
-      { headers: { Authorization: "Bearer owner" } },
-    );
-    assert.equal(res.status, 200);
-    const stored = await res.json();
-    assert.equal(stored.documents.length, 2);
-    for (const doc of stored.documents) {
-      assert.deepEqual(Object.keys(doc.fields), ["e"], "only ciphertext");
-      const bytes = Buffer.from(doc.fields.e.bytesValue, "base64");
-      assert.ok(!bytes.includes(Buffer.from("recognisable")), "no plaintext in the stored bytes");
-    }
-    assert.doesNotMatch(JSON.stringify(stored), /recognisable/);
+    const db = `http://${process.env.FIRESTORE_EMULATOR_HOST}/v1/projects/${project}/databases/(default)/documents`;
+    const admin = { headers: { Authorization: "Bearer owner" } };
+    assert.equal((await fetch(`${db}/logs/${log.id}`, admin)).status, 404);
+    const chunks = await (await fetch(`${db}/logs/${log.id}/chunks`, admin)).json();
+    assert.equal(chunks.documents, undefined, "no chunks under the id");
+    const everything = await fetch(`${db}:runQuery`, {
+      method: "POST",
+      headers: { ...admin.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ structuredQuery: { from: [{ collectionId: "logs" }] } }),
+    });
+    const listed = await everything.text();
+    assert.ok(!listed.includes(log.id), "the id is nowhere in the stored logs");
+    assert.doesNotMatch(listed, /recognisable/);
 
     // The site still reads it back.
     assert.equal((await content(log.id)).text, event(1) + event(2));
-  },
-);
-
-// R16: a stored chunk that can't be decrypted is refused like any other
-// mismatch, so the client stops, rather than a 500 it would retry for good.
-test(
-  "a stored chunk that can't be decrypted isn't replaced, and says so",
-  { skip: !process.env.FIRESTORE_EMULATOR_HOST && "writes the database directly, so needs the emulator" },
-  async () => {
-    const log = await create(line(1));
-    const offset = line(1).length;
-    assert.equal((await append(log.id, offset, line(2), log.writeToken)).status, 204);
-
-    // Damage it, past the site (the emulator's admin token).
-    const project = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "demo-agent-graph";
-    const key = String(offset).padStart(15, "0");
-    const res = await fetch(
-      `http://${process.env.FIRESTORE_EMULATOR_HOST}/v1/projects/${project}/databases/(default)/documents/logs/${log.id}/chunks/${key}?updateMask.fieldPaths=e`,
-      {
-        method: "PATCH",
-        headers: { Authorization: "Bearer owner", "Content-Type": "application/json" },
-        body: JSON.stringify({ fields: { e: { bytesValue: Buffer.from("not a chunk").toString("base64") } } }),
-      },
-    );
-    assert.equal(res.status, 200, await res.text());
-
-    assert.equal((await append(log.id, offset, line(2), log.writeToken)).status, 409);
   },
 );

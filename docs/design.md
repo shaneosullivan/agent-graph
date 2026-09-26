@@ -478,7 +478,7 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 3. The site handles an append like this:
    - checks the size from the header;
    - verifies the key by recomputing an HMAC of the id, with no database read;
-   - stores the raw body, never parsed, as one new Firestore document, `logs/{id}/chunks/{offset}`.
+   - stores the raw body, never parsed, as one new Firestore document, `logs/{sid}/chunks/{offset}`, where `sid` is an HMAC of the log's id.
 
    Nothing already stored is rewritten, and nothing is read unless the offset is already taken, so an append costs the same however big the log is. A failed chunk is retried with exactly the same bytes, whatever has arrived since; the site accepts the same bytes again, but refuses (`409`) different ones at an offset it already has, since a viewer never reads a chunk twice. The viewer drops any event it has already seen.
 4. Viewers read `GET /api/logs/{id}/content?after=<last chunk key>`. For a live log they poll every 3 s while events are arriving, backing off to 15 s when quiet or when the tab is hidden.
@@ -495,6 +495,8 @@ Viewers can step through the log exactly as they can locally. Each log can have 
 - **Encrypted at rest.** On top of Google's disk encryption, every chunk is encrypted before it's stored, so Firestore holds only ciphertext. Someone who can read the database (console, exports, a leaked service-account key) can't read the logs.
   - AES-256-GCM, with a per-log key derived from `AGENT_GRAPH_ENCRYPTION_KEY`, a key separate from the signing secret.
   - Each chunk is bound to its log and offset, so tampering, swapping or reordering is detected.
+  - The database doesn't hold the links: logs are stored under an HMAC of their id, so someone with the database can't open them through the site. Exports or backups made before this was so (and before `npm run migrate:storage-ids` moved the old logs) still hold them.
+  - Each log's metadata carries a MAC bound to its id, so removing its password, or copying another log's metadata over it, is refused.
   - Metadata and chunk sizes aren't hidden.
   - The server holds the key, so this protects stored data; it isn't end-to-end encryption.
 

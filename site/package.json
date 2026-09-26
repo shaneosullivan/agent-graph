@@ -17,6 +17,7 @@
     "emulators": "firebase emulators:start --only firestore --project demo-agent-graph",
     "test:api": "node --test tests/api.test.mjs",
     "test:store": "node --experimental-strip-types --no-warnings --test tests/store.test.mjs",
+    "migrate:storage-ids": "node --experimental-strip-types --no-warnings scripts/migrate-storage-ids.mjs",
     "test:ci": "firebase emulators:exec --only firestore --project demo-agent-graph 'sh scripts/ci-api-test.sh'",
     "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/viewer.test.mjs"
   },
