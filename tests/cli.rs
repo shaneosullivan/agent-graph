@@ -208,6 +208,55 @@ fn snapshot_draws_the_session_as_an_image() {
 }
 
 #[test]
+fn a_snapshot_never_replaces_one_from_the_same_second() {
+    let home = tempfile::tempdir().unwrap();
+    for payload in fixture("claude-code/session.jsonl").iter().take(14) {
+        emit(
+            home.path(),
+            &["--provider", "claude-code"],
+            &payload.to_string(),
+            &[],
+        );
+    }
+    // Snapshots already taken this second and the next few (the name only
+    // has seconds, so a second snapshot in time would have the same one).
+    let images = home.path().join("images");
+    std::fs::create_dir_all(&images).unwrap();
+    let now = std::time::SystemTime::now();
+    let earlier: Vec<_> = (0..5)
+        .map(|s| {
+            let stamp = humantime::format_rfc3339_seconds(now + std::time::Duration::from_secs(s))
+                .to_string()
+                .replace(['-', ':'], "")
+                .replace('T', "-")
+                .trim_end_matches('Z')
+                .to_string();
+            let path = images.join(format!("agent-graph-{stamp}.png"));
+            std::fs::write(&path, "an earlier snapshot").unwrap();
+            path
+        })
+        .collect();
+
+    let out = bin()
+        .args(["snapshot", "--session", "5f2c"])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for path in &earlier {
+        assert_eq!(read(path), "an earlier snapshot");
+    }
+    let path = String::from_utf8(out.stdout).unwrap();
+    let png = std::fs::read(path.trim()).unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+}
+
+#[test]
 fn install_and_uninstall_project_settings() {
     let project = tempfile::tempdir().unwrap();
     let settings = project.path().join(".claude/settings.json");
@@ -829,6 +878,119 @@ fn install_keeps_settings_private_and_follows_the_users_own_link() {
     assert_eq!(std::fs::read_dir(&dotfiles).unwrap().count(), 1);
 }
 
+/// R48: `tail` puts the terminal back (out of raw mode and the alternate
+/// screen) however it's stopped, then dies of the signal as it would have.
+#[cfg(unix)]
+#[test]
+fn tail_puts_the_terminal_back_when_killed() {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+
+    let home = tempfile::tempdir().unwrap();
+    for payload in fixture("claude-code/session.jsonl").iter().take(14) {
+        emit(
+            home.path(),
+            &["--provider", "claude-code"],
+            &payload.to_string(),
+            &[],
+        );
+    }
+    for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
+        // A terminal of its own: `tail` is in the session it controls.
+        let (mut master, mut slave) = (0, 0);
+        let mut size = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: openpty fills in two new descriptors, which we then own.
+        let (master, slave) = unsafe {
+            assert_eq!(
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut size,
+                ),
+                0
+            );
+            (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave))
+        };
+        let cooked = |fd: &OwnedFd| {
+            // SAFETY: reads the terminal's settings into a zeroed struct.
+            unsafe {
+                let mut t: libc::termios = std::mem::zeroed();
+                assert_eq!(libc::tcgetattr(fd.as_raw_fd(), &mut t), 0);
+                t.c_lflag & (libc::ICANON | libc::ECHO) == (libc::ICANON | libc::ECHO)
+            }
+        };
+        assert!(cooked(&master));
+
+        let mut command = bin();
+        command
+            .arg("tail")
+            .env("AGENT_GRAPH_HOME", home.path())
+            .stdin(slave.try_clone().unwrap())
+            .stdout(slave.try_clone().unwrap())
+            .stderr(slave.try_clone().unwrap());
+        // SAFETY: setsid and ioctl are async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                libc::ioctl(0, libc::TIOCSCTTY as _, 0);
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+
+        // Everything it draws is read, so it never waits on a full terminal.
+        let mut reader = std::fs::File::from(master.try_clone().unwrap());
+        let (drawn, output) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0; 4096];
+            while let Ok(n @ 1..) = reader.read(&mut buf) {
+                if drawn.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        // Wait for it to take over the screen, then kill it.
+        let mut seen = Vec::new();
+        while !seen.windows(8).any(|w| w == b"\x1b[?1049h") {
+            match output.recv_timeout(std::time::Duration::from_secs(10)) {
+                Ok(bytes) => seen.extend(bytes),
+                Err(_) => {
+                    let _ = child.kill();
+                    panic!("tail never started: {:?}", String::from_utf8_lossy(&seen));
+                }
+            }
+        }
+        assert!(!cooked(&master), "tail is in raw mode");
+        // SAFETY: signals the child we started.
+        unsafe { libc::kill(child.id() as i32, sig) };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("signal {sig} didn't stop tail");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+
+        assert!(
+            cooked(&master),
+            "signal {sig} left the terminal in raw mode"
+        );
+        assert_eq!(status.signal(), Some(sig), "{status:?}");
+    }
+}
+
 /// R9: a signal `run` was started with ignored (`nohup`, a background job)
 /// stays ignored for the command, as it would without `run`.
 #[cfg(unix)]
@@ -1258,4 +1420,99 @@ fn snapshot_json_of_sessions_needs_some() {
         );
     }
     assert!(snapshot(&["--out", "all.json"]).status.success());
+}
+
+/// R49: the backup is of the settings as they were without Agent Graph.
+/// Installing again, or uninstalling, doesn't replace it with a copy that
+/// has the hooks.
+#[test]
+fn the_settings_backup_keeps_the_original() {
+    let project = tempfile::tempdir().unwrap();
+    let settings = project.path().join(".claude/settings.json");
+    let backup = project.path().join(".claude/settings.json.agent-graph.bak");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, r#"{"model": "opus"}"#).unwrap();
+    let run = |args: &[&str]| {
+        let out = bin()
+            .args(args)
+            .args(["--scope", "project", "--yes"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    run(&["install", "claude-code"]);
+    assert_eq!(read(&backup), r#"{"model": "opus"}"#);
+    // A different hook command, so the settings change again.
+    run(&[
+        "install",
+        "claude-code",
+        "--command",
+        "ag emit --provider claude-code",
+    ]);
+    assert_eq!(read(&backup), r#"{"model": "opus"}"#, "installing again");
+    run(&["uninstall", "claude-code"]);
+    assert_eq!(read(&backup), r#"{"model": "opus"}"#, "uninstalling");
+
+    // Without the hooks, the settings are the user's own again, and those
+    // are what the next install backs up.
+    std::fs::write(&settings, r#"{"model": "sonnet"}"#).unwrap();
+    run(&["install", "claude-code"]);
+    assert_eq!(read(&backup), r#"{"model": "sonnet"}"#);
+}
+
+/// R51: uninstalling leaves a project as it was before installing, without
+/// the folders (.claude/, .agents/ ...) that installing made. Settings that
+/// were there before stay, even if they're empty.
+#[test]
+fn uninstall_leaves_no_empty_folders_behind() {
+    let project = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let out = bin()
+            .args(args)
+            .args(["--scope", "project", "--yes"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let clients = ["claude-code", "codex", "gemini", "cursor"];
+    for client in clients {
+        run(&["install", client]);
+    }
+    assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 4);
+    for client in clients {
+        run(&["uninstall", client]);
+    }
+    let left: Vec<_> = walkdir(project.path());
+    assert!(left.is_empty(), "left behind: {left:?}");
+
+    // Settings that were already there are the user's, even empty ones.
+    let settings = project.path().join(".claude/settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, "{}").unwrap();
+    run(&["install", "claude-code"]);
+    run(&["uninstall", "claude-code"]);
+    assert_eq!(read(&settings), "{}\n");
+}
+
+/// Every file and folder under `dir`.
+fn walkdir(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut all = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        all.push(entry.path());
+        if entry.file_type().unwrap().is_dir() {
+            all.extend(walkdir(&entry.path()));
+        }
+    }
+    all
 }

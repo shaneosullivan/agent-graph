@@ -76,7 +76,7 @@
         { "text": "Set up a coding agent to work with Agent Graph. For Claude Code this does two things:" },
         {
           "steps": [
-            { "text": "Adds hooks to Claude Code's settings, so every new session is recorded, including sessions one starts from its shell (`claude -p`, `codex exec`, `agent-graph run`), which appear under it. Each hook runs `agent-graph emit` in the background: it takes a few milliseconds, never blocks the agent, and never sends anything anywhere. Everything else in the settings file is kept, and the old file is backed up beside it (settings.json.agent-graph.bak). Sessions that were already running aren't recorded; start a new one. Installing again brings older hooks up to date." },
+            { "text": "Adds hooks to Claude Code's settings, so every new session is recorded, including sessions one starts from its shell (`claude -p`, `codex exec`, `agent-graph run`), which appear under it. Each hook runs `agent-graph emit` in the background: it takes a few milliseconds, never blocks the agent, and never sends anything anywhere. Everything else in the settings file is kept, and the file as it was without Agent Graph is backed up beside it (settings.json.agent-graph.bak); installing again or uninstalling keeps that backup. Sessions that were already running aren't recorded; start a new one. Installing again brings older hooks up to date." },
             { "text": "Adds an /agent-graph command (a skill). Run it in any session for a picture of the session and a short summary of what needs you, what looks stuck and what's in progress. `/agent-graph all` covers every session from the last day, and `/agent-graph share` gives you a live link. Claude can also use it by itself when you ask how your agents are doing." }
           ]
         },
@@ -122,7 +122,7 @@
       "summary": "Remove what `install` added",
       "description": [
         { "text": "Remove what `install` added: Agent Graph's hooks from the agent's settings, and the /agent-graph command if Agent Graph wrote it." },
-        { "text": "Everything else in the settings file is kept, and the old file is backed up beside it first. A command file you wrote yourself is left alone. Use the same --scope you installed with." },
+        { "text": "Everything else in the settings file is kept, and so is the backup `install` made of it before it had the hooks (settings.json.agent-graph.bak). A settings file left with nothing in it (`{}`) is removed too, unless there's a backup beside it, and so is a .claude, .agents, .gemini or .cursor folder left empty. A command file you wrote yourself is left alone. Use the same --scope you installed with." },
         { "text": "What's already been recorded stays in ~/.agent-graph; delete that folder to remove it." }
       ],
       "options": [

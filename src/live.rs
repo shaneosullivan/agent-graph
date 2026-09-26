@@ -41,11 +41,25 @@ pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
         return frames(&mut tail, &opts);
     }
 
+    // A signal (a `kill`, or the terminal closing) stops the loop instead
+    // of the program, so the screen is put back first.
+    signals::catch();
+    let result = watch(&mut tail, &opts);
+    // Then it's delivered again, so whoever sent it sees it work.
+    signals::die_if_caught();
+    result
+}
+
+/// Takes over the screen and redraws until a key or a signal says to stop.
+fn watch(tail: &mut Tail, opts: &Options) -> Result<(), String> {
     let _screen = Screen::enter()?;
     let mut all = opts.all;
     let mut dirty = true;
     let mut drawn = Instant::now();
     loop {
+        if signals::caught() {
+            return Ok(());
+        }
         if event::poll(TICK).map_err(term_err)? {
             match event::read().map_err(term_err)? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
@@ -69,7 +83,7 @@ pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
         }
         if dirty || drawn.elapsed() >= REFRESH {
             let (width, height) = terminal::size().map_err(term_err)?;
-            let frame = frame(&tail, &opts, all, true)?;
+            let frame = frame(tail, opts, all, true)?;
             draw(&frame, width as usize, height as usize, all).map_err(term_err)?;
             dirty = false;
             drawn = Instant::now();
@@ -342,4 +356,122 @@ impl Drop for Screen {
         let _ = execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     }
+}
+
+/// In raw mode Ctrl+C is a key press, but SIGINT, SIGTERM and SIGHUP can
+/// still come from elsewhere, and by default would stop us without putting
+/// the terminal back. A signal we were started with ignored stays ignored.
+#[cfg(unix)]
+mod signals {
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    static CAUGHT: AtomicI32 = AtomicI32::new(0);
+
+    extern "C" fn note(sig: libc::c_int) {
+        CAUGHT.store(sig, Ordering::SeqCst);
+    }
+
+    /// Each is caught once: `tail` may be stuck writing to a terminal nobody
+    /// reads (a suspended ssh client), and then the next one stops it as it
+    /// would have without this.
+    pub fn catch() {
+        for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+            if !ignored(sig) {
+                // SAFETY: the handler only stores to an atomic.
+                unsafe {
+                    let mut action: libc::sigaction = std::mem::zeroed();
+                    action.sa_sigaction = note as *const () as libc::sighandler_t;
+                    action.sa_flags = libc::SA_RESTART | libc::SA_RESETHAND;
+                    libc::sigemptyset(&mut action.sa_mask);
+                    libc::sigaction(sig, &action, std::ptr::null_mut());
+                }
+            }
+        }
+    }
+
+    pub fn caught() -> bool {
+        CAUGHT.load(Ordering::SeqCst) != 0
+    }
+
+    /// Dies of the signal that was caught, if one was.
+    pub fn die_if_caught() {
+        let sig = CAUGHT.load(Ordering::SeqCst);
+        if sig != 0 {
+            // SAFETY: restores the default action, which raise then takes.
+            unsafe {
+                libc::signal(sig, libc::SIG_DFL);
+                libc::raise(sig);
+            }
+        }
+    }
+
+    /// Whether `sig` is set to be ignored.
+    fn ignored(sig: libc::c_int) -> bool {
+        handler(sig) == Some(libc::SIG_IGN)
+    }
+
+    /// What `sig` is set to do.
+    fn handler(sig: libc::c_int) -> Option<libc::sighandler_t> {
+        // SAFETY: a null new action only reads the current one into `old`.
+        unsafe {
+            let mut old: libc::sigaction = std::mem::zeroed();
+            (libc::sigaction(sig, std::ptr::null(), &mut old) == 0).then_some(old.sa_sigaction)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// R48: the first signal asks `tail` to stop; if it's stuck (writing
+        /// to a terminal nobody reads, say), the next one stops it.
+        #[test]
+        fn a_second_signal_is_the_default() {
+            /// What the signals were set to before, put back however the
+            /// test ends (the tests may have been started with some ignored).
+            struct Restore(Vec<(libc::c_int, libc::sigaction)>);
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    for (sig, old) in &self.0 {
+                        // SAFETY: sets back an action sigaction gave us.
+                        unsafe { libc::sigaction(*sig, old, std::ptr::null_mut()) };
+                    }
+                }
+            }
+            let _restore = Restore(
+                [libc::SIGINT, libc::SIGTERM, libc::SIGHUP]
+                    .into_iter()
+                    .map(|sig| {
+                        // SAFETY: a null new action only reads the current one.
+                        unsafe {
+                            let mut old: libc::sigaction = std::mem::zeroed();
+                            libc::sigaction(sig, std::ptr::null(), &mut old);
+                            (sig, old)
+                        }
+                    })
+                    .collect(),
+            );
+            // SAFETY: the default, so it's caught even under `nohup`.
+            unsafe { libc::signal(libc::SIGHUP, libc::SIG_DFL) };
+
+            catch();
+            assert_eq!(handler(libc::SIGHUP), Some(note as *const () as usize));
+            // SAFETY: the handler only stores to an atomic.
+            unsafe { libc::raise(libc::SIGHUP) };
+            assert!(caught());
+            assert_eq!(handler(libc::SIGHUP), Some(libc::SIG_DFL));
+        }
+    }
+}
+
+/// On Windows, closing the console ends the process however it's handled.
+#[cfg(not(unix))]
+mod signals {
+    pub fn catch() {}
+
+    pub fn caught() -> bool {
+        false
+    }
+
+    pub fn die_if_caught() {}
 }
