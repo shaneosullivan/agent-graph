@@ -616,7 +616,11 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
         path,
         contents: Some(serde_json::to_string_pretty(&after).expect("serializable") + "\n"),
         summary,
-        backup: existed.then(|| link.with_extension("json.agent-graph.bak")),
+        // Only a file without our hooks is backed up: the settings as they
+        // were without Agent Graph, which installing again (or
+        // uninstalling) mustn't replace with a copy that has them.
+        backup: (existed && install::our_events(&before).is_empty())
+            .then(|| link.with_extension("json.agent-graph.bak")),
     }))
 }
 
