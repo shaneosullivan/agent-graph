@@ -47,8 +47,8 @@ Status is updated as each is done.
 ### R6. `install`/`uninstall` make `settings.json` world-readable and replace a symlinked one with a copy
 - **Where:** `src/store.rs` (`write_atomic`)
 - **Problem:** The rewritten file gets default permissions (0644), exposing API keys kept in a 0600 file, and a dotfiles symlink is replaced by a regular file, so the real dotfile never gets the hooks.
-- **Fix:** write to the symlink's target, keeping the original file's permissions.
-- **Status:** open
+- **Fix:** a rewritten regular file keeps its Unix permissions, and anything new (including a file replacing a link) is created readable only by the user; the backup gets the original's permissions. A settings file of your own that's a link is updated where it points, with the backup kept beside the link (a project's links are still refused, per R1). On Windows no attributes are copied, so a read-only file can't block the next run.
+- **Status:** fixed. Tests: `install_keeps_settings_private_and_follows_the_users_own_link` (tests/cli.rs), `a_replaced_link_doesnt_take_its_targets_permissions` and (Windows) `a_read_only_original_doesnt_stop_the_next_write` (src/store.rs). Reviewed.
 
 ### R7. The local viewer serves any local user
 - **Where:** `src/view/mod.rs`, `src/view/http.rs`

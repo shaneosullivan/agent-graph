@@ -42,8 +42,27 @@ pub fn append(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// Writes `bytes` to `path` via a temporary file and a rename, so readers never
 /// see a half-written file. The temporary file is always a new one (never a
 /// file or link someone left at a predictable name), and the rename replaces
-/// `path` itself, even if it's a link.
+/// `path` itself, even if it's a link. A regular file that was there keeps
+/// its permissions; anything else (nothing, or a link, whose target's
+/// permissions have nothing to do with this file) makes a new file readable
+/// only by the user.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let keep = fs::symlink_metadata(path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.permissions());
+    write_atomic_with(path, bytes, keep)
+}
+
+/// `write_atomic`, giving the file `permissions`, or if `None`, making it
+/// readable only by the user. Only Unix modes are copied: on Windows,
+/// "permissions" are attributes like read-only, which would stop the file
+/// being replaced next time.
+pub fn write_atomic_with(
+    path: &Path,
+    bytes: &[u8],
+    permissions: Option<fs::Permissions>,
+) -> io::Result<()> {
     let dir = path
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
@@ -62,7 +81,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
             ".{name}.{}-{nanos}-{attempt}.tmp",
             std::process::id()
         ));
-        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&tmp) {
             Ok(file) => break (tmp, file),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists && attempt < 100 => attempt += 1,
             Err(e) => return Err(e),
@@ -70,6 +96,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     };
     let written = file
         .write_all(bytes)
+        .and_then(|()| keep_permissions(&file, permissions))
         .and_then(|()| file.sync_all())
         .and_then(|()| {
             drop(file);
@@ -91,6 +118,18 @@ pub fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(path);
     }
     written
+}
+
+/// Gives `file` the Unix `permissions`, if any. (Not on Windows, where they're
+/// attributes like read-only; see `write_atomic_with`.)
+#[cfg(unix)]
+fn keep_permissions(file: &fs::File, permissions: Option<fs::Permissions>) -> io::Result<()> {
+    permissions.map_or(Ok(()), |p| file.set_permissions(p))
+}
+
+#[cfg(not(unix))]
+fn keep_permissions(_file: &fs::File, _permissions: Option<fs::Permissions>) -> io::Result<()> {
+    Ok(())
 }
 
 /// Errors if `path`, or a folder between `root` and it, is a symbolic link.
@@ -188,6 +227,40 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_link_doesnt_take_its_targets_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        let script = dir.path().join("script");
+        fs::write(&script, "").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        for target in [&shared, &script] {
+            let link = dir.path().join("link");
+            let _ = fs::remove_file(&link);
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            write_atomic(&link, b"{}").unwrap();
+            let mode = fs::metadata(&link).unwrap().permissions().mode() & 0o7777;
+            assert_eq!(mode, 0o600, "took {}'s permissions", target.display());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_read_only_original_doesnt_stop_the_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("settings.json");
+        fs::write(&original, "{}").unwrap();
+        let mut read_only = fs::metadata(&original).unwrap().permissions();
+        read_only.set_readonly(true);
+        let backup = dir.path().join("settings.json.bak");
+        write_atomic_with(&backup, b"{}", Some(read_only)).unwrap();
+        write_atomic(&backup, b"{\"again\": true}").unwrap();
     }
 
     #[cfg(unix)]

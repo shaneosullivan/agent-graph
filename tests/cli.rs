@@ -736,3 +736,95 @@ fn install_leaves_a_command_file_it_cant_read_alone() {
         }
     }
 }
+
+/// R6: settings often hold API keys. Rewriting them keeps them private, and a
+/// settings file that's a link (dotfiles) is updated where it really lives.
+#[cfg(unix)]
+#[test]
+fn install_keeps_settings_private_and_follows_the_users_own_link() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let install = |config: &Path, home: &Path| {
+        bin()
+            .args(["install", "claude-code", "--yes", "--no-slash-command"])
+            .env("CLAUDE_CONFIG_DIR", config)
+            .env("HOME", home)
+            .output()
+            .unwrap()
+    };
+
+    // A private settings file stays private, and so does its backup.
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".claude");
+    std::fs::create_dir_all(&config).unwrap();
+    let settings = config.join("settings.json");
+    std::fs::write(&settings, r#"{"env": {"API_KEY": "secret"}}"#).unwrap();
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let out = install(&config, home.path());
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(mode(&settings), 0o600, "settings became readable by others");
+    assert_eq!(mode(&config.join("settings.json.agent-graph.bak")), 0o600);
+
+    // Group-readable stays group-readable, and so does the backup (of a
+    // file that doesn't have the hooks yet, so it's rewritten).
+    std::fs::write(&settings, r#"{"env": {"API_KEY": "other"}}"#).unwrap();
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let out = install(&config, home.path());
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(mode(&settings), 0o640);
+    assert_eq!(mode(&config.join("settings.json.agent-graph.bak")), 0o640);
+
+    // A new settings file is private too.
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".claude");
+    let out = install(&config, home.path());
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(mode(&config.join("settings.json")), 0o600);
+
+    // A link into the user's dotfiles stays a link, and its target gets the
+    // hooks, keeping its mode.
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".claude");
+    let dotfiles = home.path().join("dotfiles");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::create_dir_all(&dotfiles).unwrap();
+    let real = dotfiles.join("claude-settings.json");
+    std::fs::write(&real, r#"{"model": "opus"}"#).unwrap();
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let link = config.join("settings.json");
+    symlink(&real, &link).unwrap();
+    let out = install(&config, home.path());
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let updated: serde_json::Value = serde_json::from_str(&read(&real)).unwrap();
+    assert_eq!(updated["model"], "opus");
+    assert!(updated["hooks"].is_object(), "the real file has the hooks");
+    assert_eq!(mode(&real), 0o600);
+    assert_eq!(
+        read(config.join("settings.json.agent-graph.bak")),
+        r#"{"model": "opus"}"#,
+        "backed up beside the link, not into the dotfiles"
+    );
+    assert_eq!(std::fs::read_dir(&dotfiles).unwrap().count(), 1);
+}

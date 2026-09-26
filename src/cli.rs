@@ -360,8 +360,8 @@ struct Change {
     contents: Option<String>,
     /// Lines describing the change, shown before asking.
     summary: Vec<String>,
-    /// Keep a copy of the old file first (settings files).
-    backup: bool,
+    /// Where to keep a copy of the old file first (settings files).
+    backup: Option<PathBuf>,
 }
 
 fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(), String> {
@@ -414,7 +414,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                     ],
                     path: file.path,
                     contents: Some(file.contents),
-                    backup: false,
+                    backup: None,
                 }),
                 (false, Some(_)) if ours => changes.push(Change {
                     summary: vec![format!(
@@ -424,7 +424,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                     )],
                     path: file.path,
                     contents: None,
-                    backup: false,
+                    backup: None,
                 }),
                 (false, _) => {}
             }
@@ -494,8 +494,18 @@ fn inside_project(scope: Scope, cwd: &Path, path: &Path) -> Result<(), String> {
 
 /// The change to Claude Code's settings for the hooks, if any.
 fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Option<Change>, String> {
-    let path = install::claude_settings_path(scope, cwd).ok_or("can't find your home directory")?;
-    inside_project(scope, cwd, &path)?;
+    let link = install::claude_settings_path(scope, cwd).ok_or("can't find your home directory")?;
+    inside_project(scope, cwd, &link)?;
+    // Your own settings file can be a link (into a dotfiles repo, say): the
+    // change goes to the file it points to, and the backup stays here.
+    // (A project's links were refused above.)
+    let is_link = std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink());
+    let path = if is_link {
+        std::fs::canonicalize(&link)
+            .map_err(|e| format!("{} is a link that can't be followed: {e}", link.display()))?
+    } else {
+        link.clone()
+    };
     let existed = path.exists();
     let before: Value = if existed {
         let text = std::fs::read_to_string(&path)
@@ -524,7 +534,15 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
         return Ok(None);
     }
 
-    let mut summary = vec![format!("Settings file: {}", path.display())];
+    let mut summary = vec![if is_link {
+        format!(
+            "Settings file: {} (a link to {})",
+            link.display(),
+            path.display()
+        )
+    } else {
+        format!("Settings file: {}", path.display())
+    }];
     if opts.add {
         summary.push(format!("Hook command:  {command}"));
         summary.push(format!(
@@ -544,7 +562,7 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
         path,
         contents: Some(serde_json::to_string_pretty(&after).expect("serializable") + "\n"),
         summary,
-        backup: existed,
+        backup: existed.then(|| link.with_extension("json.agent-graph.bak")),
     }))
 }
 
@@ -568,12 +586,15 @@ fn apply(change: &Change) -> Result<(), String> {
         }
         return Ok(());
     };
-    if change.backup {
+    if let Some(backup) = &change.backup {
         // Written like any other file, so a link left at the backup's name
-        // is replaced rather than written through.
-        let backup = path.with_extension("json.agent-graph.bak");
+        // is replaced rather than written through. It holds what the
+        // original does, so it gets the original's permissions.
         std::fs::read(path)
-            .and_then(|original| store::write_atomic(&backup, &original))
+            .and_then(|original| {
+                let permissions = std::fs::metadata(path)?.permissions();
+                store::write_atomic_with(backup, &original, Some(permissions))
+            })
             .map_err(|e| format!("backing up to {}: {e}", backup.display()))?;
         println!("Backed up the old file to {}", backup.display());
     }
