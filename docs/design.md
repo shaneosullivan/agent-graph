@@ -18,7 +18,7 @@ Agent Graph records how AI coding sessions relate to each other and shows it as 
 **Goals**
 
 - Works with any provider. Nothing in the core knows about Claude, Codex, or anyone else. Each provider gets a thin **adapter**.
-- Local first. Recording only ever writes files on this machine, and never touches the network. Sharing is a separate, explicit step: `agent-graph watch-remote`, or pasting a log into the site (§9).
+- Local first. Recording only ever writes files on the machine agent-graph runs on, and never touches the network. Sharing is a separate, explicit step: `agent-graph watch-remote`, or pasting a log into the site (§9).
 - Zero effort for the agent. Data comes from hooks the agent can't forget to call, not from the agent choosing to report.
 
 **Non-goals (for now)**
@@ -409,7 +409,7 @@ Serves port 7777, and prints its link with this run's key, `http://127.0.0.1:777
   - A session that hasn't ended is probably still open in another terminal, and two processes on one conversation would both write to it. So for those the button says **Open a copy** and adds `--fork-session`, which branches the conversation instead.
   - The window: macOS opens a one-off `.command` script (in Terminal, or whatever the user has chosen for those), which deletes itself. Windows uses `start` to run `cmd /K`. Linux uses `$TERMINAL`, or the first common terminal it finds. If none works, the page shows the error and the command to run by hand.
   - Codex and others get the button when their adapters land (`codex resume <id>`).
-  - Only sessions on this computer can be reopened, so the shared site never offers it (below).
+  - Only sessions on the machine agent-graph runs on can be reopened, so the shared site never offers it (below).
 
 How it works:
 - **One graph implementation.** A thread tails the event files (reading only new, complete lines) and tells pages about changes over Server-Sent Events. Pages then ask for the graph again, live or `?until=<event id>`, so the Rust reducer stays the only implementation of the graph logic. There's no JavaScript copy to drift out of step.
@@ -428,7 +428,7 @@ How it works:
     - It's a `POST /api/open?node=<id>`, answered only when the `Origin` header is the viewer's own. Other websites can send requests to localhost too, but browsers always say where a POST came from.
     - Only the node id comes from the page. The command is worked out from the log (`resume.rs`), and only for session ids made of letters, digits, `-` and `_` that start with a letter or digit, so a crafted log can't slip in an option like `--dangerously-skip-permissions`.
     - The folder never reaches a shell's parser unquoted: it's the working directory on Windows, a separate argument on Linux, and single-quoted in the macOS script.
-    - Before launching, the server checks the folder exists and, when the log names one, that the session's transcript does too. Otherwise it says the session isn't on this computer.
+    - Before launching, the server checks the folder exists and, when the log names one, that the session's transcript does too. Otherwise it says the session isn't on this machine (the one the viewer runs on).
 
 ### `agent-graph snapshot`: an image to send
 
@@ -581,7 +581,7 @@ Viewers can step through the log exactly as they can locally, over its recent hi
 - **Hook overhead.** Measured in phase 1 at about 3.6 ms per hook. If that ever matters, a Unix-socket fast path to a resident `view` process is the fallback.
 - **Pairing a spawn with its child.** *Resolved for Claude Code:* `PostToolUse(Agent)` reports `agentId`, which matches `SubagentStart`'s `agent_id` (checked in a live session). The reducer's guess only matters while a foreground agent is still running, and can briefly pair parallel agents of the same type the wrong way round until they return.
 - **Pairing shell-launched sessions.** Nothing names the child when a shell command returns, so the reducer guesses: the oldest unpaired request, preferring the same program (and never one for an agent CLI it surely isn't running, or a background one made long before). Two parallel launches of the same program can be paired the wrong way round. The child's ancestors include the shell each call ran in, but the `PreToolUse` hook runs in a different process and can't see that shell's pid, so this can't be settled yet.
-- **Crashed sessions** never emit `session.ended`. The staleness rule covers this for now. `session.started` now records the agent's process, but a liveness check also needs to know the log came from this machine (a shared or copied log's processes would all look dead), so it waits for a host id in `source`.
+- **Crashed sessions** never emit `session.ended`. The staleness rule covers this for now. `session.started` now records the agent's process, but a liveness check also needs to know the log came from the machine reading it (a shared or copied log's processes would all look dead), so it waits for a host id in `source`.
 - **False "stale?" during long, quiet work.** We only hook the tools that matter to the graph, so an agent that spends 30+ minutes in `Bash`, `Edit` and `Read` calls produces no events and gets flagged, even though it's healthy. Likewise, one long-running command (a 40-minute build) is silent however we hook it. A fix: a lightweight `activity` event on `PreToolUse`/`PostToolUse` for every tool. The node could then show "running `npm test` for 12m", and a node inside a tool call wouldn't be flagged. That's one extra background process per tool call (about 4 ms, never blocking), plus some log growth. Until then, `--stale-minutes` is the knob.
 - **Clock skew between hooks.** Events are ordered by the time each hook process started. Background hooks that start within a millisecond of each other could be recorded out of order. The reducer tolerates the likely cases (e.g. a child starting before its request is seen), but a per-session sequence number may be needed if this shows up in practice.
 - **Privacy.** Redaction defaults must be conservative. Task text and subagent descriptions can still contain sensitive details, so `~/.agent-graph/` is created readable only by the current user.

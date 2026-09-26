@@ -1,6 +1,6 @@
 # Agent Graph
 
-Records how AI coding sessions relate to each other: which session spawned which agents, who is waiting on whom, what's waiting on *you*, what looks stuck, what work is left, and what they sent each other. It works from provider hooks and writes an append-only log on your machine. Nothing leaves it unless you choose to share.
+Records how AI coding sessions relate to each other: which session spawned which agents, who is waiting on whom, what's waiting on *you*, what looks stuck, what work is left, and what they sent each other. It works from provider hooks and writes an append-only log on your local machine. Nothing leaves it unless you choose to share.
 
 Supported so far: **Claude Code**. Runs on Windows, macOS and Linux.
 
