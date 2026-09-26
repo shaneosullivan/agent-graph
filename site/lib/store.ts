@@ -5,6 +5,7 @@ import {
   CHUNKS_PER_QUERY,
   CHUNKS_PER_READ,
   MAX_LOG_BYTES,
+  SCRYPT_CHECKS_PER_LOG_AND_ADDRESS,
   SCRYPT_RUNS_PER_ADDRESS,
   type Source,
   UNLOCK_BUSY_SECONDS,
@@ -354,7 +355,13 @@ function unlockBuckets(id: string, address: string | null): Bucket[] {
     buckets.push(
       { ref: attempts.doc(`pair-${addressKey(address, sid)}`), limit: UNLOCKS_PER_LOG_AND_ADDRESS },
       { ref: attempts.doc(`address-${addressKey(address)}`), limit: UNLOCKS_PER_ADDRESS },
-      // Checking a guess runs scrypt, right or wrong.
+      // Checking a guess runs scrypt, right or wrong: counted at the log,
+      // and in all.
+      {
+        ref: attempts.doc(`checks-${addressKey(address, sid)}`),
+        limit: SCRYPT_CHECKS_PER_LOG_AND_ADDRESS,
+        kept: true,
+      },
       scryptBucket(address),
     );
   }
@@ -426,10 +433,10 @@ async function take(buckets: Bucket[]): Promise<{ wait: number } | { since: numb
 /**
  * Counts a guess at log `id`'s password from `address`, unless the log, the
  * address, or the two together have had their fill of wrong guesses this
- * window, or the address its fill of scrypt runs: then it isn't counted,
- * and the seconds until they may try again are returned. Guesses made at
- * once can't get past a limit; a right guess is given back with
- * `giveBackUnlockAttempt` (but for its scrypt run).
+ * window, or the address its fill of scrypt runs (at this log, or in all):
+ * then it isn't counted, and the seconds until they may try again are
+ * returned. Guesses made at once can't get past a limit; a right guess is
+ * given back with `giveBackUnlockAttempt` (but for its scrypt runs).
  */
 export async function takeUnlockAttempt(
   id: string,
