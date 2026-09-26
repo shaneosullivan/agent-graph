@@ -40,13 +40,15 @@ const QUICK: &str = "claude-code:c0ffee00-0000-4000-8000-000000000003";
 const UNDER: &str = "claude-code:c0ffee00-0000-4000-8000-000000000004";
 const GUESSED: &str = "claude-code:c0ffee00-0000-4000-8000-000000000005";
 const ENDED: &str = "claude-code:c0ffee00-0000-4000-8000-000000000006";
+const EARLY: &str = "claude-code:c0ffee00-0000-4000-8000-000000000007";
 
 /// A log with a bit of everything, so that everything the reducer keeps
 /// matters across some point in it: the session fixture (tasks, agents,
 /// requests, waits, messages, a question); a session it starts from its
 /// shell, which ends, with a late status, and is resumed; one that ends as
-/// soon as it starts; one linked by its process; and one paired by a guess
-/// that the request's return puts right.
+/// soon as it starts; one linked by its process; one paired by a guess
+/// that the request's return puts right; and one whose start sorts before
+/// its request.
 fn log() -> Vec<Envelope> {
     let mut events = translate(
         &fixture("claude-code/session.jsonl"),
@@ -89,6 +91,17 @@ fn log() -> Vec<Envelope> {
         ev(95_000, ENDED, "session.ended", json!({})),
         ev(95_500, ENDED, "status", json!({"state": "idle"})),
     ]);
+    // Paired with a request that sorts after its start, in the same
+    // millisecond (`unpaired_runs`), once the calls before have returned.
+    events.push(ev(99_000, SESSION, "status", json!({"state": "idle"})));
+    let mut early = [
+        with_parent(ev(100_000, EARLY, "session.started", json!({"link_method": "env"})), SESSION),
+        ev(100_000, SESSION, "spawn.requested", json!({"call_id": "e1", "kind": "session", "agent_type": "claude"})),
+    ];
+    for (i, e) in early.iter_mut().enumerate() {
+        e.id = format!("{}{i:016}", &e.id[..10]);
+    }
+    events.extend(early);
     events.sort_by_cached_key(sort_key);
     events
 }
@@ -258,9 +271,12 @@ fn a_keyframe_that_couldnt_be_is_refused() {
         state[index]["somewhere"] = value;
         state
     };
+    let mut runs = state.clone();
+    runs["unpaired_runs"][2] = json!(["x:nobody"]);
     for bad in [
         with(&moved, 0, 1),
         with(&twice, 0, 1),
+        with(&runs, 0, 1),
         with(&missing("processes", json!("x:nobody")), 0, 1),
         with(&missing("requesters", json!(["x:nobody"])), 0, 1),
         with(&missing("waiting_on", json!(["x:nobody"])), 0, 1),
