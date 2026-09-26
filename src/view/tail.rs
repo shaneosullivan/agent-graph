@@ -16,7 +16,7 @@ pub struct Tail {
     offsets: BTreeMap<PathBuf, u64>,
     /// Every event, in the order the reducer applies them. Shared, so a
     /// request can take them without copying, and work without the lock;
-    /// changing them then makes a copy.
+    /// changing them then makes a copy, of pointers to each (see `Timed`).
     pub events: Arc<Vec<Timed>>,
     /// Lines that weren't valid events.
     pub skipped: usize,
@@ -148,6 +148,27 @@ mod tests {
         assert!(tail.poll().unwrap());
         assert_eq!(tail.events.len(), 2);
         assert_eq!(tail.skipped, 0);
+    }
+
+    /// R55: new events while a request holds the events (a snapshot) copy
+    /// only pointers to them, not the events themselves.
+    #[test]
+    fn a_poll_while_the_events_are_held_doesnt_copy_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("x-1.jsonl");
+        let mut tail = Tail::new(dir.path());
+        append(&file, line("01A", 1).as_bytes()).unwrap();
+        tail.poll().unwrap();
+        let held = tail.events.clone();
+        append(&file, line("01B", 2).as_bytes()).unwrap();
+        assert!(tail.poll().unwrap());
+        assert_eq!(
+            (held.len(), tail.events.len()),
+            (1, 2),
+            "the snapshot stays"
+        );
+        let (before, after): (&Envelope, &Envelope) = (&held[0].event, &tail.events[0].event);
+        assert!(std::ptr::eq(before, after), "the same event, not a copy");
     }
 
     #[test]

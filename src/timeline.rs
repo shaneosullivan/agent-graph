@@ -3,6 +3,7 @@
 //! Everything here is pure: events and a clock in, JSON out.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -15,14 +16,16 @@ use crate::resume;
 #[derive(Debug, Clone)]
 pub struct Timed {
     pub at: SystemTime,
-    pub event: Envelope,
+    /// Shared, so a copy of a list of them (the local viewer's, changed
+    /// while a request holds it) copies only pointers.
+    pub event: Arc<Envelope>,
 }
 
 impl Timed {
     pub fn new(event: Envelope) -> Timed {
         Timed {
             at: reducer::event_time(&event),
-            event,
+            event: Arc::new(event),
         }
     }
 }
@@ -360,7 +363,7 @@ fn reduce(events: &[Timed], now: SystemTime, stale_after: Duration) -> Graph {
     let (base, events) = split_base(events);
     reducer::reduce_from(
         base,
-        events.iter().map(|t| t.event.clone()).collect(),
+        events.iter().map(|t| (*t.event).clone()).collect(),
         &reducer::Options { now, stale_after },
     )
 }
