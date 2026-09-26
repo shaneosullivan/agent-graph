@@ -59,8 +59,8 @@ Status is updated as each is done.
 ### R8. Resume can run a `claude` planted in the session's folder
 - **Where:** `src/view/open.rs`
 - **Problem:** On Windows, `cmd` looks for commands in the current directory first, and the command runs in the session's (untrusted) folder, so a `claude.cmd` there runs instead. The same happens elsewhere when `PATH` has a relative entry.
-- **Fix:** resolve the agent to an absolute path from `PATH` (ignoring relative entries) before launching.
-- **Status:** open
+- **Fix:** the agent (and on Linux the terminal) is found on `PATH` by full path, skipping relative entries (and trying `PATHEXT` on Windows), and run by that path; the agent gets a `PATH` without relative entries (the macOS and Linux scripts rebuild it themselves, never empty); Windows launches `%ComSpec%` with `NoDefaultCurrentDirectoryInExePath`, and refuses a path with characters `cmd` can't be trusted to pass along. The "run it yourself" command names the agent by full path too.
+- **Status:** fixed. Tests: `the_agent_is_found_by_full_path_and_never_in_the_folder`, `relative_path_entries_are_dropped_for_the_agent`, `paths_cmd_would_misread_are_refused`, `the_command_to_type_yourself` (src/view/open.rs). Reviewed (three rounds).
 
 ### R9. `agent-graph run` un-ignores signals, so `nohup` and background jobs die
 - **Where:** `src/run.rs`

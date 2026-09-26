@@ -268,12 +268,10 @@ fn opens_a_session_only_for_the_viewers_own_page() {
     let (status, reply) = post(port, &path, Some(&own));
     assert_eq!(status, 200, "{reply}");
     assert_eq!(reply["ok"], true);
-    assert!(
-        reply["command"]
-            .as_str()
-            .unwrap()
-            .ends_with(&format!("claude --resume {id}"))
-    );
+    // Named by its full path when it's on PATH (R8), so just its gist.
+    let command = reply["command"].as_str().unwrap();
+    assert!(command.ends_with(&format!(" --resume {id}")), "{command}");
+    assert!(command.contains("claude"), "{command}");
     let runs = opened(id);
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].program, "claude");
