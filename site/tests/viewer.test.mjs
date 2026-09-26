@@ -1,6 +1,7 @@
 // The viewer's behaviour, in jsdom. See viewer-harness.mjs.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { asServer, graph, loadViewer, node, until } from "./viewer-harness.mjs";
@@ -767,4 +768,44 @@ test("R36: an address that isn't a well-formed one names nothing, and the page s
   assert.equal(v.S.root, "x:a");
   window.location.hash = "#x%3Ab";
   await until(() => v.S.root === "x:b" && v.S.live.root === "x:b");
+});
+
+test("R37: long unbroken text wraps in cards and panels", async (t) => {
+  const long = (what) => `${what}-${"x".repeat(300)}`;
+  const a = node("x:a", { title: long("title"), cwd: `/${long("folder")}`, headline: long("headline"), children: ["x:a/b"] });
+  const b = node("x:a/b", {
+    parent: "x:a",
+    agent_type: long("type"),
+    purpose: long("purpose"),
+    headline: long("headline"),
+    state: "input_required",
+    attention: long("attention"),
+    messages: [{ direction: "received", peer: "x:a", ts: a.started_at, summary: long("summary"), body: long("body") }],
+  });
+  const window = loadViewer(t, { graph: async () => graph([a, b]) }, { hash: "#x:a" });
+  const doc = window.document;
+  const style = doc.createElement("style");
+  style.textContent = readFileSync(new URL("../../src/view/assets/app.css", import.meta.url), "utf8");
+  doc.head.append(style);
+  await until(() => doc.querySelectorAll("#view .node").length === 2);
+  window.__viewer.selectNode("x:a/b");
+
+  // Whether it may break anywhere: from its own style or (as overflow-wrap
+  // is inherited) the nearest that sets it. jsdom doesn't inherit it itself.
+  const wraps = (el) => {
+    for (let e = el; e; e = e.parentElement) {
+      const value = window.getComputedStyle(e).overflowWrap;
+      if (value && value !== "normal") return value === "anywhere" || value === "break-word";
+    }
+    return false;
+  };
+  const texts = [...doc.querySelectorAll("#view *, #detail *")].filter((el) =>
+    [...el.childNodes].some((k) => k.nodeType === 3 && /x{300}/.test(k.data)),
+  );
+  assert.ok(texts.length >= 10, `${texts.length} texts`);
+  for (const el of texts) {
+    // Cut short with an ellipsis instead is fine too.
+    const cut = (e) => e && (window.getComputedStyle(e).textOverflow === "ellipsis" || cut(e.parentElement));
+    assert.ok(wraps(el) || cut(el), `${el.className || el.tagName}: ${el.textContent.slice(0, 20)}`);
+  }
 });
