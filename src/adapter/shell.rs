@@ -520,11 +520,24 @@ struct Level {
     /// background) starts in the output.
     list: usize,
     /// For each compound command open at this level (`{ … }`, `if … fi`,
-    /// …), where the list it's part of starts.
-    compounds: Vec<usize>,
+    /// …), where the list it's part of starts, and whether it's a
+    /// function's body.
+    compounds: Vec<(usize, bool)>,
+    /// How many of `compounds` are functions' bodies, which run only when
+    /// the function is called.
+    functions: usize,
+    /// A function's name has just been read, so a `{` starts its body.
+    defines: bool,
     /// The runs of the output this level's shell has put in the background
     /// (as `(start, end)`) and not yet waited for.
     jobs: Vec<(usize, usize)>,
+    /// The command being read follows a `|`, in a pipeline.
+    piped: bool,
+    /// The pipeline being read waits (`wait`), and so does the list, before
+    /// it: they take back this shell's jobs when the list ends, unless a
+    /// `&` puts it in the background.
+    pipeline_waits: bool,
+    list_waits: bool,
 }
 
 impl Level {
@@ -547,6 +560,7 @@ impl Level {
         if (self.lead == self.words.len() || ends_case) && self.opened != Opened::Array {
             // `function NAME` comes before a function's body, as keywords do.
             let name = self.lead > 0 && self.words[self.lead - 1] == "function";
+            let body = std::mem::take(&mut self.defines) && word == "{";
             match word.as_str() {
                 "case" => self.cases += 1,
                 "esac" => self.cases = self.cases.saturating_sub(1),
@@ -554,15 +568,18 @@ impl Level {
             }
             // A compound command is one command of the list it's in.
             if COMPOUND_OPEN.contains(&word.as_str()) {
-                self.compounds.push(self.list);
+                self.compounds.push((self.list, body));
+                self.functions += usize::from(body);
             } else if COMPOUND_CLOSE.contains(&word.as_str()) {
-                if let Some(list) = self.compounds.pop() {
+                if let Some((list, body)) = self.compounds.pop() {
                     self.list = list;
+                    self.functions -= usize::from(body);
                 }
             }
             if name || word == "function" || KEYWORDS.contains(&word.as_str()) {
                 self.lead += 1;
             }
+            self.defines |= name;
         }
         // `case WORD in`: its first pattern follows.
         let patterns = word == "in"
@@ -588,20 +605,36 @@ impl Level {
         } else if !self.words.is_empty() {
             // `wait` waits for the jobs this shell started (`wait $pid`, for
             // one of them), so they're not in the background after all;
-            // `wait -n`, for only the first to finish.
+            // `wait -n`, for only the first to finish. Not in a pipeline (a
+            // subshell), nor in a function's body.
             let program = skip_prefixes(&self.words);
-            if program.first().is_some_and(|p| p == "wait") && !program.iter().any(|a| a == "-n") {
-                self.jobs.clear();
+            if program.first().is_some_and(|p| p == "wait")
+                && !program.iter().any(|a| a == "-n")
+                && !self.piped
+                && self.functions == 0
+            {
+                self.pipeline_waits = true;
             }
             out.push(std::mem::take(&mut self.words));
         }
+        self.piped = false;
         self.lead = 0;
     }
 
-    /// Ends the command, and the list it's in.
+    /// Ends the command, and the list it's in, where a `wait` in it takes
+    /// back this shell's jobs.
     fn end_list(&mut self, out: &mut Vec<Vec<String>>) {
         self.end_command(out);
         self.list = out.len();
+        if std::mem::take(&mut self.pipeline_waits) | std::mem::take(&mut self.list_waits) {
+            self.jobs.clear();
+        }
+    }
+
+    /// Ends the command, and the pipeline it's in (`&&`, `||`).
+    fn end_pipeline(&mut self, out: &mut Vec<Vec<String>>) {
+        self.end_command(out);
+        self.list_waits |= std::mem::take(&mut self.pipeline_waits);
     }
 
     /// Whether what's been read of this command is a function's name, so
@@ -642,7 +675,7 @@ fn close(
     out: &mut Vec<Vec<String>>,
     kept: &mut Vec<(usize, usize)>,
 ) {
-    level.end_command(out);
+    level.end_list(out);
     kept.append(&mut level.jobs);
     let opened = level.opened;
     let empty = out.len() == level.start;
@@ -655,6 +688,7 @@ fn close(
     } else if empty && level.names_function() {
         // `NAME()` (or `function NAME()`) defines a function: that runs
         // nothing, and its body is a command of its own.
+        level.defines = true;
         level.words.clear();
         level.word.clear();
         level.in_word = false;
@@ -908,10 +942,15 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
             }
             '|' => {
                 // `||`, or `|&` (which pipes standard error too): not a `&`.
-                if chars.next_if_eq(&'|').is_none() {
+                if chars.next_if_eq(&'|').is_some() {
+                    cur.end_pipeline(&mut out);
+                } else {
                     chars.next_if_eq(&'&');
+                    // A `wait` in a pipeline runs in a subshell of its own.
+                    cur.end_command(&mut out);
+                    cur.pipeline_waits = false;
+                    cur.piped = true;
                 }
-                cur.end_command(&mut out);
             }
             // `2>&1`, `&>` and `<&3` redirect: the `&` is part of the word.
             '&' if cur.word.ends_with(['>', '<']) || chars.peek() == Some(&'>') => {
@@ -919,13 +958,16 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                 cur.in_word = true;
             }
             // `&&` runs the next command after this one.
-            '&' if chars.next_if_eq(&'&').is_some() => cur.end_command(&mut out),
+            '&' if chars.next_if_eq(&'&').is_some() => cur.end_pipeline(&mut out),
             // A lone `&` puts the list before it in the background, with
             // any groups and substitutions in it.
             '&' => {
                 cur.end_command(&mut out);
                 cur.jobs.push((cur.list, out.len()));
                 cur.list = out.len();
+                // A `wait` in it runs in the background, waiting for nothing.
+                cur.pipeline_waits = false;
+                cur.list_waits = false;
             }
             _ => {
                 cur.word.push(c);
@@ -937,7 +979,7 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
     while !around.is_empty() {
         close(&mut cur, &mut around, &mut out, &mut jobs);
     }
-    cur.end_command(&mut out);
+    cur.end_list(&mut out);
     jobs.append(&mut cur.jobs);
     // Which commands are in a job: a count of the jobs each starts and ends.
     let mut edges = vec![0i64; out.len() + 1];
@@ -1519,6 +1561,23 @@ mod tests {
         // ...and not `wait -n`, which waits for only one of them.
         assert_eq!(launch("claude -p a & claude -p b & wait -n"), bg("claude"));
         assert_eq!(launch("echo wait & claude -p a &"), bg("claude"));
+        // Only a `wait` the shell itself runs: not one in a pipeline (a
+        // subshell), one put in the background, or a function's body.
+        for command in [
+            "claude -p a & wait | cat",
+            "claude -p a & cat | wait",
+            "claude -p a & wait &",
+            "claude -p a & wait && echo done &",
+            "claude -p a & f() { wait; }",
+            "claude -p a & function f { wait; }",
+            "claude -p a & function f() {\n  wait\n}",
+        ] {
+            assert_eq!(launch(command), bg("claude"), "{command:?}");
+        }
+        // But one after a pipeline, or after the function's body, does.
+        assert_eq!(launch("claude -p a & echo | cat; wait"), fg("claude"));
+        assert_eq!(launch("claude -p a & f() { :; }; wait"), fg("claude"));
+        assert_eq!(launch("claude -p a & wait && echo done"), fg("claude"));
     }
 
     /// R59: a `case` pattern is text to match, not a command, whichever
