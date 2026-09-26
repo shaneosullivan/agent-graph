@@ -89,7 +89,7 @@ Events live in `~/.agent-graph/events/`, one JSON Lines file per session. The fo
 | `AGENT_GRAPH_RAW=1` | Also save raw hook payloads to `raw/`, for building adapters |
 | `AGENT_GRAPH_CAPTURE_BODIES=1` | Keep message bodies and final agent messages (off by default) |
 | `AGENT_GRAPH_NOW` | Pretend it's this time (RFC 3339) when reading logs; used to view the examples |
-| `AGENT_GRAPH_AGENT_COMMANDS` | More programs (comma separated) that start an agent session when an agent runs them from its shell |
+| `AGENT_GRAPH_AGENT_COMMANDS` | More programs (comma separated) that start an agent session when an agent runs them from its shell (wrappers that start Claude Code, say): any session started from that shell may be the one they started |
 
 A session passes its identity to anything it starts through `AGENT_GRAPH_PARENT` and a W3C `TRACEPARENT` in its shell's environment, so a session started from another links itself under it. When those are missing, it's matched by process instead.
 

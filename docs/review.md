@@ -156,7 +156,7 @@ Status is updated as each is done.
 - **Where:** `src/reducer.rs` (`bind_session_by_guess`)
 - **Problem:** With no request for its own program, a child takes the oldest open request of any program, including a background one from long ago, and takes its purpose and type.
 - **Fix:** don't pair across known, different programs, and only pair background requests made shortly before.
-- **Status:** open
+- **Status:** fixed. `bind_session_by_guess` no longer considers a request for an agent CLI the child surely isn't running (`surely_not`: one of the shell adapter's built-in agent CLIs that the child's provider, per `PROVIDER_PROGRAMS`, doesn't run; a wrapper added with `AGENT_GRAPH_AGENT_COMMANDS`, or an `agent-graph run` child, might be it), nor a background request made more than `BACKGROUND_START` (10 minutes: the command can do other things first) before the child started; one made more than `FRESH_START` (a minute) before comes after the rest, since it may never launch anything (a failed launch, or R25's false positives). It takes the first request for the child's own program, or failing that the first that might be it. `adapter::PROVIDERS` lists every adapter's provider, and a test checks each is in `PROVIDER_PROGRAMS`. The site's WebAssembly is rebuilt. Tests: `a_shell_session_isnt_paired_with_another_programs_request`, `only_a_recent_background_request_is_paired_with_a_shell_session` (tests/reducer.rs), `within_needs_both_times`, `every_provider_says_which_programs_it_runs` (src/reducer.rs). Reviewed (three rounds). Still open: R57.
 
 ### R25. The shell parser sees launches that aren't
 - **Where:** `src/adapter/shell.rs`
@@ -305,4 +305,10 @@ Status is updated as each is done.
 - **Where:** `src/view/assets/app.js` (`refresh`), `site/public/viewer/site-source.js`
 - **Problem:** Found reviewing R23. A refresh asks for the graph and then the timeline, and each reduces every event; on the site, that's in the page's main thread (about 130 ms each for 32,800 events), so the page stalls on busy logs.
 - **Fix:** one request for both (reducing once), and run the WebAssembly in a Worker on the site.
+- **Status:** open
+
+### R57. A named or wrapped `agent-graph run` can take another program's request
+- **Where:** `src/reducer.rs` (`bind_session_by_guess`), `src/run.rs`, `src/adapter/shell.rs`
+- **Problem:** Found reviewing R24. A run session is named for the run (`--name workers`) or the wrapper it was given (`npx`), not the agent CLI, so it might answer any request, including one for a CLI with no adapter (`codex exec … &`, which nothing else ever claims): it then takes that request's program, purpose and `background`, for good, and its own request shows as starting for the whole run.
+- **Fix:** record which requests were for `agent-graph run` (the shell adapter knows), and pair a run only with those, and nothing else with them; or have `run.rs` record the program it wraps, found as the shell adapter finds it.
 - **Status:** open

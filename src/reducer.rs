@@ -713,21 +713,35 @@ impl Reducer {
         };
         let parent_session = parent.split('/').next().unwrap_or(&parent).to_string();
         let started = self.nodes[child].started_at.clone().unwrap_or_default();
-        let mut candidates: Vec<(String, String, String, Option<String>)> =
+        let started = started.as_str();
+        let child_node = &self.nodes[child];
+        let mut candidates: Vec<(bool, String, String, String, Option<String>)> =
             family(&self.nodes, &parent_session)
                 .flat_map(|(id, n)| {
                     n.spawns
                         .iter()
                         .filter(|s| {
                             // A background launch returns before its child
-                            // starts; a foreground one only once it's done.
+                            // starts, which it does soon after (or a little
+                            // later, if the command does other things
+                            // first); a foreground one returns only once
+                            // its child is done.
                             s.kind == SpawnKind::Session
                                 && s.child.is_none()
                                 && (s.background || !s.returned)
-                                && s.requested_at <= started
+                                && *s.requested_at <= *started
+                                && (!s.background
+                                    || within(&s.requested_at, started, BACKGROUND_START))
+                                // Not one for an agent CLI it surely isn't running.
+                                && s.agent_type.as_deref().is_none_or(|p| !surely_not(child_node, p))
                         })
                         .map(move |s| {
                             (
+                                // Behind the rest, a background request too
+                                // old to have launched it just now: it may
+                                // never launch anything (it failed, or wasn't
+                                // a launch at all).
+                                s.background && !within(&s.requested_at, started, FRESH_START),
                                 s.requested_at.clone(),
                                 id.clone(),
                                 s.call_id.clone(),
@@ -737,12 +751,13 @@ impl Reducer {
                 })
                 .collect();
         candidates.sort();
-        let child_node = &self.nodes[child];
+        // The first for its own program; failing that, the first that might
+        // be it.
         let pick = candidates
             .iter()
-            .find(|c| c.3.as_deref().is_some_and(|p| runs(child_node, p)))
+            .find(|c| c.4.as_deref().is_some_and(|p| runs(child_node, p)))
             .or_else(|| candidates.first());
-        if let Some((_, requester, call_id, _)) = pick.cloned() {
+        if let Some((_, _, requester, call_id, _)) = pick.cloned() {
             self.bind(&requester, &call_id, child);
         }
     }
@@ -931,6 +946,39 @@ impl Reducer {
     }
 }
 
+/// How soon a session launched in the background starts after its request,
+/// at most. Generous: the command can do other things first (`npm ci && claude …`).
+const BACKGROUND_START: Duration = Duration::from_secs(600);
+
+/// How soon it usually does.
+const FRESH_START: Duration = Duration::from_secs(60);
+
+/// Whether `later` is no more than `max` after `earlier` (both RFC 3339).
+fn within(earlier: &str, later: &str, max: Duration) -> bool {
+    let at = |ts: &str| humantime::parse_rfc3339_weak(ts).ok();
+    match (at(earlier), at(later)) {
+        (Some(a), Some(b)) => b.duration_since(a).is_ok_and(|gap| gap <= max),
+        _ => false,
+    }
+}
+
+/// The agent CLIs the sessions of each provider (that has an adapter) run.
+const PROVIDER_PROGRAMS: &[(&str, &[&str])] = &[("claude-code", &["claude"])];
+
+/// Whether session `node` surely isn't running `program`, the command a
+/// spawn request named: `node`'s provider is one whose CLIs are known, and
+/// `program` is another of the agent CLIs the shell adapter knows. Anything
+/// less certain (a wrapper, a command added by `AGENT_GRAPH_AGENT_COMMANDS`,
+/// an `agent-graph run`) might be it.
+fn surely_not(node: &Node, program: &str) -> bool {
+    PROVIDER_PROGRAMS
+        .iter()
+        .find(|(provider, _)| *provider == node.provider)
+        .is_some_and(|(_, programs)| {
+            crate::adapter::shell::AGENT_COMMANDS.contains(&program) && !programs.contains(&program)
+        })
+}
+
 /// Whether session `node` is (probably) running `program`, the command a
 /// spawn request named: `claude` for a `claude-code` session, or the program
 /// `agent-graph run` was given.
@@ -979,5 +1027,60 @@ fn headline(node: &Node) -> Option<String> {
         None if pending == 1 => Some("1 task pending".to_string()),
         None if pending > 1 => Some(format!("{pending} tasks pending")),
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R24: every provider an adapter records says which agent CLIs its
+    /// sessions run (or its children would be paired with any program's
+    /// request), and they're ones the shell adapter knows.
+    #[test]
+    fn every_provider_says_which_programs_it_runs() {
+        for provider in crate::adapter::PROVIDERS {
+            let adapter = crate::adapter::by_name(provider).expect(provider);
+            assert_eq!(adapter.provider(), *provider, "the id its nodes have");
+            let (_, programs) = PROVIDER_PROGRAMS
+                .iter()
+                .find(|(p, _)| p == provider)
+                .unwrap_or_else(|| panic!("{provider} isn't in PROVIDER_PROGRAMS"));
+            let mut reducer = Reducer::default();
+            let id = format!("{provider}:s");
+            reducer.ensure(&id, Some(provider), "2026-09-25T10:00:00.000Z");
+            let node = &reducer.nodes[&id];
+            assert_eq!(node.provider, *provider);
+            for program in *programs {
+                assert!(
+                    crate::adapter::shell::AGENT_COMMANDS.contains(program),
+                    "{program}"
+                );
+                assert!(runs(node, program), "{provider} runs {program}");
+                assert!(!surely_not(node, program));
+            }
+        }
+    }
+
+    /// R24: a time that can't be read is never within a window.
+    #[test]
+    fn within_needs_both_times() {
+        let t = "2026-09-25T10:00:00.000Z";
+        assert!(within(
+            t,
+            "2026-09-25T10:00:30.000Z",
+            Duration::from_secs(60)
+        ));
+        assert!(!within(
+            t,
+            "2026-09-25T10:02:00.000Z",
+            Duration::from_secs(60)
+        ));
+        assert!(
+            !within("2026-09-25T10:02:00.000Z", t, Duration::from_secs(60)),
+            "before it"
+        );
+        assert!(!within("not a time", t, Duration::from_secs(60)));
+        assert!(!within(t, "", Duration::from_secs(60)));
     }
 }

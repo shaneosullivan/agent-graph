@@ -465,3 +465,165 @@ fn correcting_a_guess_leaves_other_sessions_requests_alone() {
     assert_eq!(child("x:t", "c").as_deref(), Some("x:t/a"), "x:t's is kept");
     assert_eq!(graph.nodes["x:t/a"].spawned_by.as_deref(), Some("c"));
 }
+
+/// A session `child` (from provider `provider`, with `data`) started under `x:p`.
+fn shell_child(secs: u64, child: &str, provider: &str, data: Value) -> Envelope {
+    let mut e = under(ev(secs, child, "session.started", data), "x:p");
+    e.source = Some(agent_graph::event::Source {
+        provider: provider.into(),
+        provider_version: None,
+        adapter: None,
+    });
+    e
+}
+
+fn session_request(secs: u64, call: &str, program: Option<&str>, background: bool) -> Envelope {
+    let mut data = json!({"call_id": call, "kind": "session", "background": background});
+    if let Some(p) = program {
+        data["agent_type"] = json!(p);
+    }
+    ev(secs, "x:p", "spawn.requested", data)
+}
+
+/// Which request the child session `child` was paired with.
+fn paired_with(events: Vec<Envelope>, child: &str) -> Option<String> {
+    reduce_at(events, 100_000).nodes[child].spawned_by.clone()
+}
+
+/// R24: a session started from a shell isn't paired with a request for
+/// another program it surely isn't running (it would take that request's
+/// purpose and type, for good), but anything that might be it still is.
+#[test]
+fn a_shell_session_isnt_paired_with_another_programs_request() {
+    let start = || ev(0, "x:p", "session.started", json!({}));
+    let claude = || shell_child(5, "claude-code:c", "claude-code", json!({}));
+
+    // codex is another agent CLI, which Claude Code sessions don't run.
+    assert_eq!(
+        paired_with(
+            vec![
+                start(),
+                session_request(1, "k", Some("codex"), false),
+                claude()
+            ],
+            "claude-code:c"
+        ),
+        None
+    );
+    // Its own program's; one whose program isn't known; a command added
+    // with AGENT_GRAPH_AGENT_COMMANDS (a wrapper, say).
+    for program in [Some("claude"), None, Some("ccr")] {
+        assert_eq!(
+            paired_with(
+                vec![start(), session_request(1, "k", program, false), claude()],
+                "claude-code:c"
+            )
+            .as_deref(),
+            Some("k"),
+            "{program:?}"
+        );
+    }
+    // `agent-graph run --name build -- claude …`: named for the run, so it might be anything.
+    let run = shell_child(5, "run:r", "run", json!({"title": "build"}));
+    assert_eq!(
+        paired_with(
+            vec![start(), session_request(1, "k", Some("claude"), false), run],
+            "run:r"
+        )
+        .as_deref(),
+        Some("k")
+    );
+
+    // Its own program's first, then the oldest: before an older one whose
+    // program isn't known, and before a newer one of its own.
+    assert_eq!(
+        paired_with(
+            vec![
+                start(),
+                session_request(1, "unknown", None, false),
+                session_request(2, "own", Some("claude"), false),
+                session_request(3, "newer", Some("claude"), false),
+                claude(),
+            ],
+            "claude-code:c"
+        )
+        .as_deref(),
+        Some("own")
+    );
+    // None for its own program: the oldest that might be it.
+    assert_eq!(
+        paired_with(
+            vec![
+                start(),
+                session_request(1, "older", None, false),
+                session_request(2, "newer", Some("ccr"), false),
+                claude(),
+            ],
+            "claude-code:c"
+        )
+        .as_deref(),
+        Some("older")
+    );
+    // An `agent-graph run -- claude …` runs `claude`, too.
+    let run = shell_child(5, "run:r", "run", json!({"title": "claude"}));
+    assert_eq!(
+        paired_with(
+            vec![
+                start(),
+                session_request(1, "unknown", None, false),
+                session_request(2, "own", Some("claude"), false),
+                run,
+            ],
+            "run:r"
+        )
+        .as_deref(),
+        Some("own")
+    );
+}
+
+/// R24: a background request returns at once, so a session started long
+/// after it (ten minutes, allowing for what the command did first) isn't the
+/// one it launched; a foreground request waits for its child, however long.
+#[test]
+fn only_a_recent_background_request_is_paired_with_a_shell_session() {
+    let paired = |gap: u64, background: bool| {
+        paired_with(
+            vec![
+                ev(0, "x:p", "session.started", json!({})),
+                session_request(1, "k", Some("claude"), background),
+                shell_child(1 + gap, "claude-code:c", "claude-code", json!({})),
+            ],
+            "claude-code:c",
+        )
+    };
+    assert_eq!(paired(5, true).as_deref(), Some("k"), "just after");
+    assert_eq!(paired(600, true).as_deref(), Some("k"), "ten minutes after");
+    assert_eq!(paired(601, true), None, "longer");
+    assert_eq!(
+        paired(3600, false).as_deref(),
+        Some("k"),
+        "in the foreground"
+    );
+
+    // A background request too old to have launched it just now (it may
+    // never launch anything) comes after a fresh one...
+    let pick = |background_at: u64, foreground_at: u64| {
+        paired_with(
+            vec![
+                ev(0, "x:p", "session.started", json!({})),
+                session_request(background_at, "bg", Some("claude"), true),
+                session_request(foreground_at, "fg", Some("claude"), false),
+                shell_child(200, "claude-code:c", "claude-code", json!({})),
+            ],
+            "claude-code:c",
+        )
+    };
+    assert_eq!(pick(20, 199).as_deref(), Some("fg"), "three minutes old");
+    assert_eq!(pick(139, 199).as_deref(), Some("fg"), "61 s old");
+    // ...but a fresh one is taken oldest first (`claude -p a &`, then `claude -p b`).
+    assert_eq!(pick(198, 199).as_deref(), Some("bg"));
+    assert_eq!(pick(140, 199).as_deref(), Some("bg"), "60 s old");
+    // A foreground request is never too old: it's still waiting for its
+    // child (`make build && claude -p …`).
+    assert_eq!(pick(199, 20).as_deref(), Some("fg"));
+}

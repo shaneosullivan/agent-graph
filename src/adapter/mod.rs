@@ -66,6 +66,10 @@ pub trait Adapter {
     }
 }
 
+/// The provider ids the adapters record (`by_name` knows each; keep them
+/// in step, and add each to the reducer's `PROVIDER_PROGRAMS`).
+pub const PROVIDERS: &[&str] = &["claude-code"];
+
 pub fn by_name(name: &str) -> Option<Box<dyn Adapter>> {
     match name {
         "claude-code" | "claude" => Some(Box::new(claude_code::ClaudeCode)),
