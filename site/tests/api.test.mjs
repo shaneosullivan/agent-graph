@@ -43,7 +43,12 @@ async function content(id, after = "", cookie) {
   const res = await fetch(`${BASE}/api/logs/${id}/content?after=${after}`, {
     headers: cookie ? { Cookie: cookie } : {},
   });
-  return { status: res.status, text: await res.text(), last: res.headers.get("x-last-chunk") };
+  return {
+    status: res.status,
+    text: await res.text(),
+    last: res.headers.get("x-last-chunk"),
+    more: res.headers.get("x-more") === "1",
+  };
 }
 
 test("create, append with the key, and read back in order", async () => {
@@ -96,6 +101,43 @@ test("a chunk is never replaced with different bytes", async () => {
   assert.equal((await append(other.id, offset, line(2) + line(3), other.writeToken)).status, 204);
   assert.equal((await append(other.id, offset, line(2), other.writeToken)).status, 409);
   assert.equal((await content(other.id)).text, line(1) + line(2) + line(3));
+});
+
+// R17: one read returns a bounded number of bytes, however big the chunks,
+// and the reader pages through the rest.
+test("a read stops at a byte budget, and paging gets the rest", async () => {
+  const big = (n) => line(n).replace('"working"', `"working","summary":"${"x".repeat(400_000)}"`);
+  const parts = Array.from({ length: 8 }, (_, i) => big(i + 1));
+  const log = await create(parts[0], { "X-Agent-Graph-Source": "watch" });
+  let offset = Buffer.byteLength(parts[0]);
+  for (const part of parts.slice(1)) {
+    assert.equal((await append(log.id, offset, part, log.writeToken)).status, 204);
+    offset += Buffer.byteLength(part);
+  }
+
+  const first = await content(log.id);
+  assert.equal(first.status, 200);
+  assert.ok(Buffer.byteLength(first.text) <= 2.5 * 1024 * 1024, `${Buffer.byteLength(first.text)} bytes in one read`);
+  assert.ok(first.more, "says there's more");
+
+  let text = first.text;
+  let page = first;
+  while (page.more) {
+    page = await content(log.id, page.last);
+    assert.ok(Buffer.byteLength(page.text) <= 2.5 * 1024 * 1024);
+    text += page.text;
+  }
+  assert.equal(text, parts.join(""));
+
+  // Chunks whose offsets overlap (only a log's own writer could store
+  // them) are no way round it.
+  const crafted = await create(parts[0]);
+  for (let i = 1; i < parts.length; i++) {
+    assert.equal((await append(crafted.id, i, parts[i], crafted.writeToken)).status, 204);
+  }
+  const read = await content(crafted.id);
+  assert.ok(Buffer.byteLength(read.text) <= 2.5 * 1024 * 1024, `${Buffer.byteLength(read.text)} bytes in one read`);
+  assert.ok(read.more);
 });
 
 // R16: a late original racing its retry: every copy is accepted, once.

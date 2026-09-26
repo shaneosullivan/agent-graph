@@ -1,6 +1,6 @@
 import { FieldPath, Timestamp } from "firebase-admin/firestore";
 
-import { CHUNKS_PER_READ, type Source } from "./config";
+import { BYTES_PER_READ, CHUNKS_PER_QUERY, CHUNKS_PER_READ, type Source } from "./config";
 import { decryptChunk, encryptChunk } from "./encryption";
 import { firestore } from "./firebase";
 
@@ -114,17 +114,34 @@ export async function getMeta(id: string): Promise<Meta | null> {
 
 /**
  * The chunks after `after` (a chunk key, or "" for the start), joined in log
- * order. `last` is the key to pass as `after` next time; `more` says whether
- * there are more chunks right now.
+ * order, up to `CHUNKS_PER_READ` of them or `BYTES_PER_READ` (and the chunk
+ * that crosses it). `last` is the key to pass as `after` next time; `more`
+ * says whether there may be more chunks right now.
+ *
+ * They're fetched `CHUNKS_PER_QUERY` at a time, so however the log's chunks
+ * were written, a read holds at most that many at once, and stops at the
+ * byte budget having fetched at most that many more than it used.
  */
 export async function readChunks(
   id: string,
   after: string,
 ): Promise<{ text: string; last: string | null; more: boolean }> {
-  let query = logs().doc(id).collection("chunks").orderBy(FieldPath.documentId()).limit(CHUNKS_PER_READ);
-  if (after) query = query.startAfter(after);
-  const snap = await query.get();
-  const text = snap.docs.map((doc) => decryptChunk(id, doc.id, doc.get("e"))).join("");
-  const last = snap.docs.length ? snap.docs[snap.docs.length - 1].id : null;
-  return { text, last, more: snap.docs.length === CHUNKS_PER_READ };
+  const chunks = logs().doc(id).collection("chunks").orderBy(FieldPath.documentId());
+  const texts: string[] = [];
+  let bytes = 0;
+  let last: string | null = null;
+  while (texts.length < CHUNKS_PER_READ) {
+    const want = Math.min(CHUNKS_PER_QUERY, CHUNKS_PER_READ - texts.length);
+    const cursor: string = last ?? after;
+    const snap = await (cursor ? chunks.startAfter(cursor) : chunks).limit(want).get();
+    for (const doc of snap.docs) {
+      const text = decryptChunk(id, doc.id, doc.get("e"));
+      texts.push(text);
+      last = doc.id;
+      bytes += Buffer.byteLength(text);
+      if (bytes >= BYTES_PER_READ) return { text: texts.join(""), last, more: true };
+    }
+    if (snap.size < want) return { text: texts.join(""), last, more: false };
+  }
+  return { text: texts.join(""), last, more: true };
 }

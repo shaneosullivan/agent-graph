@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 /**
  * Reads a log: GET /api/logs/{id}/content?after={last chunk key seen}
  *
- * Returns the chunks after `after`, joined, as JSON Lines. Headers:
+ * Returns the chunks after `after`, joined, as JSON Lines, up to about
+ * `BYTES_PER_READ` (the viewer pages through the rest). Headers:
  *   X-Last-Chunk: the key to pass as `after` next time (absent if none)
  *   X-More: 1 if there are more chunks to fetch right away
  * Password-protected logs need the cookie set by /unlock.

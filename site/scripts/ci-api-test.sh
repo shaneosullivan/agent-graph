@@ -1,5 +1,6 @@
 #!/bin/sh
-# Starts the built site, waits for it to answer, and runs the API tests.
+# Starts the built site, waits for it to answer, and runs the API tests,
+# then lib/store.ts's own tests.
 # Run it inside the Firestore emulator (`npm run test:ci`), which sets
 # FIRESTORE_EMULATOR_HOST.
 set -e
@@ -19,3 +20,4 @@ until curl -sf -o /dev/null http://localhost:3000; do
 done
 
 BASE_URL=http://localhost:3000 npm run test:api
+npm run test:store

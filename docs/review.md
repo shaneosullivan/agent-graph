@@ -114,7 +114,7 @@ Status is updated as each is done.
 - **Where:** `site/lib/store.ts` (`readChunks`)
 - **Problem:** Reads are limited to 200 chunks, not bytes, so one unauthenticated request can pull ~100 MB through the function's memory.
 - **Fix:** stop at a byte budget and let the client page.
-- **Status:** open
+- **Status:** fixed. A read fetches chunks `CHUNKS_PER_QUERY` (16) at a time, so a query holds at most 16 × 512 KB (8 MiB) at once, besides the up to 2.5 MiB being returned, and stops once it has `BYTES_PER_READ` (2 MiB, plus the chunk that crosses it), saying there's more, having fetched at most 15 chunks it didn't use; this holds however the log's chunks were written (overlapping offsets too). The viewer already pages on `X-More`. (Streaming the query instead doesn't work: leaving a Firestore stream doesn't cancel it.) Tests: "a read stops at a byte budget, and paging gets the rest" (site/tests/api.test.mjs), "a read fetches chunks a few at a time", "a read of many small chunks carries on across queries" (site/tests/store.test.mjs, against the emulator). Reviewed (three rounds).
 
 ### R18. Encryption at rest doesn't stop someone who can read the database
 - **Where:** `site/lib/store.ts`

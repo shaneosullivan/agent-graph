@@ -34,7 +34,7 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 |---|---|
 | `POST /api/logs` | Creates a log from the first chunk. Optional headers: `X-Agent-Graph-Source: watch\|paste\|upload`, `X-Agent-Graph-Password: <base64url of the UTF-8 password>`. Replies `201 {id, url, writeToken}`. |
 | `POST /api/logs/{id}/append?offset=<bytes so far>` | Appends a chunk. Requires `Authorization: Bearer <writeToken>`. Replies `204`, also for the same bytes again (a retry); `409` if other bytes are already stored at that offset. |
-| `GET /api/logs/{id}/content?after=<chunk key>` | Chunks after `after`, joined. `X-Last-Chunk` is the next cursor; `X-More: 1` means fetch again now. Protected logs need the unlock cookie. |
+| `GET /api/logs/{id}/content?after=<chunk key>` | Chunks after `after`, joined, up to about 2 MB. `X-Last-Chunk` is the next cursor; `X-More: 1` means fetch again now. Protected logs need the unlock cookie. |
 | `POST /api/logs/{id}/unlock` | `{"password": "…"}`. Sets an HttpOnly cookie for this log. |
 
 **Only the creator can add to a log.**
@@ -105,7 +105,7 @@ The API tests run against any running copy of the site:
 BASE_URL=http://localhost:3000 npm run test:api
 ```
 
-Or, as CI does, against a production build with its own emulator. Run `npm run build` first, and stop any running emulator:
+Or, as CI does, against a production build with its own emulator, followed by `lib/store.ts`'s own tests (`npm run test:store`, which needs the emulator). Run `npm run build` first, and stop any running emulator:
 
 ```bash
 npm run test:ci
