@@ -1044,12 +1044,10 @@ fn a_session_request_is_paired_with_any_run_it_starts() {
         assert_eq!(spawns, [(s("k"), None)]);
         assert_eq!(by, None);
     }
-    // But a start in a new process, or one that says it's a launch, is a
-    // new run, though the last had no end (its process was killed, say).
+    // But a start in a new process is a new run, though the last had no
+    // end (its process was killed, say).
     for restart in [
         json!({"source": "resume", "process": "11@1"}),
-        json!({"source": "resume"}),
-        json!({"source": "startup"}),
         json!({"process": "11@1"}),
     ] {
         let (spawns, waits, by, _) = children(vec![
@@ -1063,7 +1061,48 @@ fn a_session_request_is_paired_with_any_run_it_starts() {
         assert_eq!(waits, [(s("k1"), c()), (s("k2"), c())], "{restart}");
         assert_eq!(by.as_deref(), Some("k2"), "{restart}");
     }
-
+    // Not the same start recorded twice (hooks installed in two settings
+    // files), which says "startup" both times: with two requests, it and a
+    // session started after have one each.
+    let twice = || claude(2, json!({"source": "startup", "process": "10@1"}));
+    let d = shell_child(
+        3,
+        "claude-code:d",
+        "claude-code",
+        json!({"source": "startup", "process": "12@1"}),
+    );
+    let mut events = vec![start(), twice(), twice(), d];
+    events.extend(at_once(vec![
+        session_request(1, "k1", Some("claude"), false),
+        session_request(1, "k2", Some("claude"), false),
+    ]));
+    let graph = reduce_at(events, 100_000);
+    let spawns: Vec<_> = graph.nodes["x:p"]
+        .spawns
+        .iter()
+        .map(|s| (s.call_id.as_str(), s.child.as_deref()))
+        .collect();
+    assert_eq!(
+        spawns,
+        [("k1", Some("claude-code:c")), ("k2", Some("claude-code:d"))]
+    );
+    // Nor one in the same process, or whose process isn't known, whatever
+    // it says.
+    for restart in [
+        json!({"source": "startup", "process": "10@1"}),
+        json!({"source": "resume"}),
+        json!({"source": "startup"}),
+    ] {
+        let (spawns, _, by, _) = children(vec![
+            start(),
+            session_request(1, "k1", Some("claude"), false),
+            claude(2, json!({"process": "10@1"})),
+            session_request(5, "k2", Some("claude"), false),
+            claude(6, restart.clone()),
+        ]);
+        assert_eq!(spawns, [(s("k1"), c()), (s("k2"), None)], "{restart}");
+        assert_eq!(by.as_deref(), Some("k1"), "{restart}");
+    }
     // Its start sorts before the request, in the same millisecond.
     let mut events = vec![start()];
     events.extend(at_once(vec![
