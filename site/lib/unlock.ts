@@ -1,4 +1,4 @@
-import { clientAddress, ID_PATTERN, isHttps, viewCookieName } from "./config";
+import { bodyText, clientAddress, ID_PATTERN, isHttps, UNLOCK_BODY_BYTES, viewCookieName } from "./config";
 import { verifyPassword, viewToken } from "./crypto";
 import { getMeta, giveBackUnlockAttempt, takeUnlockAttempt } from "./store";
 
@@ -29,9 +29,11 @@ export async function unlock(req: Request, id: string, deps: UnlockDeps = defaul
   if (!meta) return new Response("Unknown log.", { status: 404 });
   if (!meta.pw) return new Response(null, { status: 204 });
 
+  const text = await bodyText(req, UNLOCK_BODY_BYTES);
+  if (text === null) return new Response("Too long.", { status: 413 });
   let password = "";
   try {
-    const body = (await req.json()) as { password?: unknown };
+    const body = JSON.parse(text) as { password?: unknown };
     if (typeof body.password === "string") password = body.password;
   } catch {
     return new Response('Expected JSON: { "password": "…" }.', { status: 400 });

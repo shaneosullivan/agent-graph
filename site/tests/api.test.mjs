@@ -354,6 +354,21 @@ test("bad input is refused", async () => {
     body: line(1),
   });
   assert.equal(badPassword.status, 400);
+
+  // R45: sent without a Content-Length, a body is measured as it's read.
+  const streamed = (bytes) => ({
+    method: "POST",
+    duplex: "half",
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`{"password":"${"x".repeat(bytes)}"}`));
+        controller.close();
+      },
+    }),
+  });
+  assert.equal((await fetch(`${BASE}/api/logs`, streamed(600 * 1024))).status, 413, "created too big");
+  const locked = await create(line(1), { "X-Agent-Graph-Password": b64url("pässwörd") });
+  assert.equal((await fetch(`${BASE}/api/logs/${locked.id}/unlock`, streamed(100 * 1024))).status, 413);
 });
 
 test(

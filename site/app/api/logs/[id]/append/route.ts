@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
  *
  * This is the hot path while `agent-graph watch-remote` runs, so it does as
  * little as possible:
- * - the size is checked from the header before the body is read;
+ * - the size is checked from the header before the body is read, and as
+ *   it's read (it may have none);
  * - so is where it goes: only past `MAX_LOG_BYTES` is the log's first chunk
  *   read, to check it's within that of where the log now starts (a live
  *   share trims its start, though never all of it, nor adds before where it
@@ -45,11 +46,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });
   }
 
-  const text = await bodyText(req);
+  const text = await bodyText(req, MAX_CHUNK_BYTES);
+  if (text === null) return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });
   if (!text) return new Response(null, { status: 204 });
-  if (Buffer.byteLength(text) > MAX_CHUNK_BYTES) {
-    return new Response(`At most ${MAX_CHUNK_BYTES} bytes per request.`, { status: 413 });
-  }
 
   try {
     await appendChunk(id, offset, text);

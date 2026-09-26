@@ -46,7 +46,7 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 - There's no endpoint that changes or deletes a log, but for trimming its start, which also needs the `writeToken`.
 
 **Appending is kept cheap:**
-- The size is checked from the header before the body is read.
+- The size is checked from the header before the body is read, and as it's read: one sent without a `Content-Length` is read only as far as the limit. (So is every other body: unlocking's, at most 8 KB.)
 - The key is checked by recomputing an HMAC: no database read.
 - The body is never parsed.
 - Storage is a single write of a new document, in a transaction with the log's metadata: it's read, that the log is still there (one not in use is deleted: an append to it is refused with 410, and the sharer stops), and its count of the bytes it stores is updated. Each chunk is its own document, `logs/{sid}/chunks/{offset}` (`sid` is an HMAC of the log's id, below), zero-padded so ids sort in order, so the cost doesn't grow with the log. A chunk never changes once stored: a retry of the same bytes is accepted, and different bytes at a stored offset are refused (409).
