@@ -398,6 +398,17 @@ struct Reducer {
 /// A request, in order of when it was made: when, by whom, and its call id.
 type Request = (String, String, String);
 
+/// What a request that may yet be paired is for.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Pool {
+    Agents,
+    /// Sessions, in the foreground: waiting for their child, however long.
+    Sessions,
+    /// Sessions, in the background: returned already, and paired only with
+    /// a child that starts soon after (`BACKGROUND_START`).
+    Background,
+}
+
 /// Where to find what the nodes' requests and waits say, so that nothing
 /// looks through all of a node's (or a session's): a session can make
 /// thousands.
@@ -410,9 +421,8 @@ struct Index {
     /// are in its `spawns`).
     unreturned: BTreeMap<String, BTreeSet<usize>>,
     /// The requests in each session (by it or its agents) that may yet be
-    /// paired with a child, for agents (`false`) and for sessions (`true`),
-    /// oldest first.
-    unpaired: BTreeMap<(String, bool), BTreeSet<Request>>,
+    /// paired with a child, by what they're for, oldest first.
+    unpaired: BTreeMap<(String, Pool), BTreeSet<Request>>,
     /// Each node's open waits, by wait id (where they are in its `waits`).
     open: BTreeMap<String, BTreeMap<String, BTreeSet<usize>>>,
     /// The open waits on each node: the node waiting, and where the wait is
@@ -1073,7 +1083,7 @@ impl Reducer {
         let child_type = self.nodes[child].agent_type.clone();
         // Oldest first.
         let candidates: Vec<(String, String, String, Option<String>)> = self
-            .unpaired(session, false)
+            .unpaired(session, Pool::Agents)
             .map(|(id, s)| {
                 (
                     s.requested_at.clone(),
@@ -1142,13 +1152,15 @@ impl Reducer {
             return;
         };
         let parent_session = parent.split('/').next().unwrap_or(&parent).to_string();
+        self.forget_old_launches(&parent_session, started);
         let child_node = &self.nodes[child];
         // A background launch returns before its child starts, which it does
         // soon after (or a little later, if the command does other things
         // first); a foreground one returns only once its child is done: only
         // those that haven't are here.
         let mut candidates: Vec<(bool, String, String, String, Option<String>)> = self
-            .unpaired(&parent_session, true)
+            .unpaired(&parent_session, Pool::Sessions)
+            .chain(self.unpaired(&parent_session, Pool::Background))
             .filter(|(_, s)| {
                 *s.requested_at <= *started
                     && (!s.background || within(&s.requested_at, started, BACKGROUND_START))
@@ -1294,7 +1306,12 @@ impl Reducer {
             spawn.call_id.clone(),
         );
         let session = node.split('/').next().unwrap_or(node);
-        let key = (session.to_string(), for_session);
+        let pool = match (for_session, spawn.background) {
+            (false, _) => Pool::Agents,
+            (true, false) => Pool::Sessions,
+            (true, true) => Pool::Background,
+        };
+        let key = (session.to_string(), pool);
         if pairable {
             self.index.unpaired.entry(key).or_default().insert(entry);
         } else if let Some(requests) = self.index.unpaired.get_mut(&key) {
@@ -1315,18 +1332,35 @@ impl Reducer {
     }
 
     /// The requests in `session` (by it or its agents) that may yet be paired
-    /// with a child, for a session or an agent, oldest first, with who made
-    /// them.
-    fn unpaired(
-        &self,
-        session: &str,
-        for_session: bool,
-    ) -> impl Iterator<Item = (&String, &Spawn)> + '_ {
-        let requests = self.index.unpaired.get(&(session.to_string(), for_session));
+    /// with a child, from `pool`, oldest first, with who made them.
+    fn unpaired(&self, session: &str, pool: Pool) -> impl Iterator<Item = (&String, &Spawn)> + '_ {
+        let requests = self.index.unpaired.get(&(session.to_string(), pool));
         requests.into_iter().flatten().map(|(_, id, call_id)| {
             let (at, _) = self.index.call(id, call_id).expect("indexed");
             (id, &self.nodes[id].spawns[at])
         })
+    }
+
+    /// Takes the background launches in `session` made too long before
+    /// `started` to have started a session then (`BACKGROUND_START`) out of
+    /// the requests that may yet be paired: sessions start in time order, so
+    /// they never can be. (Oldest first, so it stops at the first that
+    /// might.) Otherwise every launch that never started anything would be
+    /// looked at by every session started after it.
+    fn forget_old_launches(&mut self, session: &str, started: &str) {
+        let key = (session.to_string(), Pool::Background);
+        let Some(requests) = self.index.unpaired.get_mut(&key) else {
+            return;
+        };
+        while let Some(oldest) = requests.first() {
+            if *oldest.0 > *started || within(&oldest.0, started, BACKGROUND_START) {
+                break;
+            }
+            requests.pop_first();
+        }
+        if requests.is_empty() {
+            self.index.unpaired.remove(&key);
+        }
     }
 
     /// A session's agents stop with it. Sessions it started are processes of

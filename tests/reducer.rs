@@ -397,6 +397,74 @@ fn busy_session(turns: usize) -> Vec<Envelope> {
     events
 }
 
+/// One session's `turns` turns: in each, it launches a run in the
+/// background that never starts (it failed, say), and a session from its
+/// shell in the foreground; then it goes idle.
+fn dead_launches(turns: usize) -> Vec<Envelope> {
+    let s = "x:s";
+    let mut events = vec![ev(0, s, "session.started", json!({}))];
+    for t in 0..turns {
+        let at = 1 + 10 * t as u64;
+        let (dead, call, child) = (format!("d{t}"), format!("k{t}"), format!("x:c{t}"));
+        events.extend([
+            ev(
+                at,
+                s,
+                "spawn.requested",
+                json!({"call_id": dead, "kind": "session", "background": true, "run": true}),
+            ),
+            ev(at, s, "spawn.returned", json!({"call_id": dead})),
+            ev(
+                at,
+                s,
+                "spawn.requested",
+                json!({"call_id": call, "kind": "session"}),
+            ),
+            under(ev(at + 1, &child, "session.started", json!({})), s),
+            ev(at + 2, &child, "session.ended", json!({})),
+            ev(at + 3, s, "spawn.returned", json!({"call_id": call})),
+            ev(at + 4, s, "status", json!({"state": "idle"})),
+        ]);
+    }
+    events
+}
+
+/// R53: a background launch that never starts stays a request that may
+/// yet be paired, but only for as long as a launch takes to start
+/// (`BACKGROUND_START`): a session's start doesn't look at every one there
+/// has ever been.
+#[test]
+fn reducing_grows_in_step_with_launches_that_never_start() {
+    let (small, large) = (256, 4096);
+    let histories = [dead_launches(small), dead_launches(large)];
+    let mut best = [f64::MAX; 2];
+    for _ in 0..3 {
+        for (i, events) in histories.iter().enumerate() {
+            let events = events.clone();
+            let start = cpu_time();
+            let graph = reduce_at(events, 0);
+            best[i] = best[i].min(cpu_time() - start);
+            assert_eq!(graph.nodes.len(), 1 + [small, large][i]);
+        }
+    }
+    let ratio = best[1] / best[0];
+    // 16 times the turns: about 16× as long in step with them, 256× with their square.
+    assert!(
+        ratio < 48.0,
+        "16× the turns took {ratio:.1}× as long ({:.3}, then {:.3})",
+        best[0],
+        best[1]
+    );
+
+    // And each session is still paired with its own request, and a launch
+    // that never started with nothing.
+    let graph = reduce_at(dead_launches(100), 0);
+    for spawn in &graph.nodes["x:s"].spawns {
+        let own = spawn.call_id.strip_prefix('k').map(|t| format!("x:c{t}"));
+        assert_eq!(spawn.child, own, "{}", spawn.call_id);
+    }
+}
+
 /// R53: within one session, reducing grows in step with its agents (and
 /// the sessions it starts), not with their square: an agent's start finds
 /// the session's unpaired requests directly, a finish the waits on it, and
