@@ -627,3 +627,146 @@ fn only_a_recent_background_request_is_paired_with_a_shell_session() {
     // child (`make build && claude -p …`).
     assert_eq!(pick(199, 20).as_deref(), Some("fg"));
 }
+
+/// Events in the same millisecond, in this order: their ids are made to
+/// sort as given (hooks in separate processes get random ones, which can
+/// sort either way).
+fn at_once(mut events: Vec<Envelope>) -> Vec<Envelope> {
+    for (i, e) in events.iter_mut().enumerate() {
+        e.id = format!("{}{i:016}", &e.id[..10]);
+    }
+    events
+}
+
+/// R28: a headless session's Stop and SessionEnd can land in the same
+/// millisecond, in either order. A status sorted just after
+/// `session.ended` (within `LATE_STATUS`) is a late one, and doesn't bring
+/// the session (or its agents) back to life; a later one, or a new
+/// `session.started`, does.
+#[test]
+fn a_late_status_doesnt_revive_an_ended_session() {
+    let base = || {
+        vec![
+            ev(1, "x:s", "session.started", json!({})),
+            ev(2, "x:s", "status", json!({"state": "working"})),
+            ev(2, "x:s/a", "agent.spawned", json!({})),
+        ]
+    };
+    let ended_then = |late: Vec<Envelope>| {
+        let mut events = base();
+        let mut at_end = vec![ev(3, "x:s", "session.ended", json!({}))];
+        at_end.extend(late);
+        events.extend(at_once(at_end));
+        events
+    };
+    let status = |node: &str, state: &str| {
+        ev(
+            3,
+            node,
+            "status",
+            json!({"state": state, "summary": "late"}),
+        )
+    };
+    for state in ["idle", "working", "input_required"] {
+        let g = reduce_at(ended_then(vec![status("x:s", state)]), 10);
+        let s = &g.nodes["x:s"];
+        assert_eq!(s.state, State::Completed, "{state}");
+        assert!(s.ended_at.is_some(), "{state}");
+        assert_eq!((s.attention.as_deref(), s.summary.as_deref()), (None, None));
+        assert!(g.late.iter().any(|id| id.ends_with('1')), "{state}");
+        // Nor its agents, which ended with it.
+        let g = reduce_at(ended_then(vec![status("x:s/a", state)]), 10);
+        assert_eq!(g.nodes["x:s/a"].state, State::Canceled, "{state}");
+    }
+    // A status that says how it ended still counts.
+    let g = reduce_at(ended_then(vec![status("x:s", "failed")]), 10);
+    assert_eq!(g.nodes["x:s"].state, State::Failed);
+    assert!(g.late.is_empty());
+    // A failure then the end (as `agent-graph run` reports them) stays so.
+    let mut events = base();
+    events.extend(at_once(vec![
+        ev(3, "x:s", "status", json!({"state": "failed"})),
+        ev(3, "x:s", "session.ended", json!({})),
+        ev(3, "x:s", "status", json!({"state": "idle"})),
+    ]));
+    assert_eq!(reduce_at(events, 10).nodes["x:s"].state, State::Failed);
+
+    // Later activity means it's running after all (another process on the
+    // same conversation, say): that counts, as ever.
+    for (at, state) in [
+        (4, State::Completed),
+        (5, State::Working),
+        (6, State::Working),
+    ] {
+        let mut events = ended_then(vec![]);
+        events.push(ev(at, "x:s", "status", json!({"state": "working"})));
+        assert_eq!(reduce_at(events, 10).nodes["x:s"].state, state, "{at}");
+    }
+    // So does a new start, whatever its source, even in the same moment.
+    for source in ["startup", "resume", "clear", "compact", "run"] {
+        let events = ended_then(vec![
+            ev(3, "x:s", "session.started", json!({"source": source})),
+            ev(3, "x:s", "status", json!({"state": "working"})),
+        ]);
+        let g = reduce_at(events, 10);
+        assert_eq!(g.nodes["x:s"].state, State::Working, "{source}");
+        assert_eq!(g.nodes["x:s"].ended_at, None, "{source}");
+    }
+    // An agent first seen in a late status ended with its session too.
+    let g = reduce_at(ended_then(vec![status("x:s/b", "idle")]), 10);
+    let b = &g.nodes["x:s/b"];
+    assert_eq!(b.state, State::Canceled);
+    assert_eq!(b.ended_at, g.nodes["x:s"].ended_at);
+
+    // An end that comes with a start (a resumed run's start, and the run
+    // before it's end, landing together) doesn't make the new run's
+    // statuses late.
+    let mut events = base();
+    events.push(ev(60, "x:s", "status", json!({"state": "idle"})));
+    events.extend(at_once(vec![
+        ev(61, "x:s", "session.started", json!({"source": "resume"})),
+        ev(61, "x:s", "session.ended", json!({})),
+    ]));
+    events.push(ev(62, "x:s", "status", json!({"state": "working"})));
+    let g = reduce_at(events, 90);
+    assert_eq!(g.nodes["x:s"].state, State::Working);
+    assert!(g.late.is_empty());
+    // There, only a Stop is late: a run that ends within `LATE_STATUS` of
+    // starting (a quick `claude -p`) still ends, whichever order its last
+    // hooks land in, and a status that says it's busy counts.
+    let short = |last: &str| {
+        let mut events = vec![
+            ev(0, "x:s", "session.started", json!({})),
+            ev(0, "x:s", "status", json!({"state": "working"})),
+        ];
+        events.extend(at_once(vec![
+            ev(1, "x:s", "session.ended", json!({})),
+            ev(1, "x:s", "status", json!({"state": last})),
+        ]));
+        reduce_at(events, 90).nodes["x:s"].state
+    };
+    assert_eq!(short("idle"), State::Completed);
+    assert_eq!(short("input_required"), State::InputRequired);
+    // "With a start": less than `LATE_STATUS` after it.
+    for (started, state) in [(60, State::Working), (59, State::Completed)] {
+        let events = vec![
+            ev(started, "x:s", "session.started", json!({})),
+            ev(61, "x:s", "session.ended", json!({})),
+            ev(62, "x:s", "status", json!({"state": "working"})),
+        ];
+        assert_eq!(reduce_at(events, 90).nodes["x:s"].state, state, "{started}");
+    }
+
+    // Only a session's end makes a status late: not an agent's finish, nor
+    // a terminal status.
+    let mut events = base();
+    events.extend(at_once(vec![
+        ev(3, "x:s/a", "agent.finished", json!({"status": "completed"})),
+        ev(3, "x:s/a", "status", json!({"state": "working"})),
+        ev(3, "x:s", "status", json!({"state": "failed"})),
+        ev(3, "x:s", "status", json!({"state": "working"})),
+    ]));
+    let g = reduce_at(events, 10);
+    assert_eq!(g.nodes["x:s/a"].state, State::Working);
+    assert_eq!(g.nodes["x:s"].state, State::Working);
+}

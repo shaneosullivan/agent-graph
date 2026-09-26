@@ -451,6 +451,10 @@ pub fn describe(e: &Envelope, graph: &Graph) -> (&'static str, String) {
             };
             ("agent", format!("{who} {verb}"))
         }
+        Payload::Status(_) if graph.late.contains(&e.id) => (
+            "status",
+            format!("{who}: a late status, after the session ended"),
+        ),
         Payload::Status(d) => match d.state {
             State::InputRequired => (
                 "attention",
@@ -590,6 +594,47 @@ mod tests {
     const SESSION: &str = "claude-code:5f2c1e8a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
     const STALE: Duration = Duration::from_secs(1800);
     const LOCAL: Environment = Environment::Local;
+
+    /// R28: a status ignored as late (just after its session ended) is
+    /// labelled so, not as the session needing you.
+    #[test]
+    fn a_late_status_is_labelled_so() {
+        use crate::adapter::Draft;
+        use crate::event::{Payload, SessionEnded, SessionStarted, State, Status};
+        let source = Source {
+            provider: "x".into(),
+            provider_version: None,
+            adapter: None,
+        };
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+        let started = Draft::new("x:s", Payload::SessionStarted(SessionStarted::default()));
+        let ended = Draft::new("x:s", Payload::SessionEnded(SessionEnded { reason: None }));
+        let asks = Draft::new(
+            "x:s",
+            Payload::Status(Status {
+                state: State::InputRequired,
+                summary: Some("Allow rm -rf?".into()),
+            }),
+        );
+        let events: Vec<Timed> = stamp(vec![started], &source, t0)
+            .into_iter()
+            .chain(stamp(
+                vec![ended, asks],
+                &source,
+                t0 + Duration::from_secs(5),
+            ))
+            .map(Timed::new)
+            .collect();
+        let json: Value =
+            serde_json::from_str(&timeline(&events, "x:s", SystemTime::now(), STALE).unwrap())
+                .unwrap();
+        let last = json["stops"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["category"], "status");
+        assert_eq!(
+            last["label"],
+            "Session: a late status, after the session ended"
+        );
+    }
 
     #[test]
     fn timeline_labels_every_event_in_the_tree() {

@@ -870,6 +870,7 @@ pub(crate) fn find_session(graph: &Graph, want: &str) -> Result<String, String> 
             .map(|(id, n)| (id.clone(), n.clone()))
             .collect(),
         roots: Vec::new(),
+        late: Default::default(),
     };
     find_node(&sessions, want)
 }

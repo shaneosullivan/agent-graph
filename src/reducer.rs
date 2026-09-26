@@ -34,6 +34,9 @@ pub struct Graph {
     pub nodes: BTreeMap<String, Node>,
     /// Nodes with no known parent, most recently active first.
     pub roots: Vec<String>,
+    /// Statuses ignored as late: just after their session ended.
+    #[serde(skip)]
+    pub late: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -209,6 +212,13 @@ struct Reducer {
     waiting_on: BTreeMap<String, BTreeSet<String>>,
     /// The nodes that made each spawn request (by call id; normally one).
     requesters: BTreeMap<String, Vec<String>>,
+    /// When each session ended (`session.ended`, as a time and as its
+    /// `ts`), until it starts again, and whether the end came with a start.
+    ended: BTreeMap<String, (SystemTime, String, bool)>,
+    /// When each session last started.
+    started: BTreeMap<String, SystemTime>,
+    /// Statuses ignored as late (see `LATE_STATUS`).
+    late: BTreeSet<String>,
 }
 
 /// Node `session` and its agents (`session/…`): a range of the map, not a
@@ -255,6 +265,8 @@ impl Reducer {
                     node.state = State::Idle;
                     node.ended_at = None;
                 }
+                self.ended.remove(&e.node);
+                self.started.insert(e.node.clone(), event_time(e));
                 // Only if the parent was taken (it's refused if it would
                 // put the session under itself).
                 if e.parent.is_some() && node.parent == e.parent {
@@ -282,6 +294,17 @@ impl Reducer {
                     node.state = State::Completed;
                 }
                 node.ended_at = Some(e.ts.clone());
+                // An end that comes with a start may be the run before's,
+                // landing late (a resumed run starts as the last one's
+                // SessionEnd is sent), or a quick run's own: after it, only
+                // a Stop is late (see the status below).
+                let end = event_time(e);
+                let with_start = self
+                    .started
+                    .get(&e.node)
+                    .is_some_and(|s| end.duration_since(*s).unwrap_or_default() < LATE_STATUS);
+                self.ended
+                    .insert(e.node.clone(), (end, e.ts.clone(), with_start));
                 let id = e.node.clone();
                 self.close_waits_on(&id, &e.ts, true);
                 self.cancel_unfinished_descendants(&id, &e.ts);
@@ -313,6 +336,32 @@ impl Reducer {
                 self.calls_over(&id, &e.ts);
             }
             Payload::Status(d) => {
+                // A status just after its session's end is a late one (a
+                // headless session's Stop and SessionEnd can land in the same
+                // millisecond, either way round), unless it says how it
+                // ended: it doesn't bring the session, or its agents, back.
+                let session = e.node.split('/').next().unwrap_or(&e.node);
+                // After an end that came with a start, only a Stop: a
+                // resumed run's first prompt can land just after the last
+                // run's end.
+                let late = self.ended.get(session).filter(|(end, _, with_start)| {
+                    event_time(e).duration_since(*end).unwrap_or_default() < LATE_STATUS
+                        && !d.state.is_terminal()
+                        && (!with_start || d.state == State::Idle)
+                });
+                if let Some((_, end, _)) = late {
+                    let end = end.clone();
+                    self.late.insert(e.id.clone());
+                    // An agent seen only now ended with its session, as the
+                    // others did.
+                    let node = self.nodes.get_mut(&e.node).expect("ensured above");
+                    if !node.state.is_terminal() {
+                        node.state = State::Canceled;
+                        node.ended_at = Some(end.clone());
+                        self.calls_over(&e.node, &end);
+                    }
+                    return;
+                }
                 if d.state == State::Idle || d.state.is_terminal() {
                     self.calls_over(&e.node, &e.ts);
                 }
@@ -899,6 +948,7 @@ impl Reducer {
         Graph {
             nodes: self.nodes,
             roots,
+            late: self.late,
         }
     }
 
@@ -949,6 +999,12 @@ impl Reducer {
 /// How soon a session launched in the background starts after its request,
 /// at most. Generous: the command can do other things first (`npm ci && claude …`).
 const BACKGROUND_START: Duration = Duration::from_secs(600);
+
+/// How soon after its session's end a status is a late one, ignored: the
+/// hooks of a session's last moments land in the same millisecond or so,
+/// in any order. Any later is activity (another process on the same
+/// conversation, say), as is a new `session.started` at any time.
+const LATE_STATUS: Duration = Duration::from_secs(2);
 
 /// How soon it usually does.
 const FRESH_START: Duration = Duration::from_secs(60);

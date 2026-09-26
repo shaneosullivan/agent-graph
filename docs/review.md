@@ -180,7 +180,7 @@ Status is updated as each is done.
 - **Where:** `src/reducer.rs`
 - **Problem:** A headless session's Stop and SessionEnd can land in the same millisecond in either order; if Stop sorts last, the session shows as idle (alive) forever.
 - **Fix:** only a new `session.started` revives an ended session.
-- **Status:** open
+- **Status:** fixed. The reducer notes when each session ends (`Reducer::ended`), until it starts again, and ignores a status for it or its agents less than `LATE_STATUS` (2 s) after that, unless it's a terminal one (which still says how it ended: failed, say); an agent first seen in a late status is canceled with the session. A later status is taken as activity, as before: another process can carry on the same conversation after one exits. After an end less than 2 s after the session's last start (`Reducer::started`), only an idle status (a Stop) is late: the end may be a quick run's own, or the last run's, landing as a resumed run starts, whose first prompt then counts. The statuses ignored are listed (`Graph::late`), and the timeline labels them as late rather than, say, as needing you. The site's WebAssembly is rebuilt. Tests: `a_late_status_doesnt_revive_an_ended_session` (tests/reducer.rs), `a_late_status_is_labelled_so` (src/timeline.rs). Reviewed (four rounds).
 
 ## Low
 

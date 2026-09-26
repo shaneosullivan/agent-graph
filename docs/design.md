@@ -101,7 +101,7 @@ Many sessions write at the same time. If they all rewrite one `state.json`, two 
 | Type | `data` fields | Emitted when |
 |---|---|---|
 | `session.started` | `cwd?`, `source?` (startup/resume/…), `title?`, `transcript_path?`, `link_method?`, `process?`, `ancestors?` | A provider session begins or resumes. The last three link it to the session that started it (§6) |
-| `session.ended` | `reason?` | A session exits |
+| `session.ended` | `reason?` | A session exits. A status less than 2 s after it, for the session or its agents, is a late one (a headless session's Stop can land in the same millisecond, either way round), and is ignored unless it says how the session ended (an agent first seen in one ended with the session), except that after an end less than 2 s after the session's start (a quick run's, or the last run's landing as a resumed run starts) only an idle one (a Stop) is; a later status, or a new `session.started`, brings it back |
 | `agent.spawned` | `agent_type?`, `purpose?`, `background?` | A subagent starts |
 | `agent.finished` | `status` (completed/failed/canceled), `summary?` | A subagent stops |
 | `status` | `state`, `summary?` | The state changes (see below) |
