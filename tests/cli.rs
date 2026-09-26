@@ -828,3 +828,31 @@ fn install_keeps_settings_private_and_follows_the_users_own_link() {
     );
     assert_eq!(std::fs::read_dir(&dotfiles).unwrap().count(), 1);
 }
+
+/// R9: a signal `run` was started with ignored (`nohup`, a background job)
+/// stays ignored for the command, as it would without `run`.
+#[cfg(unix)]
+#[test]
+fn run_keeps_signals_that_were_ignored_ignored() {
+    let home = tempfile::tempdir().unwrap();
+    let bin = env!("CARGO_BIN_EXE_agent-graph");
+    for sig in ["HUP", "INT"] {
+        // The command signals itself: ignored, it carries on.
+        let script = format!(
+            r#"trap "" {sig}; exec "{bin}" run -- /bin/sh -c 'kill -{sig} $$; echo alive'"#
+        );
+        let out = Command::new("/bin/sh")
+            .args(["-c", &script])
+            .env("AGENT_GRAPH_HOME", home.path())
+            .env_remove("AGENT_GRAPH_PARENT")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "alive",
+            "SIG{sig} wasn't left ignored: {:?}",
+            out.status
+        );
+        assert!(out.status.success(), "{sig}: {:?}", out.status);
+    }
+}

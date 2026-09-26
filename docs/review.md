@@ -65,8 +65,8 @@ Status is updated as each is done.
 ### R9. `agent-graph run` un-ignores signals, so `nohup` and background jobs die
 - **Where:** `src/run.rs`
 - **Problem:** Handlers are installed for SIGINT, SIGQUIT, SIGHUP and SIGTERM even when they were inherited as ignored; the command then gets the default action instead of inheriting "ignored", and SIGHUP is forwarded to it.
-- **Fix:** leave ignored signals ignored and don't forward them.
-- **Status:** open
+- **Fix:** each signal's current disposition is read first; one inherited as ignored is left alone (no handler, nothing forwarded), so the command inherits "ignored" too.
+- **Status:** fixed. Test: `run_keeps_signals_that_were_ignored_ignored` (tests/cli.rs). Reviewed.
 
 ### R10. `--session current` falls back to the newest session anywhere, so `/agent-graph share` can publish another project
 - **Where:** `src/cli.rs` (`pick_roots`), `src/remote.rs`

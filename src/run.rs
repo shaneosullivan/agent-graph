@@ -219,13 +219,31 @@ mod signals {
         }
     }
 
+    /// A signal we were started with ignored (by `nohup`, or as a
+    /// background job) is left ignored, so the command inherits that too:
+    /// a handler would be reset to the default for it.
     pub fn stay_for_the_child() {
-        // SAFETY: both handlers are async-signal-safe.
+        let handlers: [(libc::c_int, extern "C" fn(libc::c_int)); 4] = [
+            (libc::SIGINT, stay),
+            (libc::SIGQUIT, stay),
+            (libc::SIGHUP, pass_on),
+            (libc::SIGTERM, pass_on),
+        ];
+        for (sig, handler) in handlers {
+            if !ignored(sig) {
+                // SAFETY: both handlers are async-signal-safe.
+                unsafe { libc::signal(sig, handler as *const () as libc::sighandler_t) };
+            }
+        }
+    }
+
+    /// Whether `sig` is set to be ignored.
+    fn ignored(sig: libc::c_int) -> bool {
+        // SAFETY: a null new action only reads the current one into `old`.
         unsafe {
-            libc::signal(libc::SIGINT, stay as *const () as libc::sighandler_t);
-            libc::signal(libc::SIGQUIT, stay as *const () as libc::sighandler_t);
-            libc::signal(libc::SIGHUP, pass_on as *const () as libc::sighandler_t);
-            libc::signal(libc::SIGTERM, pass_on as *const () as libc::sighandler_t);
+            let mut old: libc::sigaction = std::mem::zeroed();
+            libc::sigaction(sig, std::ptr::null(), &mut old) == 0
+                && old.sa_sigaction == libc::SIG_IGN
         }
     }
 
