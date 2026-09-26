@@ -144,7 +144,7 @@ Status is updated as each is done.
 - **Where:** `src/reducer.rs` (`bind_by_guess`, `close_waits_on`)
 - **Problem:** Each agent start and finish scans every node; months of history take seconds per reduce, and every view reduces the whole log.
 - **Fix:** look up a session's own nodes by range, and waits by target.
-- **Status:** open
+- **Status:** fixed across sessions. A session's own nodes are found as a range of the node map (`family`), not by looking at every node, when pairing an agent (`bind_by_guess`) or a session (`bind_session_by_guess`) with its request; the nodes that may be waiting on each node are indexed (`waiting_on`), so an end closes their waits directly (`close_waits_on`); and each request's makers are indexed by call id (`requesters`), so undoing a wrong guess finds its request directly. That undo now also clears only the request bound to that child: call ids aren't unique across sessions, and it used to clear another session's pairing too. A history of 1,000 sessions reduces in about 0.3 s rather than about 10 s (debug). Within one session, an agent's start and finish still look at that session's nodes and waits: see R53. Tests: `reducing_grows_in_step_with_the_history` (tests/reducer.rs), timed in the thread's CPU time (so other work on the machine doesn't sway it): 16 times the history takes about 19.5× as long (limit 48×; putting back any of the four scans makes it 108–317×, debug), and every child is still paired, every wrong guess undone and every wait closed; `a_wait_on_a_started_session_ends_with_it_even_if_it_resumes`, `a_wait_ends_with_its_target_even_if_it_resumes`, `a_spawn_wait_left_open_by_a_finish_closes_at_the_end`, `correcting_a_guess_leaves_other_sessions_requests_alone` (each index, and the undo's fix). Reviewed (two rounds).
 
 ### R23. Every change, and every timeline step, reduces and sends the whole history
 - **Where:** `src/timeline.rs`, `src/view/mod.rs`, `src/view/assets/app.js`
@@ -281,4 +281,16 @@ Status is updated as each is done.
 - **Where:** `site/app/api/logs/route.ts` (`hashPassword`), `site/lib/unlock.ts`
 - **Problem:** Found reviewing R19. Only wrong guesses are limited, so one address can run scrypt (about 50 ms each) as often as it likes by unlocking its own log with the right password, or by creating logs with passwords, which isn't limited at all.
 - **Fix:** a generous per-address cap on every scrypt run (say 200 per 15 minutes), counted like R19's buckets.
+- **Status:** open
+
+### R53. Within one session, the reducer is still quadratic in its agents
+- **Where:** `src/reducer.rs` (`bind_by_guess`, the per-node `spawns` and `waits` lists)
+- **Problem:** Found reviewing R22. An agent's start looks at every node of its session for an unpaired request, and a finish looks through the waiting node's waits; a session with thousands of agents (or of sessions started from it) takes seconds to reduce (4,000 agents: about 1.9 s, debug).
+- **Fix:** index each session's unpaired requests, and waits by what they wait on.
+- **Status:** open
+
+### R54. A child named by another session's request with the same call id is claimed by both
+- **Where:** `src/reducer.rs` (`bind`)
+- **Problem:** Found reviewing R22. `spawned_by` holds only a call id, not the node that made the request, so when `spawn.returned` names a child already bound to a request with the same call id in another session, `bind` doesn't undo the first binding, and both requests claim the child. Unlikely (call ids are almost always unique), but possible.
+- **Fix:** record the requester with the call id, and compare both.
 - **Status:** open

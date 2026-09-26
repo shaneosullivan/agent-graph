@@ -204,6 +204,25 @@ struct Reducer {
     /// Which session each agent process (`<pid>@<start>`) belongs to: the
     /// latest one started in it.
     processes: BTreeMap<String, String>,
+    /// The nodes that may have an open wait on each node, so a node's end
+    /// closes them without looking at every node.
+    waiting_on: BTreeMap<String, BTreeSet<String>>,
+    /// The nodes that made each spawn request (by call id; normally one).
+    requesters: BTreeMap<String, Vec<String>>,
+}
+
+/// Node `session` and its agents (`session/…`): a range of the map, not a
+/// look at every node.
+fn family<'a>(
+    nodes: &'a BTreeMap<String, Node>,
+    session: &str,
+) -> impl Iterator<Item = (&'a String, &'a Node)> + 'a {
+    let prefix = format!("{session}/");
+    nodes.get_key_value(session).into_iter().chain(
+        nodes
+            .range(prefix.clone()..)
+            .take_while(move |(id, _)| id.starts_with(&prefix)),
+    )
 }
 
 impl Reducer {
@@ -356,6 +375,10 @@ impl Reducer {
                         ended_at: None,
                     });
                 }
+                self.requesters
+                    .entry(d.call_id.clone())
+                    .or_default()
+                    .push(e.node.clone());
                 node.spawns.push(Spawn {
                     call_id: d.call_id,
                     kind: d.kind,
@@ -388,6 +411,10 @@ impl Reducer {
             }
             Payload::WaitStarted(d) => {
                 if !node.waits.iter().any(|w| w.wait_id == d.wait_id && w.open) {
+                    self.waiting_on
+                        .entry(d.on.clone())
+                        .or_default()
+                        .insert(e.node.clone());
                     node.waits.push(Wait {
                         wait_id: d.wait_id,
                         on: Some(d.on),
@@ -542,8 +569,17 @@ impl Reducer {
             .clone()
             .filter(|c| c != call_id)
         {
-            for node in self.nodes.values_mut() {
-                if let Some(spawn) = node.spawns.iter_mut().find(|s| s.call_id == other_call) {
+            for id in self.requesters.get(&other_call).into_iter().flatten() {
+                let Some(node) = self.nodes.get_mut(id) else {
+                    continue;
+                };
+                // Only the request it was bound to: call ids aren't unique
+                // across sessions, and another's may have a child of its own.
+                if let Some(spawn) = node
+                    .spawns
+                    .iter_mut()
+                    .find(|s| s.call_id == other_call && s.child.as_deref() == Some(child))
+                {
                     spawn.child = None;
                     if let Some(wait) = node.waits.iter_mut().find(|w| w.wait_id == other_call) {
                         wait.on = None;
@@ -564,6 +600,10 @@ impl Reducer {
         );
         if let Some(wait) = node.waits.iter_mut().find(|w| w.wait_id == call_id) {
             wait.on = Some(child.to_string());
+            self.waiting_on
+                .entry(child.to_string())
+                .or_default()
+                .insert(requester.to_string());
         }
 
         let child_node = self.nodes.get_mut(child).expect("exists");
@@ -598,24 +638,22 @@ impl Reducer {
     fn bind_by_guess(&mut self, child: &str) {
         let session = child.split('/').next().unwrap_or(child);
         let child_type = self.nodes[child].agent_type.clone();
-        let mut candidates: Vec<(String, String, String, Option<String>)> = self
-            .nodes
-            .iter()
-            .filter(|(id, _)| *id == session || id.starts_with(&format!("{session}/")))
-            .flat_map(|(id, n)| {
-                n.spawns
-                    .iter()
-                    .filter(|s| s.child.is_none() && s.kind == SpawnKind::Agent && !s.returned)
-                    .map(move |s| {
-                        (
-                            s.requested_at.clone(),
-                            id.clone(),
-                            s.call_id.clone(),
-                            s.agent_type.clone(),
-                        )
-                    })
-            })
-            .collect();
+        let mut candidates: Vec<(String, String, String, Option<String>)> =
+            family(&self.nodes, session)
+                .flat_map(|(id, n)| {
+                    n.spawns
+                        .iter()
+                        .filter(|s| s.child.is_none() && s.kind == SpawnKind::Agent && !s.returned)
+                        .map(move |s| {
+                            (
+                                s.requested_at.clone(),
+                                id.clone(),
+                                s.call_id.clone(),
+                                s.agent_type.clone(),
+                            )
+                        })
+                })
+                .collect();
         candidates.sort();
         let pick = candidates
             .iter()
@@ -673,33 +711,31 @@ impl Reducer {
         let Some(parent) = self.nodes[child].parent.clone() else {
             return;
         };
-        let family = parent.split('/').next().unwrap_or(&parent).to_string();
+        let parent_session = parent.split('/').next().unwrap_or(&parent).to_string();
         let started = self.nodes[child].started_at.clone().unwrap_or_default();
-        let mut candidates: Vec<(String, String, String, Option<String>)> = self
-            .nodes
-            .iter()
-            .filter(|(id, _)| **id == family || id.starts_with(&format!("{family}/")))
-            .flat_map(|(id, n)| {
-                n.spawns
-                    .iter()
-                    .filter(|s| {
-                        // A background launch returns before its child
-                        // starts; a foreground one only once it's done.
-                        s.kind == SpawnKind::Session
-                            && s.child.is_none()
-                            && (s.background || !s.returned)
-                            && s.requested_at <= started
-                    })
-                    .map(move |s| {
-                        (
-                            s.requested_at.clone(),
-                            id.clone(),
-                            s.call_id.clone(),
-                            s.agent_type.clone(),
-                        )
-                    })
-            })
-            .collect();
+        let mut candidates: Vec<(String, String, String, Option<String>)> =
+            family(&self.nodes, &parent_session)
+                .flat_map(|(id, n)| {
+                    n.spawns
+                        .iter()
+                        .filter(|s| {
+                            // A background launch returns before its child
+                            // starts; a foreground one only once it's done.
+                            s.kind == SpawnKind::Session
+                                && s.child.is_none()
+                                && (s.background || !s.returned)
+                                && s.requested_at <= started
+                        })
+                        .map(move |s| {
+                            (
+                                s.requested_at.clone(),
+                                id.clone(),
+                                s.call_id.clone(),
+                                s.agent_type.clone(),
+                            )
+                        })
+                })
+                .collect();
         candidates.sort();
         let child_node = &self.nodes[child];
         let pick = candidates
@@ -728,14 +764,31 @@ impl Reducer {
         }
     }
 
+    /// Closes the open waits on `target` (its spawn waits too, if asked).
     fn close_waits_on(&mut self, target: &str, ts: &str, spawn_waits_too: bool) {
-        for node in self.nodes.values_mut() {
-            for wait in node.waits.iter_mut().filter(|w| {
-                w.open && w.on.as_deref() == Some(target) && (spawn_waits_too || !w.spawn)
-            }) {
+        let Some(waiters) = self.waiting_on.remove(target) else {
+            return;
+        };
+        let on_target = |w: &Wait| w.open && w.on.as_deref() == Some(target);
+        let mut still = BTreeSet::new();
+        for id in waiters {
+            let Some(node) = self.nodes.get_mut(&id) else {
+                continue;
+            };
+            for wait in node
+                .waits
+                .iter_mut()
+                .filter(|w| on_target(w) && (spawn_waits_too || !w.spawn))
+            {
                 wait.open = false;
                 wait.ended_at = Some(ts.to_string());
             }
+            if node.waits.iter().any(on_target) {
+                still.insert(id);
+            }
+        }
+        if !still.is_empty() {
+            self.waiting_on.insert(target.to_string(), still);
         }
     }
 
