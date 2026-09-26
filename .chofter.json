@@ -1,3 +1,5 @@
 {
-  "test": "bin/chofter test"
+  "setup": "bash scripts/ci-setup.sh",
+  "test": "bash scripts/test-all.sh",
+  "slowChecks": "bash scripts/ci-slow-checks.sh"
 }
