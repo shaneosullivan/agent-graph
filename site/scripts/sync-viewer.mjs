@@ -52,15 +52,17 @@ const wasmArgs = ["-p", "agent-graph-wasm", "--target", "wasm32-unknown-unknown"
 
 /** The crates the build uses, as "name version features" (the crates here without their paths). */
 function crates() {
-  const tree = spawnSync("cargo", ["tree", ...wasmArgs, "-e", "normal", "--prefix", "none", "--format", "{p} {f}"], {
-    cwd: crate,
-    encoding: "utf8",
-  });
+  // Without colour: CI turns it on, and it wraps the "(*)" marks.
+  const args = ["tree", ...wasmArgs, "-e", "normal", "--prefix", "none", "--format", "{p} {f}", "--color", "never"];
+  const tree = spawnSync("cargo", args, { cwd: crate, encoding: "utf8" });
   if (tree.status !== 0) {
     console.error(tree.error ? `Can't run cargo (${tree.error.message}); is Rust installed?` : tree.stderr);
     process.exit(tree.status ?? 1);
   }
-  const lines = tree.stdout.split("\n").map((l) => l.replace(/ \([^)]*\)/g, "").trim());
+  const lines = tree.stdout
+    .split("\n")
+    // eslint-disable-next-line no-control-regex
+    .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").replace(/ \([^)]*\)/g, "").trim());
   return [...new Set(lines.filter(Boolean))].sort();
 }
 
