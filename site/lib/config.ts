@@ -14,10 +14,27 @@ export function gone(): Response {
 /**
  * A request's body, as text, exactly as it was sent: a byte-order mark at
  * its start is kept (`req.text()` drops one), so what's stored is the bytes
- * sent, and chunks' offsets stay true.
+ * sent, and chunks' offsets stay true. Null if it's more than `max` bytes:
+ * it's read as it arrives, and only that far (a body sent without a
+ * Content-Length could be any size).
  */
-export async function bodyText(req: Request): Promise<string> {
-  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(await req.arrayBuffer());
+export async function bodyText(req: Request, max: number): Promise<string | null> {
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  if (req.body) {
+    const reader = req.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      parts.push(value);
+    }
+  }
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(Buffer.concat(parts));
 }
 
 /**
@@ -57,6 +74,11 @@ export const UNLOCKS_PER_LOG_AND_ADDRESS = 5;
 export const UNLOCKS_PER_LOG = 20;
 export const UNLOCKS_PER_ADDRESS = 30;
 export const UNLOCK_WINDOW_MS = 15 * 60 * 1000;
+/**
+ * The largest unlock body: `{"password": "…"}`, with room for a password of
+ * 1024 bytes written all in JSON escapes.
+ */
+export const UNLOCK_BODY_BYTES = 8 * 1024;
 /** How long to wait when too many guesses arrive at once to count them. */
 export const UNLOCK_BUSY_SECONDS = 5;
 

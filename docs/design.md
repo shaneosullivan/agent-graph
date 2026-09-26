@@ -478,7 +478,7 @@ Viewers can step through the log exactly as they can locally, over its recent hi
    - on network errors, keeps the lines and retries with backoff;
    - stops on a refusal.
 3. The site handles an append like this:
-   - checks the size from the header;
+   - checks the size from the header, and as the body is read (one sent without a `Content-Length` is read only as far as the limit);
    - verifies the key by recomputing an HMAC of the id, with no database read;
    - stores the raw body, never parsed, as one new Firestore document, `logs/{sid}/chunks/{offset}`, where `sid` is an HMAC of the log's id, in a transaction with the log's metadata: it's read, that the log is still there (one not in use is deleted: an append or trim to it is refused with `410`, and the sharer stops and says so), and its count of the bytes it stores (`stored`) is updated.
 

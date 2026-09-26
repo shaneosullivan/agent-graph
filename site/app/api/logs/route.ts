@@ -19,8 +19,8 @@ export async function POST(req: Request): Promise<Response> {
   if (Number(req.headers.get("content-length") ?? 0) > MAX_CHUNK_BYTES) {
     return tooLarge();
   }
-  const text = await bodyText(req);
-  if (Buffer.byteLength(text) > MAX_CHUNK_BYTES) return tooLarge();
+  const text = await bodyText(req, MAX_CHUNK_BYTES);
+  if (text === null) return tooLarge();
 
   const header = req.headers.get("x-agent-graph-source") as Source | null;
   const source: Source = header && SOURCES.includes(header) ? header : "paste";
