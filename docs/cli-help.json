@@ -288,7 +288,7 @@
         { "id": "url", "flag": "--url <URL>", "text": "The site to share on." },
         { "id": "password", "flag": "--password <PASSWORD>", "text": "Viewers must enter this. `--password=` shares without one, even if a default is saved." },
         { "id": "save_default_password", "flag": "--save-default-password", "text": "Save --password as the default for future runs; with an empty --password=, forget it." },
-        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session: its id, the first few characters of it, or `current` (the Claude Code session this runs in; if that isn't recorded, it stops rather than guess)." }
+        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code session this runs in; if that isn't recorded, it stops rather than guess)." }
       ],
       "examples": [
         { "command": "agent-graph watch-remote", "text": "Share every session, live. The first line printed is the link." },

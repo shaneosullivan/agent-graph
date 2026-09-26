@@ -287,3 +287,165 @@ fn the_shared_sessions_description_is_cleaned() {
         "control characters reached the terminal: {err:?}"
     );
 }
+
+/// A session's start, with its parent.
+fn started_under(session: &str, parent: &str) -> String {
+    format!(
+        r#"{{"v":1,"id":"01K00000000000000000000C{session}","ts":"2026-09-25T10:00:01.000Z","type":"session.started","node":"{session}","parent":"{parent}","data":{{"cwd":"/work/app"}}}}"#
+    ) + "\n"
+}
+
+/// R13: sharing one session shares the sessions (and `run`s) under it too,
+/// each from its own file, including ones that start later; and nothing
+/// from sessions outside it.
+#[test]
+fn sharing_a_session_includes_the_sessions_under_it() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let write = |file: &str, text: &str| {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(events.join(file))
+            .unwrap();
+        f.write_all(text.as_bytes()).unwrap();
+    };
+    write("claude-code-parent.jsonl", &started("parent", "/work/app"));
+    write(
+        "claude-code-child.jsonl",
+        &started_under("claude-code:child", "claude-code:parent"),
+    );
+    write(
+        "run-r1.jsonl",
+        &started_under("run:r1", "claude-code:parent"),
+    );
+    write(
+        "claude-code-other.jsonl",
+        &started("other", "/work/elsewhere"),
+    );
+
+    let _running = Stopped(
+        Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+            .args(["watch-remote", "--session", "parent", "--url"])
+            .arg(format!("http://127.0.0.1:{port}"))
+            .env("AGENT_GRAPH_HOME", home.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let created = requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("shared");
+    for node in ["claude-code:parent", "claude-code:child", "run:r1"] {
+        assert!(
+            created.body.contains(&format!("\"node\":\"{node}\"")),
+            "{node} missing"
+        );
+    }
+    assert!(
+        !created.body.contains("claude-code:other"),
+        "shared another session"
+    );
+
+    // A session that starts under it later is shared too; the other isn't.
+    write(
+        "claude-code-other.jsonl",
+        &line(7).replace("x:s", "claude-code:other"),
+    );
+    write(
+        "claude-code-late.jsonl",
+        &started_under("claude-code:late", "claude-code:parent"),
+    );
+    let mut sent = String::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !sent.contains("claude-code:late") && std::time::Instant::now() < deadline {
+        if let Ok(r) = requests.recv_timeout(Duration::from_millis(200)) {
+            sent.push_str(&r.body);
+        }
+    }
+    assert!(
+        sent.contains("claude-code:late"),
+        "the late child wasn't shared: {sent}"
+    );
+    assert!(
+        !sent.contains("claude-code:other"),
+        "shared another session"
+    );
+}
+
+/// A child process that's stopped when this is dropped, however the test ends.
+struct Stopped(std::process::Child);
+
+impl Drop for Stopped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// R13: a session that moves out of the shared tree (resumed from another
+/// session's shell) stops being shared, even when nothing else changes.
+#[test]
+fn a_session_that_leaves_the_shared_tree_stops_being_shared() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let write = |file: &str, text: &str| {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(events.join(file))
+            .unwrap();
+        f.write_all(text.as_bytes()).unwrap();
+    };
+    write("claude-code-parent.jsonl", &started("parent", "/work/app"));
+    write(
+        "claude-code-child.jsonl",
+        &started_under("claude-code:child", "claude-code:parent"),
+    );
+
+    let _running = Stopped(
+        Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+            .args(["watch-remote", "--session", "parent", "--url"])
+            .arg(format!("http://127.0.0.1:{port}"))
+            .env("AGENT_GRAPH_HOME", home.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let created = requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("shared");
+    assert!(created.body.contains("claude-code:child"));
+
+    // Resumed under another session: its later events aren't ours to share.
+    let moved = started_under("claude-code:child", "claude-code:elsewhere")
+        .replace("01K00000000000000000000C", "01K00000000000000000000M")
+        .replace("10:00:01", "10:05:00");
+    write("claude-code-child.jsonl", &moved);
+    write(
+        "claude-code-child.jsonl",
+        &line(9)
+            .replace("x:s", "claude-code:child")
+            .replace("working", "input_required"),
+    );
+    let mut sent = String::new();
+    while let Ok(r) = requests.recv_timeout(Duration::from_secs(3)) {
+        sent.push_str(&r.body);
+    }
+    assert!(
+        !sent.contains("claude-code:elsewhere"),
+        "sent the move: {sent}"
+    );
+    assert!(
+        !sent.contains("input_required"),
+        "kept sharing the moved session: {sent}"
+    );
+}

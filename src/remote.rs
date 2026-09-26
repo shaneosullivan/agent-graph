@@ -14,11 +14,11 @@
 //! Bodies are raw JSON Lines, never wrapped in JSON, and are cut only at line
 //! boundaries.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,9 @@ pub const MAX_CHUNK: usize = 256 * 1024;
 /// How often to look for new lines.
 const POLL: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// How often, at most, to work out again which files a shared session's
+/// tree spans (only when a file outside it has changed).
+const RECHECK: Duration = Duration::from_secs(3);
 
 pub struct Options {
     pub url: String,
@@ -74,8 +77,8 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     let events = crate::paths::events_dir(root);
     let (only, what) = match &opts.session {
         Some(want) => {
-            let (file, what) = session_file(&events, want)?;
-            (Some(file), what)
+            let (session, what) = pick_session(&events, want)?;
+            (Some(session), what)
         }
         None => (None, format!("every session in {}", root.display())),
     };
@@ -139,54 +142,198 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
 /// new lines, as raw bytes.
 pub struct Lines {
     dir: PathBuf,
-    only: Option<PathBuf>,
+    /// Sharing one session: only the files of its tree.
+    tree: Option<Tree>,
     offsets: BTreeMap<PathBuf, u64>,
 }
 
+/// A shared session and the files its tree spans: its own, and those of
+/// sessions (and `run`s) linked under it, which each have their own.
+struct Tree {
+    root: String,
+    root_file: PathBuf,
+    files: BTreeSet<PathBuf>,
+    /// Sizes of the other files, to notice one changing (a new session
+    /// starting under the root, say).
+    others: BTreeMap<PathBuf, u64>,
+    stale: bool,
+    checked: Option<Instant>,
+    /// The log couldn't be read at the last recheck (said once).
+    failing: bool,
+    /// How many times the tree has been worked out (each a full reduce).
+    rechecks: u32,
+}
+
+impl Tree {
+    /// Notes whether any file outside the tree has changed.
+    fn notice(&mut self, paths: &[PathBuf]) {
+        for path in paths.iter().filter(|p| !self.files.contains(*p)) {
+            let size = fs::metadata(path).map(|m| m.len()).ok();
+            if size != self.others.get(path).copied() {
+                self.stale = true;
+                match size {
+                    Some(size) => self.others.insert(path.clone(), size),
+                    None => self.others.remove(path),
+                };
+            }
+        }
+    }
+
+    /// Works out the tree's files again. Returns whether it could: if the
+    /// log can't be read just now, it stays stale, to try again.
+    fn recheck(&mut self, dir: &Path) -> bool {
+        self.checked = Some(Instant::now());
+        self.rechecks += 1;
+        match tree_files(dir, &self.root) {
+            Ok(files) => {
+                self.files = files;
+                self.stale = false;
+                self.failing = false;
+                true
+            }
+            Err(e) => {
+                if !self.failing {
+                    eprintln!(
+                        "Can't read the events to see which sessions belong to this one ({e}); \
+                         holding back any that may have moved, and trying again."
+                    );
+                    self.failing = true;
+                }
+                false
+            }
+        }
+    }
+}
+
+/// New whole lines read from one file, not yet sent.
+struct Batch {
+    path: PathBuf,
+    lines: Vec<u8>,
+    /// Where the file's offset goes once they're sent.
+    offset: u64,
+}
+
 impl Lines {
-    pub fn new(dir: &Path, only: Option<PathBuf>) -> Lines {
+    /// Reads every events file in `dir`, or with `only`, the files of that
+    /// session's tree.
+    pub fn new(dir: &Path, only: Option<String>) -> Lines {
+        let tree = only.map(|root| {
+            let root_file = session_path(dir, &root);
+            Tree {
+                root,
+                files: BTreeSet::from([root_file.clone()]),
+                root_file,
+                others: BTreeMap::new(),
+                stale: true,
+                checked: None,
+                failing: false,
+                rechecks: 0,
+            }
+        });
         Lines {
             dir: dir.to_path_buf(),
-            only,
+            tree,
             offsets: BTreeMap::new(),
         }
     }
 
+    /// The new whole lines, from every file or the shared tree's.
+    ///
+    /// For a tree, the lines are read first and the tree worked out again
+    /// after (only if something may have changed it), so the recheck sees
+    /// every line about to be sent: a session that has just restarted under
+    /// another parent, and so left, isn't sent.
     pub fn poll(&mut self) -> io::Result<Vec<u8>> {
-        let mut out = Vec::new();
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e),
         };
+        let mut paths = Vec::new();
         for entry in entries {
             let path = entry?.path();
-            if path.extension().is_none_or(|e| e != "jsonl")
-                || self.only.as_ref().is_some_and(|o| o != &path)
-            {
-                continue;
+            if path.extension().is_some_and(|e| e == "jsonl") {
+                paths.push(path);
             }
-            let size = fs::metadata(&path)?.len();
-            let mut offset = self.offsets.get(&path).copied().unwrap_or(0);
-            // A file that shrank was rewritten; send it again. The site drops
-            // events it has already seen.
-            if size < offset {
-                offset = 0;
-            }
-            if size > offset {
-                let mut file = File::open(&path)?;
-                file.seek(SeekFrom::Start(offset))?;
-                let mut buf = Vec::new();
-                file.take(size - offset).read_to_end(&mut buf)?;
-                // Only whole lines; the rest waits for the next poll.
-                let end = buf.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-                out.extend_from_slice(&buf[..end]);
-                offset += end as u64;
-            }
-            self.offsets.insert(path, offset);
         }
-        Ok(out)
+        let Some(tree) = &mut self.tree else {
+            let batches = read_batches(&paths, &self.offsets)?;
+            return Ok(self.commit(batches));
+        };
+        tree.notice(&paths);
+
+        let members: Vec<PathBuf> = paths
+            .iter()
+            .filter(|p| tree.files.contains(*p))
+            .cloned()
+            .collect();
+        let mut batches = read_batches(&members, &self.offsets)?;
+        let restarted = batches.iter().any(|b| {
+            b.path != tree.root_file && contains(&b.lines, br#""type":"session.started""#)
+        });
+        let due = tree.checked.is_none_or(|t| t.elapsed() >= RECHECK);
+        // A restart is checked straight away, unless the log has been
+        // unreadable, when it waits like any other recheck.
+        let recheck_now = (restarted && !tree.failing) || ((restarted || tree.stale) && due);
+        let checked = recheck_now && tree.recheck(&self.dir);
+        if checked {
+            // Files that just joined: read them now, after the recheck.
+            let joined: Vec<PathBuf> = paths
+                .iter()
+                .filter(|p| tree.files.contains(*p) && !members.contains(p))
+                .cloned()
+                .collect();
+            batches.extend(read_batches(&joined, &self.offsets)?);
+        } else if restarted {
+            // Can't tell whether a restarted session left, taking the
+            // sessions under it along: hold back all but the root's lines
+            // until we can.
+            batches.retain(|b| b.path == tree.root_file);
+        }
+        let files = tree.files.clone();
+        batches.retain(|b| files.contains(&b.path));
+        Ok(self.commit(batches))
     }
+
+    /// The batches' lines, in order, with their files' offsets moved on.
+    fn commit(&mut self, batches: Vec<Batch>) -> Vec<u8> {
+        let mut out = Vec::new();
+        for batch in batches {
+            out.extend_from_slice(&batch.lines);
+            self.offsets.insert(batch.path, batch.offset);
+        }
+        out
+    }
+}
+
+/// New whole lines in each of `paths`, past its offset.
+fn read_batches(paths: &[PathBuf], offsets: &BTreeMap<PathBuf, u64>) -> io::Result<Vec<Batch>> {
+    let mut batches = Vec::new();
+    for path in paths {
+        let size = fs::metadata(path)?.len();
+        let mut offset = offsets.get(path).copied().unwrap_or(0);
+        // A file that shrank was rewritten; send it again. The site drops
+        // events it has already seen.
+        if size < offset {
+            offset = 0;
+        }
+        let mut lines = Vec::new();
+        if size > offset {
+            let mut file = File::open(path)?;
+            file.seek(SeekFrom::Start(offset))?;
+            file.take(size - offset).read_to_end(&mut lines)?;
+            // Only whole lines; the rest waits for the next poll.
+            let end = lines.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+            lines.truncate(end);
+            offset += end as u64;
+        }
+        batches.push(Batch {
+            path: path.clone(),
+            lines,
+            offset,
+        });
+    }
+    Ok(batches)
 }
 
 /// How many bytes of `buf` to send next: at most `max`, ending at a line
@@ -204,10 +351,40 @@ pub fn chunk_len(buf: &[u8], max: usize) -> usize {
     }
 }
 
-/// The events file for the session matching `want`, and how to describe it.
-/// "current" must be the session this runs in: anything looser (the newest
-/// session, say) could publish another project's.
-fn session_file(events: &Path, want: &str) -> Result<(PathBuf, String), String> {
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// The events file of `session` (a session's node id).
+fn session_path(dir: &Path, session: &str) -> PathBuf {
+    let (provider, id) = session.split_once(':').unwrap_or(("", session));
+    dir.join(format!("{}.jsonl", crate::paths::file_key(provider, id)))
+}
+
+/// The files of every session (and `run`) in `root`'s tree.
+fn tree_files(dir: &Path, root: &str) -> io::Result<BTreeSet<PathBuf>> {
+    let loaded = crate::store::load_events(dir)?;
+    let graph = crate::reducer::reduce(loaded.events, &crate::reducer::Options::default());
+    let mut files = BTreeSet::from([session_path(dir, root)]);
+    let mut seen = BTreeSet::new();
+    let mut queue = vec![root.to_string()];
+    while let Some(id) = queue.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let session = id.split('/').next().unwrap_or(&id);
+        files.insert(session_path(dir, session));
+        if let Some(node) = graph.nodes.get(&id) {
+            queue.extend(node.children.iter().cloned());
+        }
+    }
+    Ok(files)
+}
+
+/// The session matching `want`, and how to describe it. "current" must be
+/// the session this runs in: anything looser (the newest session, say)
+/// could publish another project's.
+fn pick_session(events: &Path, want: &str) -> Result<(String, String), String> {
     let loaded = crate::store::load_events(events).map_err(|e| e.to_string())?;
     let graph = crate::reducer::reduce(loaded.events, &crate::reducer::Options::default());
     let node = if want == "current" {
@@ -222,7 +399,11 @@ fn session_file(events: &Path, want: &str) -> Result<(PathBuf, String), String> 
         crate::cli::find_session(&graph, want)?
     };
     let session = node.split('/').next().unwrap_or(&node).to_string();
-    let (provider, id) = session.split_once(':').ok_or("unexpected node id")?;
+    if !session.contains(':') {
+        return Err(format!(
+            "{session:?} isn't a session id Agent Graph records"
+        ));
+    }
     let folder = graph.nodes.get(&session).and_then(|n| n.cwd.clone());
     // Both come from the log: cleaned, like everything else printed from it.
     let clean = crate::render::clean;
@@ -230,10 +411,7 @@ fn session_file(events: &Path, want: &str) -> Result<(PathBuf, String), String> 
         Some(folder) => format!("session {} (in {})", clean(&session), clean(&folder)),
         None => format!("session {}", clean(&session)),
     };
-    Ok((
-        events.join(format!("{}.jsonl", crate::paths::file_key(provider, id))),
-        what,
-    ))
+    Ok((session, what))
 }
 
 // ---------- talking to the site ----------
@@ -406,6 +584,132 @@ pub fn clear_default_password(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn start(session: &str, cwd: &str) -> String {
+        format!(
+            r#"{{"v":1,"id":"01K00000000000000000000S01","ts":"2026-09-25T10:00:00.000Z","type":"session.started","node":"{session}","data":{{"cwd":"{cwd}"}}}}"#
+        ) + "\n"
+    }
+
+    /// R13: a recheck that can't read the log keeps the tree stale, so the
+    /// change that prompted it isn't lost.
+    #[test]
+    fn a_failed_recheck_tries_again() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("claude-code-p.jsonl"),
+            start("claude-code:p", "/a"),
+        )
+        .unwrap();
+        // Something load_events can't read: a folder where a file should be.
+        std::fs::create_dir(dir.path().join("broken.jsonl")).unwrap();
+        let mut lines = Lines::new(dir.path(), Some("claude-code:p".into()));
+        let _ = lines.poll();
+        assert!(lines.tree.as_ref().unwrap().stale, "gave up on the change");
+    }
+
+    fn under(session: &str, parent: &str, n: u32) -> String {
+        format!(
+            r#"{{"v":1,"id":"01K00000000000000000000U{n:02}","ts":"2026-09-25T10:00:{n:02}.000Z","type":"session.started","node":"{session}","parent":"{parent}","data":{{}}}}"#
+        ) + "\n"
+    }
+
+    /// R13: starting to share a tree of many sessions works it out once,
+    /// not once per file (each is a full reduce of the log).
+    #[test]
+    fn a_tree_is_worked_out_once_per_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("claude-code-p.jsonl"),
+            start("claude-code:p", "/a"),
+        )
+        .unwrap();
+        for n in 0..5 {
+            let child = format!("claude-code:c{n}");
+            std::fs::write(
+                dir.path().join(format!("claude-code-c{n}.jsonl")),
+                under(&child, "claude-code:p", n),
+            )
+            .unwrap();
+        }
+        let mut lines = Lines::new(dir.path(), Some("claude-code:p".into()));
+        let text = String::from_utf8(lines.poll().unwrap()).unwrap();
+        assert_eq!(text.lines().count(), 6, "the root and its five children");
+        assert_eq!(lines.tree.as_ref().unwrap().rechecks, 1);
+    }
+
+    /// R13: while the log can't be read, a member that restarted (and so
+    /// may have left) isn't sent; once it can, it's sent only if it stayed.
+    #[test]
+    fn a_restarted_member_is_held_back_until_the_tree_can_be_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str| dir.path().join(name);
+        std::fs::write(file("claude-code-p.jsonl"), start("claude-code:p", "/a")).unwrap();
+        std::fs::write(
+            file("claude-code-c.jsonl"),
+            under("claude-code:c", "claude-code:p", 1),
+        )
+        .unwrap();
+        std::fs::write(
+            file("claude-code-d.jsonl"),
+            under("claude-code:d", "claude-code:c", 2),
+        )
+        .unwrap();
+        let mut lines = Lines::new(dir.path(), Some("claude-code:p".into()));
+        assert_eq!(
+            String::from_utf8(lines.poll().unwrap())
+                .unwrap()
+                .lines()
+                .count(),
+            3
+        );
+
+        // It restarts under another session while the log can't be read,
+        // and a session under it carries on.
+        std::fs::create_dir(file("broken.jsonl")).unwrap();
+        crate::store::append(
+            &file("claude-code-c.jsonl"),
+            under("claude-code:c", "claude-code:q", 2).as_bytes(),
+        )
+        .unwrap();
+        let working = r#"{"v":1,"id":"01K00000000000000000000W01","ts":"2026-09-25T10:00:09.000Z","type":"status","node":"claude-code:d","data":{"state":"working"}}"#;
+        crate::store::append(
+            &file("claude-code-d.jsonl"),
+            format!("{working}\n").as_bytes(),
+        )
+        .unwrap();
+        let rechecks = lines.tree.as_ref().unwrap().rechecks;
+        for _ in 0..3 {
+            let sent = String::from_utf8(lines.poll().unwrap()).unwrap();
+            assert!(sent.is_empty(), "sent before it could be checked: {sent}");
+        }
+        assert_eq!(
+            lines.tree.as_ref().unwrap().rechecks,
+            rechecks + 1,
+            "while failing, it retries only every RECHECK"
+        );
+
+        std::fs::remove_dir(file("broken.jsonl")).unwrap();
+        lines.tree.as_mut().unwrap().checked = None; // as if RECHECK had passed
+        assert!(
+            lines.poll().unwrap().is_empty(),
+            "they left, so none of it is sent"
+        );
+    }
+
+    /// R13: an id without a provider isn't one the hooks write; sharing it
+    /// would only ever send an empty log.
+    #[test]
+    fn a_session_id_without_a_provider_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("x.jsonl"), start("foo", "/a")).unwrap();
+        assert!(pick_session(dir.path(), "foo").is_err());
+        std::fs::write(dir.path().join("y.jsonl"), start("claude-code:bar", "/b")).unwrap();
+        assert_eq!(
+            pick_session(dir.path(), "bar").unwrap().0,
+            "claude-code:bar"
+        );
+    }
 
     #[test]
     fn chunks_end_at_line_boundaries() {

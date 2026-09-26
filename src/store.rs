@@ -311,7 +311,11 @@ mod tests {
         torn.extend_from_slice(format!("{}\n", good(2)).as_bytes());
         torn.extend_from_slice(format!("{}\n", good(3)).as_bytes());
         append(&dir.path().join("x-1.jsonl"), &torn).unwrap();
-        append(&dir.path().join("y-1.jsonl"), format!("{}\n", good(4)).as_bytes()).unwrap();
+        append(
+            &dir.path().join("y-1.jsonl"),
+            format!("{}\n", good(4)).as_bytes(),
+        )
+        .unwrap();
 
         let loaded = load_events(dir.path()).expect("loads despite the bad bytes");
         assert_eq!(loaded.events.len(), 3, "lines 1 and 3, and the other file");

@@ -89,8 +89,8 @@ Status is updated as each is done.
 ### R13. `watch-remote --session X` doesn't share the sessions under X
 - **Where:** `src/remote.rs`
 - **Problem:** Only X's own file is uploaded, so sessions and `run` nodes linked under it (each in their own file) are missing from the shared view, and X looks like it's waiting on a child that never starts.
-- **Fix:** share every file in X's tree, re-checked as new ones appear.
-- **Status:** open
+- **Fix:** every file in X's tree is shared (X's, and those of sessions and `run`s linked under it). Each poll reads the tree's new lines first, then works the tree out again once (only if a file outside it changed, at most every 3 s, or a member restarted and so may have left), reads any files that joined, and sends only what's still in the tree. A session that leaves stops being shared; while the log can't be read, anything that may have left is held back (with a warning), and nothing is lost.
+- **Status:** fixed. Tests: `sharing_a_session_includes_the_sessions_under_it`, `a_session_that_leaves_the_shared_tree_stops_being_shared` (tests/remote.rs), and `a_tree_is_worked_out_once_per_poll`, `a_restarted_member_is_held_back_until_the_tree_can_be_checked`, `a_failed_recheck_tries_again`, `a_session_id_without_a_provider_is_refused` (src/remote.rs). Reviewed (four rounds).
 
 ### R14. `install --scope project` writes this machine's binary path into a file meant to be committed
 - **Where:** `src/cli.rs`, `src/install.rs`
