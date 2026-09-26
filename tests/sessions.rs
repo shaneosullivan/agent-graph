@@ -313,6 +313,41 @@ fn agent_graph_run_groups_what_it_starts_and_keeps_its_failure() {
     assert_eq!(g.roots, [RUN]);
 }
 
+/// R57: a request made through `agent-graph run` says so, and the run's
+/// session (named for the run, not what it runs) answers it, not an older
+/// request for another program.
+#[test]
+fn a_run_answers_the_request_made_for_it() {
+    const RUN: &str = "run:01K0";
+    let parent = claude(
+        0,
+        &[
+            hook("aaaa", "SessionStart", json!({})),
+            bash("aaaa", true, "toolu_codex", "codex exec 'review it' &"),
+            bash(
+                "aaaa",
+                true,
+                "toolu_run",
+                "agent-graph run --name workers -- npx tsx workers.ts &",
+            ),
+        ],
+    );
+    let requests: Vec<_> = parent
+        .iter()
+        .filter(|e| e.kind == "spawn.requested")
+        .map(|e| (e.data["agent_type"].clone(), e.data.get("run").cloned()))
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            (json!("codex"), Some(json!(false))),
+            (json!("tsx"), Some(json!(true)))
+        ]
+    );
+    let g = graph(vec![parent, vec![started(5, RUN, Some(A), None, &[])]]);
+    assert_eq!(g.nodes[RUN].spawned_by.as_deref(), Some("toolu_run"));
+}
+
 #[test]
 fn ending_a_session_cancels_its_agents_but_not_sessions_it_started() {
     let events = vec![
