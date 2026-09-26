@@ -179,12 +179,14 @@ pub fn load_events(dir: &Path) -> io::Result<Loaded> {
         if path.extension().is_none_or(|ext| ext != "jsonl") {
             continue;
         }
-        for line in BufReader::new(fs::File::open(&path)?).lines() {
+        // Lines as bytes: one that isn't UTF-8 (a write torn mid-character)
+        // is just a bad line, like any other that doesn't parse.
+        for line in BufReader::new(fs::File::open(&path)?).split(b'\n') {
             let line = line?;
-            if line.trim().is_empty() {
+            if line.trim_ascii().is_empty() {
                 continue;
             }
-            match serde_json::from_str::<Envelope>(&line) {
+            match serde_json::from_slice::<Envelope>(&line) {
                 Ok(event) => loaded.events.push(event),
                 Err(_) => loaded.skipped_lines += 1,
             }
@@ -290,6 +292,29 @@ mod tests {
 
         let loaded = load_events(dir.path()).unwrap();
         assert_eq!(loaded.events.len(), 1);
+        assert_eq!(loaded.skipped_lines, 1);
+    }
+
+    /// R12: a write torn inside a multi-byte character (a crash, a full
+    /// disk) leaves bytes that aren't UTF-8. That line is skipped; the rest
+    /// of the file, and every other file, still load.
+    #[test]
+    fn a_line_that_isnt_utf8_is_skipped_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = |n: u32| {
+            format!(
+                r#"{{"v":1,"id":"01J8ZK3V7Q9R2M5X4T6W8Y0B{n:02}","ts":"2026-09-25T10:00:00.000Z","type":"status","node":"x:1","data":{{"state":"idle"}}}}"#
+            )
+        };
+        let mut torn = format!("{}\n", good(1)).into_bytes();
+        torn.extend_from_slice(b"{\"v\":1,\"data\":{\"summary\":\"caf\xc3");
+        torn.extend_from_slice(format!("{}\n", good(2)).as_bytes());
+        torn.extend_from_slice(format!("{}\n", good(3)).as_bytes());
+        append(&dir.path().join("x-1.jsonl"), &torn).unwrap();
+        append(&dir.path().join("y-1.jsonl"), format!("{}\n", good(4)).as_bytes()).unwrap();
+
+        let loaded = load_events(dir.path()).expect("loads despite the bad bytes");
+        assert_eq!(loaded.events.len(), 3, "lines 1 and 3, and the other file");
         assert_eq!(loaded.skipped_lines, 1);
     }
 

@@ -83,8 +83,8 @@ Status is updated as each is done.
 ### R12. One invalid UTF-8 byte stops `tree`, `snapshot` and `watch-remote` for every session
 - **Where:** `src/store.rs` (`load_events`)
 - **Problem:** A write torn inside a multi-byte character makes `lines()` fail, and the whole load fails instead of skipping that line (the viewer already skips it).
-- **Fix:** read lines as bytes and count the bad one as skipped.
-- **Status:** open
+- **Fix:** lines are read as bytes and parsed with `from_slice`, so one that isn't UTF-8 is a skipped line like any other that doesn't parse (as the viewer already did).
+- **Status:** fixed. Test: `a_line_that_isnt_utf8_is_skipped_not_fatal` (src/store.rs). Reviewed.
 
 ### R13. `watch-remote --session X` doesn't share the sessions under X
 - **Where:** `src/remote.rs`
