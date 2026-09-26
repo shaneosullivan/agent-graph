@@ -273,7 +273,7 @@
         { "text": "Anyone with the link, unless there's a password:" },
         {
           "table": [
-            ["--password=…", "Viewers must enter it. The site keeps only a hash."],
+            ["--password=…", "Viewers must enter it (at most 1024 bytes). The site keeps only a hash."],
             ["--save-default-password", "Also use that password from now on. It's saved in ~/.agent-graph/remote.json, readable only by you."],
             ["--password= --save-default-password", "Forget the saved password."],
             ["--password=", "Share this time without one, even if one's saved."]

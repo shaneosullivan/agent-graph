@@ -354,6 +354,14 @@ test("bad input is refused", async () => {
     body: line(1),
   });
   assert.equal(badPassword.status, 400);
+  // R46: no longer than unlocking checks.
+  const longPassword = await fetch(`${BASE}/api/logs`, {
+    method: "POST",
+    headers: { "X-Agent-Graph-Password": b64url("x".repeat(1025)) },
+    body: line(1),
+  });
+  assert.equal(longPassword.status, 400);
+  assert.match(await longPassword.text(), /at most 1024 bytes/);
 
   // R45: sent without a Content-Length, a body is measured as it's read.
   const streamed = (bytes) => ({

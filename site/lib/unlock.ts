@@ -1,4 +1,12 @@
-import { bodyText, clientAddress, ID_PATTERN, isHttps, UNLOCK_BODY_BYTES, viewCookieName } from "./config";
+import {
+  bodyText,
+  clientAddress,
+  ID_PATTERN,
+  isHttps,
+  MAX_PASSWORD_BYTES,
+  UNLOCK_BODY_BYTES,
+  viewCookieName,
+} from "./config";
 import { verifyPassword, viewToken } from "./crypto";
 import { getMeta, giveBackUnlockAttempt, takeUnlockAttempt } from "./store";
 
@@ -38,7 +46,10 @@ export async function unlock(req: Request, id: string, deps: UnlockDeps = defaul
   } catch {
     return new Response('Expected JSON: { "password": "…" }.', { status: 400 });
   }
-  if (!password || password.length > 1024) return new Response("Wrong password.", { status: 401 });
+  // (No log has a longer one: see passwordFromHeader.)
+  if (!password || Buffer.byteLength(password) > MAX_PASSWORD_BYTES) {
+    return new Response("Wrong password.", { status: 401 });
+  }
 
   const attempt = await deps.takeUnlockAttempt(id, clientAddress(req));
   if ("wait" in attempt) {

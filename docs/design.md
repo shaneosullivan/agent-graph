@@ -502,7 +502,7 @@ Viewers can step through the log exactly as they can locally, over its recent hi
 **Who can do what:**
 - **Only the creator can add to a log.** The write key comes back only from the create call, the CLI and the upload page keep it only in memory, and every append must present it. It's derived from the site's secret, so it can't be guessed or forged, and it isn't stored anywhere. There's no API to change a log, or delete one but for trimming its start, which also needs the key (logs not in use are deleted by the site itself, below).
 - **Viewing** needs only the link, unless a password was set:
-  - `--password=…` (or the upload page's field) is sent base64url-encoded in a header, over HTTPS; the CLI refuses a password over plain HTTP except to localhost.
+  - `--password=…` (or the upload page's field) is sent base64url-encoded in a header, over HTTPS; it may be at most 1024 bytes of UTF-8 (the site refuses a longer one, and unlocking checks none longer; the CLI refuses one before sending it, and the upload page's field holds 200 characters); the CLI refuses a password over plain HTTP except to localhost.
   - The site stores only a scrypt hash.
   - Wrong guesses are limited every 15 minutes: 5 at a log from one address, 20 at a log in all, and 30 from one address across logs, counted in Firestore. Past a limit, unlocking waits for the window to end. That still allows about 2,000 guesses a day at a log (so the password should be a strong one), and someone guessing from several addresses can keep a log's new viewers waiting.
   - Unlocking sets an HttpOnly cookie, derived the same way, for that log.
