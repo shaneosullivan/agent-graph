@@ -72,9 +72,12 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     }
 
     let events = crate::paths::events_dir(root);
-    let only = match &opts.session {
-        Some(want) => Some(session_file(&events, want)?),
-        None => None,
+    let (only, what) = match &opts.session {
+        Some(want) => {
+            let (file, what) = session_file(&events, want)?;
+            (Some(file), what)
+        }
+        None => (None, format!("every session in {}", root.display())),
     };
     let mut source = Lines::new(&events, only);
     let mut pending = source
@@ -89,10 +92,6 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     // The link first, so it can be shared straight away.
     println!("{}", log.url);
     io::stdout().flush().ok();
-    let what = match &opts.session {
-        Some(s) => format!("session {s}"),
-        None => format!("every session in {}", root.display()),
-    };
     let who = if password.is_some() {
         "Viewers need the password"
     } else {
@@ -205,18 +204,36 @@ pub fn chunk_len(buf: &[u8], max: usize) -> usize {
     }
 }
 
-/// The events file for the session matching `want`.
-fn session_file(events: &Path, want: &str) -> Result<PathBuf, String> {
+/// The events file for the session matching `want`, and how to describe it.
+/// "current" must be the session this runs in: anything looser (the newest
+/// session, say) could publish another project's.
+fn session_file(events: &Path, want: &str) -> Result<(PathBuf, String), String> {
     let loaded = crate::store::load_events(events).map_err(|e| e.to_string())?;
     let graph = crate::reducer::reduce(loaded.events, &crate::reducer::Options::default());
-    let cwd = std::env::current_dir().ok();
-    let node = crate::cli::pick_roots(&graph, Some(want), false, cwd.as_deref())?
-        .into_iter()
-        .next()
-        .ok_or("no sessions recorded yet")?;
-    let session = node.split('/').next().unwrap_or(&node);
+    let node = if want == "current" {
+        crate::cli::running_in(&graph).ok_or(
+            "can't tell which session this is, because it isn't recorded (Agent Graph \
+             records Claude Code sessions started after it's installed), so nothing was \
+             shared. Choose a session yourself with --session <id>; don't guess.",
+        )?
+    } else {
+        // Sessions only: a short prefix that happens to match an agent in
+        // another project's session mustn't share that session.
+        crate::cli::find_session(&graph, want)?
+    };
+    let session = node.split('/').next().unwrap_or(&node).to_string();
     let (provider, id) = session.split_once(':').ok_or("unexpected node id")?;
-    Ok(events.join(format!("{}.jsonl", crate::paths::file_key(provider, id))))
+    let folder = graph.nodes.get(&session).and_then(|n| n.cwd.clone());
+    // Both come from the log: cleaned, like everything else printed from it.
+    let clean = crate::render::clean;
+    let what = match folder {
+        Some(folder) => format!("session {} (in {})", clean(&session), clean(&folder)),
+        None => format!("session {}", clean(&session)),
+    };
+    Ok((
+        events.join(format!("{}.jsonl", crate::paths::file_key(provider, id))),
+        what,
+    ))
 }
 
 // ---------- talking to the site ----------

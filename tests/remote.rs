@@ -141,3 +141,149 @@ fn walk(dir: &std::path::Path) -> Vec<String> {
     }
     out
 }
+
+/// A session's start, in `cwd`.
+fn started(session: &str, cwd: &str) -> String {
+    format!(
+        r#"{{"v":1,"id":"01K00000000000000000000S{session}","ts":"2026-09-25T10:00:00.000Z","type":"session.started","node":"claude-code:{session}","data":{{"cwd":"{cwd}"}}}}"#
+    ) + "\n"
+}
+
+/// R10: sharing "current" means the session this runs in. When that isn't
+/// recorded, it fails, rather than sharing whichever session is newest
+/// (another project's, perhaps) with anyone who has the link.
+#[test]
+fn sharing_the_current_session_never_falls_back_to_another() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    std::fs::write(
+        events.join("claude-code-secret.jsonl"),
+        started("secret", "/work/confidential"),
+    )
+    .unwrap();
+    let here = tempfile::tempdir().unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", "--session", "current", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .env("AGENT_GRAPH_HOME", home.path())
+        .env("CLAUDE_CODE_SESSION_ID", "not-recorded")
+        .current_dir(here.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Sharing keeps going until stopped; refusing exits straight away.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let out = child.wait_with_output().unwrap();
+    assert!(!out.status.success(), "it shared something");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--session"), "says how to choose: {err}");
+    assert!(
+        requests.recv_timeout(Duration::from_millis(500)).is_err(),
+        "nothing was sent to the site"
+    );
+
+    // Recorded: that session is shared, and named.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", "--session", "current", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .env("AGENT_GRAPH_HOME", home.path())
+        .env("CLAUDE_CODE_SESSION_ID", "secret")
+        .current_dir(here.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let created = requests
+        .recv_timeout(Duration::from_secs(5))
+        .expect("shared");
+    assert!(created.body.contains("claude-code:secret"));
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = child.kill();
+    let out = child.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("session claude-code:secret (in /work/confidential)"),
+        "{err}"
+    );
+}
+
+/// Runs `watch-remote` with `args` and `env` for up to two seconds (sharing
+/// keeps going until stopped), then stops it. Returns its stderr.
+fn watch(home: &std::path::Path, port: u16, args: &[&str], env: &[(&str, &str)]) -> String {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .arg("watch-remote")
+        .args(args)
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .env("AGENT_GRAPH_HOME", home)
+        .envs(env.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    String::from_utf8_lossy(&child.wait_with_output().unwrap().stderr).into_owned()
+}
+
+/// R10: a short --session prefix is matched against sessions only: one that
+/// happens to match an agent in another project's session shares nothing.
+#[test]
+fn a_session_prefix_never_matches_another_sessions_agent() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let agent = r#"{"v":1,"id":"01K0000000000000000000AG01","ts":"2026-09-25T10:00:01.000Z","type":"agent.spawned","node":"claude-code:9d1e/a3f91c2e5b","parent":"claude-code:9d1e","data":{}}"#;
+    std::fs::write(
+        events.join("claude-code-9d1e.jsonl"),
+        started("9d1e", "/work/other") + agent + "\n",
+    )
+    .unwrap();
+    let err = watch(home.path(), port, &["--session", "a3f9"], &[]);
+    assert!(err.contains("no session matches"), "{err}");
+    assert!(
+        requests.recv_timeout(Duration::from_millis(300)).is_err(),
+        "shared"
+    );
+}
+
+/// R10: what's printed about the session comes from the log, so it's
+/// cleaned of control characters, like everything else printed from it.
+#[test]
+fn the_shared_sessions_description_is_cleaned() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let cwd = r"/tmp/x\u001b]0;PWNED\u0007\u001b[2J\u202egnp.exe";
+    std::fs::write(events.join("claude-code-evil.jsonl"), started("evil", cwd)).unwrap();
+    let err = watch(
+        home.path(),
+        port,
+        &["--session", "current"],
+        &[("CLAUDE_CODE_SESSION_ID", "evil")],
+    );
+    requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("shared");
+    assert!(err.contains("session claude-code:evil"), "{err}");
+    assert!(
+        !err.contains(['\u{1b}', '\u{7}', '\u{202e}']),
+        "control characters reached the terminal: {err:?}"
+    );
+}

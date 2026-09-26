@@ -805,12 +805,8 @@ pub fn pick_roots(
     if let Some(want) = session.filter(|s| *s != "current") {
         return find_node(graph, want).map(|id| vec![id]);
     }
-    // Inside Claude Code, commands can see the session they run in.
-    if let Ok(id) = std::env::var("CLAUDE_CODE_SESSION_ID") {
-        let node = format!("claude-code:{id}");
-        if graph.nodes.contains_key(&node) {
-            return Ok(vec![node]);
-        }
+    if let Some(node) = running_in(graph) {
+        return Ok(vec![node]);
     }
     if let Some(cwd) = cwd {
         let here = graph.roots.iter().find(|id| {
@@ -824,6 +820,28 @@ pub fn pick_roots(
         }
     }
     Ok(graph.roots.iter().take(1).cloned().collect())
+}
+
+/// The session this runs in, if it's recorded. Inside Claude Code, commands
+/// can see it (`CLAUDE_CODE_SESSION_ID`).
+pub(crate) fn running_in(graph: &Graph) -> Option<String> {
+    let id = std::env::var("CLAUDE_CODE_SESSION_ID").ok()?;
+    let node = format!("claude-code:{id}");
+    graph.nodes.contains_key(&node).then_some(node)
+}
+
+/// `find_node`, among sessions only.
+pub(crate) fn find_session(graph: &Graph, want: &str) -> Result<String, String> {
+    let sessions = Graph {
+        nodes: graph
+            .nodes
+            .iter()
+            .filter(|(id, _)| !id.contains('/'))
+            .map(|(id, n)| (id.clone(), n.clone()))
+            .collect(),
+        roots: Vec::new(),
+    };
+    find_node(&sessions, want)
 }
 
 /// Finds a node by its full id, its own id (the session id for a session,

@@ -71,8 +71,8 @@ Status is updated as each is done.
 ### R10. `--session current` falls back to the newest session anywhere, so `/agent-graph share` can publish another project
 - **Where:** `src/cli.rs` (`pick_roots`), `src/remote.rs`
 - **Problem:** When the current session isn't recorded, `current` quietly becomes the most recent session on the machine, which `watch-remote` then uploads.
-- **Fix:** for sharing, `current` must match the session exactly or fail; always say which session is being shared.
-- **Status:** open
+- **Fix:** for sharing, `current` means only the Claude Code session this runs in (`CLAUDE_CODE_SESSION_ID`, recorded); otherwise nothing is shared and the user is asked to choose. The /agent-graph skill tells the model to ask the user, never to pick a session itself. A `--session` prefix matches sessions only (not an agent in another project's session), and the shared session is named (cleaned) before it's sent. The local views (`tree`, `tail`, `snapshot`) keep their friendlier fallback.
+- **Status:** fixed. Tests: `sharing_the_current_session_never_falls_back_to_another`, `a_session_prefix_never_matches_another_sessions_agent`, `the_shared_sessions_description_is_cleaned` (tests/remote.rs), `claude_pre_approves_only_local_commands` (src/slash.rs). Reviewed.
 
 ### R11. On Windows, `run` can't start npm-installed agents (`codex`, `gemini`, `claude`)
 - **Where:** `src/run.rs`

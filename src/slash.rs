@@ -206,6 +206,7 @@ fn instructions(request: &str) -> String {
 Only when the user asks to share it or for a link:
 
 1. Run `agent-graph watch-remote --session current` as a background command. It keeps running, streaming new events to the Agent Graph site until it's stopped. Leave out `--session current` only if the user asks to share every session.
+   If it says it can't tell which session this is, tell the user that, and ask which session they want to share (`agent-graph tree --all` lists them) or whether to share them all. Never pick one yourself: the wrong one would be published.
 2. Its first line of output is the link. Give it to the user, and tell them it stays live until the command is stopped.
 3. Anyone with the link can view it, unless the user saved a default password with `--save-default-password`. Don't choose a password for them; pass `--password=<password>` only if they give you one.
 
@@ -316,6 +317,9 @@ mod tests {
             "sharing keeps its permission prompt"
         );
         assert!(text.contains("$ARGUMENTS"));
+        // R10: when sharing can't tell which session this is, the model asks
+        // rather than picking one (which could publish another project's).
+        assert!(text.contains("Never pick one yourself"));
     }
 
     #[test]
