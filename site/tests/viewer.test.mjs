@@ -717,3 +717,36 @@ test("R34: only the most recently shown steps' graphs are kept", async (t) => {
   assert.equal(calls[ids.at(-2)], 1, "kept, as it was shown lately");
   assert.ok(v.S.cache.size <= v.CACHED_STEPS, `${v.S.cache.size} kept`);
 });
+
+test("R35: the tree scrolls to the ringed card when the step changes, not whenever it's drawn", async (t) => {
+  const a = node("x:a", { children: ["x:a/b"] });
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore" });
+  let stops = stopsOf(["e1", "e2", "e3"]).map((s) => ({ ...s, node: "x:a/b" }));
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => ({ ...graph([a, b]), at: at || null }),
+      timeline: async () => ({ stops }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const scrolls = () => window.__scrolls || 0;
+  await until(() => v.S.stops.length === 3);
+  v.goTo(0);
+  await until(() => window.document.querySelector("#view .node.current"));
+  assert.equal(scrolls(), 1, "to the step's card");
+
+  // Drawn again: a card chosen, new events. The page stays where it's been scrolled to.
+  v.selectNode("x:a");
+  stops = [...stops, ...stopsOf(["e4"])];
+  v.scheduleRefresh();
+  await until(() => v.S.stops.length === 4);
+  v.renderAll();
+  assert.equal(window.document.querySelector("#view .node.current").dataset.id, "x:a/b");
+  assert.equal(scrolls(), 1, "not scrolled back");
+
+  v.goTo(1);
+  await until(() => v.S.shown.at === "e2");
+  assert.equal(scrolls(), 2, "to the next step's card");
+});
