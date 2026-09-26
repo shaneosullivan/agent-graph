@@ -25,9 +25,9 @@ const MAX_TASKS: usize = 12;
 /// renders and fits on a phone; the rest are counted.
 const MAX_AGENTS: usize = 30;
 const MAX_CALLOUTS: usize = 3;
-/// Levels of the tree that are indented; deeper ones line up under the
-/// last, so cards keep room for their text.
-const MAX_DEPTH: usize = 6;
+/// The most a card is indented (six full steps), so cards keep room for
+/// their text however deep the tree.
+const MAX_INDENT: f32 = 6.0 * INDENT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
@@ -298,9 +298,9 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
     }
 
     // The tree, up to `MAX_AGENTS` of it.
-    let mut drawn = BTreeSet::new();
-    y = card_tree(c, graph, root, 0, y, p, &mut drawn);
-    let hidden = nodes.len() - drawn.len();
+    let (next, drawn) = card_tree(c, graph, root, y, p);
+    y = next;
+    let hidden = nodes.len() - drawn;
     if hidden > 0 {
         c.text(
             PAD + 22.0,
@@ -363,50 +363,52 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
     y
 }
 
-/// Draws `node`'s card at `depth` in the tree, from `y` down, and its
-/// children below, indented and joined by connector lines. Nodes already in
-/// `drawn` are skipped (the reducer never makes a cycle, but a drawing must
-/// end whatever it's given), and none past `MAX_AGENTS`. Returns the next
-/// free y.
-fn card_tree<'a>(
-    c: &mut Canvas,
-    graph: &'a Graph,
-    node: &'a Node,
-    depth: usize,
-    y: f32,
-    p: &Palette,
-    drawn: &mut BTreeSet<&'a str>,
-) -> f32 {
-    drawn.insert(&node.id);
-    let x = PAD + depth.min(MAX_DEPTH) as f32 * INDENT;
-    let height = card(c, graph, node, x, y, p);
-    let mut next = y + height + 8.0;
-    let spine = x + 11.0;
-    for child in node.children.iter().filter_map(|id| graph.nodes.get(id)) {
-        if drawn.len() > MAX_AGENTS {
+/// Draws the cards of `root`'s tree (see `tree_order`) from `y` down, each
+/// indented under its parent and joined to it by a connector line. Returns
+/// the next free y and how many cards were drawn.
+fn card_tree(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) -> (f32, usize) {
+    let order = tree_order(graph, root);
+    // A deep tree gets a smaller step per level, so every level still shows
+    // and no card is indented more than `MAX_INDENT`.
+    let deepest = order.iter().map(|(_, depth, _)| *depth).max().unwrap_or(0);
+    let step = INDENT.min(MAX_INDENT / deepest.max(1) as f32);
+    let mut placed: Vec<(f32, f32)> = Vec::new(); // each card's x and bottom
+    for (node, depth, parent) in &order {
+        let x = PAD + *depth as f32 * step;
+        if let Some((px, bottom)) = parent.map(|i| placed[i]) {
+            // Down the gap left of the parent's children, so it passes beside
+            // their cards, never through them.
+            let spine = px + step / 2.0;
+            c.path(&format!("M{spine} {bottom} V{} H{x}", y + 20.0), p.line);
+        }
+        let height = card(c, graph, node, x, y, p);
+        placed.push((x, y + height));
+        y += height + 8.0;
+    }
+    (y, order.len())
+}
+
+/// The cards `card_tree` draws, depth first: each node with its depth and
+/// its parent's place in the list. At most `MAX_AGENTS` below `root`, and no
+/// node twice (the reducer never makes a cycle, but a drawing must end
+/// whatever it's given).
+fn tree_order<'a>(graph: &'a Graph, root: &'a Node) -> Vec<(&'a Node, usize, Option<usize>)> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![(root, 0, None)];
+    while let Some((node, depth, parent)) = stack.pop() {
+        if out.len() > MAX_AGENTS {
             break;
         }
-        if drawn.contains(child.id.as_str()) {
+        if !seen.insert(node.id.as_str()) {
             continue;
         }
-        let child_y = next;
-        if depth < MAX_DEPTH {
-            c.path(
-                &format!(
-                    "M{spine} {} V{} H{}",
-                    y + height,
-                    child_y + 20.0,
-                    x + INDENT
-                ),
-                p.line,
-            );
-        } else {
-            // Not indented: the line runs straight down into the child.
-            c.path(&format!("M{spine} {} V{child_y}", y + height), p.line);
-        }
-        next = card_tree(c, graph, child, depth + 1, child_y, p, drawn);
+        let at = out.len();
+        out.push((node, depth, parent));
+        let children = node.children.iter().filter_map(|id| graph.nodes.get(id));
+        stack.extend(children.rev().map(|child| (child, depth + 1, Some(at))));
     }
-    next
+    out
 }
 
 /// Draws one card and returns its height.
@@ -947,7 +949,8 @@ mod tests {
 
     /// Checks the drawing of `g` (as far as estimated text widths can tell):
     /// no two pieces of text overlap, all of it is inside the margins, every
-    /// shape has a positive size, and it renders.
+    /// shape has a positive size, no connector runs through a card, and it
+    /// renders.
     fn assert_laid_out(g: &Graph) -> String {
         let svg = svg(g, &g.roots, &test_options());
         let attr = |tag: &str, name: &str| -> Option<f32> {
@@ -955,11 +958,43 @@ mod tests {
             let at = tag.find(&format!(" {name}=\""))? + name.len() + 3;
             tag[at..].split('"').next()?.parse().ok()
         };
+        let mut cards: Vec<(f32, f32, f32, f32)> = Vec::new(); // left, right, top, bottom
         for part in svg.split("<rect ").skip(1) {
             let tag = part.split_once('>').unwrap().0;
             for dim in ["width", "height"] {
                 if let Some(v) = attr(tag, dim) {
                     assert!(v > 0.0, "a rect has {dim} {v}: {tag}");
+                }
+            }
+            if attr(tag, "rx") == Some(10.0) {
+                let (x, y) = (attr(tag, "x").unwrap(), attr(tag, "y").unwrap());
+                let (w, h) = (attr(tag, "width").unwrap(), attr(tag, "height").unwrap());
+                cards.push((x, x + w, y, y + h));
+            }
+        }
+        // Connectors are "M{x} {y} V{y}", then maybe " H{x}".
+        for part in svg.split("<path d=\"M").skip(1) {
+            let d = part.split('"').next().unwrap();
+            let Some((start, rest)) = d.split_once(" V") else {
+                continue;
+            };
+            let num = |s: &str| -> f32 { s.parse().unwrap() };
+            let (x0, y0) = start.split_once(' ').unwrap();
+            let (x0, y0) = (num(x0), num(y0));
+            let (y1, x1) = match rest.split_once(" H") {
+                Some((y1, x1)) => (num(y1), num(x1)),
+                None => (num(rest), x0),
+            };
+            // Each piece as (left, right, top, bottom); touching an edge is
+            // fine, entering the card isn't.
+            for seg in [
+                (x0, x0, y0.min(y1), y0.max(y1)),
+                (x0.min(x1), x0.max(x1), y1, y1),
+            ] {
+                for card in &cards {
+                    let crosses =
+                        seg.0 < card.1 && seg.1 > card.0 && seg.2 < card.3 && seg.3 > card.2;
+                    assert!(!crosses, "connector M{d} runs through the card at {card:?}");
                 }
             }
         }
@@ -1066,11 +1101,59 @@ mod tests {
         let g = graph_of(nodes);
         let svg = svg(&g, &g.roots, &test_options());
         assert!(svg.len() < 200_000, "{} bytes", svg.len());
-        let drawn = svg.matches(">general-purpose 0").count();
-        assert!(drawn > 0 && drawn < 100, "{drawn} drawn");
+        let cards = svg.matches(">general-purpose 0").count() - MAX_CALLOUTS;
+        assert_eq!(cards, MAX_AGENTS);
         assert!(svg.contains(">+4970 more agents<"), "the rest are counted");
-        assert!(svg.contains("more need you<"), "so are their callouts");
+        assert_eq!(svg.matches(" needs you: ").count(), MAX_CALLOUTS);
+        assert!(
+            svg.contains(">+4997 more need you<"),
+            "so are their callouts"
+        );
         assert_laid_out(&g);
+    }
+
+    /// R40: the count of agents not drawn appears only when there are some.
+    #[test]
+    fn agents_past_the_cap_are_counted_exactly() {
+        let session = |agents: usize| {
+            let mut nodes = vec![node("p:s", NodeKind::Session, None)];
+            for i in 0..agents {
+                nodes.push(agent(&format!("p:s/{i:08}"), "p:s"));
+            }
+            assert_laid_out(&graph_of(nodes))
+        };
+        let svg = session(MAX_AGENTS);
+        assert!(!svg.contains(" more agent"), "all {MAX_AGENTS} are drawn");
+        assert!(svg.contains(&format!(">general-purpose {:08}<", MAX_AGENTS - 1)));
+        let svg = session(MAX_AGENTS + 1);
+        assert!(svg.contains(">+1 more agent<"));
+        assert!(!svg.contains(&format!(">general-purpose {:08}<", MAX_AGENTS)));
+    }
+
+    /// R40: past the depth where cards used to stop being indented, a chain
+    /// and a node with several children must still look different, and no
+    /// connector may run through a card.
+    #[test]
+    fn a_deep_tree_keeps_its_shape() {
+        let mut nodes = vec![node("p:s", NodeKind::Session, None)];
+        for i in 0..14 {
+            let parent = nodes.last().unwrap().id.clone();
+            nodes.push(agent(&format!("p:s/a{i:07}"), &parent));
+        }
+        let deep = nodes.last().unwrap().id.clone();
+        nodes.push(agent("p:s/b1", &deep));
+        nodes.push(agent("p:s/c1", "p:s/b1"));
+        nodes.push(agent("p:s/b2", &deep));
+        let svg = assert_laid_out(&graph_of(nodes));
+        // Cards in drawing order: the session, a0..a13, b1, c1, b2.
+        let xs: Vec<f32> = svg
+            .split("<rect ")
+            .filter(|r| r.contains(" rx=\"10\""))
+            .map(|r| r.split('"').nth(1).unwrap().parse().unwrap())
+            .collect();
+        assert_eq!(xs.len(), 18);
+        assert!(xs[..17].windows(2).all(|w| w[0] < w[1]), "{xs:?}");
+        assert_eq!(xs[15], xs[17], "b1 and b2 are siblings: {xs:?}");
     }
 
     #[test]
