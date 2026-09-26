@@ -882,3 +882,127 @@ fn run_starts_a_cmd_file_by_its_bare_name() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// PATH without this build's folder, and with `first` (if any) at the front.
+fn path_with(first: Option<&Path>) -> std::ffi::OsString {
+    let ours = Path::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let rest = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .filter(|p| *p != ours)
+        .collect::<Vec<_>>();
+    std::env::join_paths(first.map(Path::to_path_buf).into_iter().chain(rest)).unwrap()
+}
+
+/// R14: project settings are meant to be committed, so their hooks run
+/// `agent-graph` from PATH, not this machine's copy; local settings (never
+/// committed) keep this copy's full path, unless PATH's is this one.
+#[test]
+fn project_hooks_run_agent_graph_from_path() {
+    let project = tempfile::tempdir().unwrap();
+    let install = |scope: &str, path: std::ffi::OsString| {
+        let out = bin()
+            .args([
+                "install",
+                "claude-code",
+                "--scope",
+                scope,
+                "--yes",
+                "--no-slash-command",
+            ])
+            .current_dir(project.path())
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let command = |file: &str| -> String {
+        let settings: serde_json::Value =
+            serde_json::from_str(&read(project.path().join(".claude").join(file))).unwrap();
+        settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let plain = "agent-graph emit --provider claude-code";
+
+    let said = install("project", path_with(None));
+    assert_eq!(command("settings.json"), plain);
+    assert!(said.contains("PATH"), "says who needs it: {said}");
+
+    install("local", path_with(None));
+    let local = command("settings.local.json");
+    assert!(
+        local.starts_with('"') && local.ends_with("\" emit --provider claude-code"),
+        "{local}"
+    );
+}
+
+/// R14: your own settings keep this copy's full path even when PATH has
+/// it: hooks run with Claude Code's own PATH (from a launcher or a
+/// scheduler it may be just /usr/bin:/bin), which a plain name would miss.
+#[test]
+fn user_hooks_keep_the_full_path_even_when_path_has_this_copy() {
+    let home = tempfile::tempdir().unwrap();
+    let ours = Path::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .parent()
+        .unwrap();
+    let out = bin()
+        .args(["install", "claude-code", "--yes", "--no-slash-command"])
+        .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
+        .env("HOME", home.path())
+        .env("PATH", path_with(Some(ours)))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let settings: serde_json::Value =
+        serde_json::from_str(&read(home.path().join(".claude/settings.json"))).unwrap();
+    let command = settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(command.starts_with('"'), "{command}");
+}
+
+/// R14: installing hooks that run `agent-graph` from PATH says so when
+/// PATH has no `agent-graph` (they'd never run for this user).
+#[test]
+fn project_install_warns_when_agent_graph_isnt_on_path() {
+    let project = tempfile::tempdir().unwrap();
+    let out = bin()
+        .args([
+            "install",
+            "claude-code",
+            "--scope",
+            "project",
+            "--yes",
+            "--no-slash-command",
+        ])
+        .current_dir(project.path())
+        .env("PATH", path_with(None))
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    let has_other = std::env::split_paths(&path_with(None)).any(|d| {
+        d.join(if cfg!(windows) {
+            "agent-graph.exe"
+        } else {
+            "agent-graph"
+        })
+        .is_file()
+    });
+    if has_other {
+        assert!(said.contains("different copy"), "{said}");
+    } else {
+        assert!(said.contains("isn't on your PATH"), "{said}");
+    }
+}

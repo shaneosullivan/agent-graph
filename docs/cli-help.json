@@ -94,7 +94,7 @@
         {
           "table": [
             ["user", "Every project: files in your home folder. The default."],
-            ["project", "Just this project: .claude/ (or .agents/, .gemini/, .cursor/) in this folder, which you'd usually commit."],
+            ["project", "Just this project: .claude/ (or .agents/, .gemini/, .cursor/) in this folder, which you'd usually commit. Its hooks run `agent-graph` from PATH, so everyone who uses the project needs it installed."],
             ["local", "Like project, but Claude Code's hooks go in .claude/settings.local.json, which isn't committed."]
           ]
         },
@@ -105,7 +105,7 @@
         { "id": "scope", "flag": "--scope <user|project|local>", "text": "Every project (user, the default), or just this one (project, or local to keep Claude Code's hooks out of version control)." },
         { "id": "dry_run", "flag": "--dry-run", "text": "Show what would change, and change nothing." },
         { "id": "yes", "flag": "-y, --yes", "text": "Don't ask before making the changes." },
-        { "id": "command", "flag": "--command <COMMAND>", "text": "The command the hooks run. Defaults to this executable's `emit`." },
+        { "id": "command", "flag": "--command <COMMAND>", "text": "The command the hooks run. Defaults to this executable's `emit`, or with --scope project, `agent-graph emit` from PATH." },
         { "id": "no_slash_command", "flag": "--no-slash-command", "text": "Don't add the /agent-graph command; just the hooks." }
       ],
       "examples": [

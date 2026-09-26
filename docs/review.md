@@ -95,8 +95,8 @@ Status is updated as each is done.
 ### R14. `install --scope project` writes this machine's binary path into a file meant to be committed
 - **Where:** `src/cli.rs`, `src/install.rs`
 - **Problem:** Teammates on other machines get a hook command that doesn't exist, so every hook fails for them.
-- **Fix:** for project scope, use `agent-graph` from `PATH` unless `--command` says otherwise.
-- **Status:** open
+- **Fix:** project-scope hooks run `agent-graph` from `PATH` (unless `--command` says otherwise), and the install says everyone needs it installed, warning if it isn't on your `PATH` or is a different copy. User and local scope keep this copy's full path, since hooks run with Claude Code's own `PATH`. Someone with both user and project hooks has each event recorded twice, so the reducer now counts a repeated message once (spawns, waits and tasks already were).
+- **Status:** fixed. Tests: `project_hooks_run_agent_graph_from_path`, `user_hooks_keep_the_full_path_even_when_path_has_this_copy`, `project_install_warns_when_agent_graph_isnt_on_path` (tests/cli.rs), `a_message_recorded_twice_counts_once` (tests/sessions.rs). Reviewed (three rounds).
 
 ### R15. `watch-remote` silently drops events when a file can't be read
 - **Where:** `src/remote.rs` (`Lines::poll`)

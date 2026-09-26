@@ -192,7 +192,7 @@ What hooks are *not*: a standard. Event names, field names (snake_case vs camelC
 
 ### 5.2 A concrete walkthrough (Claude Code)
 
-**Configuration.** Hooks live under a `hooks` key in `~/.claude/settings.json` (user), `.claude/settings.json` (project), or `.claude/settings.local.json` (project, not committed). A Claude Code **plugin** can also ship them in `hooks/hooks.json`, which may be the cleanest way to distribute ours later. The structure is event → list of matcher groups → list of handlers. This is what `agent-graph install claude-code` writes (the command is the full, quoted path of the installed binary):
+**Configuration.** Hooks live under a `hooks` key in `~/.claude/settings.json` (user), `.claude/settings.json` (project), or `.claude/settings.local.json` (project, not committed). A Claude Code **plugin** can also ship them in `hooks/hooks.json`, which may be the cleanest way to distribute ours later. The structure is event → list of matcher groups → list of handlers. This is what `agent-graph install claude-code` writes (the command is the full, quoted path of the installed binary; for `--scope project`, whose file is committed and shared, it's plain `agent-graph` from `PATH`):
 
 ```json
 {

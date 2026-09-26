@@ -401,6 +401,15 @@ impl Reducer {
             }
             Payload::WaitEnded(d) => end_wait(node, &d.wait_id, &e.ts),
             Payload::MessageSent(d) => {
+                // The same message recorded twice (say, hooks installed in
+                // two settings files with different commands) counts once.
+                let seen = node
+                    .messages
+                    .iter()
+                    .any(|m| m.direction == Direction::Sent && m.message_id == d.message_id);
+                if seen {
+                    return;
+                }
                 let target = self.resolve(&d.to, &e.node);
                 let sender = self.nodes.get_mut(&e.node).expect("ensured above");
                 sender.messages.push(Message {

@@ -100,6 +100,28 @@ pub fn claude_settings_path(scope: Scope, project_dir: &Path) -> Option<PathBuf>
     })
 }
 
+/// The hook command that runs `agent-graph` from PATH, for settings shared
+/// with others (project scope, which is committed): this machine's path to
+/// it means nothing on anyone else's. (If you also have user-scope hooks,
+/// whose command is this copy's full path, both run; the reducer counts
+/// the repeated events once.)
+pub fn path_command(provider: &str) -> String {
+    format!("agent-graph emit --provider {provider}")
+}
+
+/// Whether the `agent-graph` on PATH is this executable, or `None` if
+/// there isn't one.
+pub fn this_is_on_path() -> Option<bool> {
+    let found = crate::paths::find_program("agent-graph")?;
+    let this = std::env::current_exe().ok()?;
+    Some(
+        match (std::fs::canonicalize(found), std::fs::canonicalize(this)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        },
+    )
+}
+
 /// The hook command pointing at this executable. Forward slashes and quotes
 /// keep it working in the shells Claude Code uses on every platform.
 pub fn default_command(provider: &str) -> Result<String, String> {

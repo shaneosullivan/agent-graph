@@ -521,8 +521,13 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
     };
 
     let mut after = before.clone();
+    let this_on_path = install::this_is_on_path();
     let command = match &opts.hook_command {
         Some(c) => c.clone(),
+        // Shared settings can't name this machine's copy. Everywhere else
+        // the full path is used: hooks run with Claude Code's own PATH,
+        // which (started from a launcher or a scheduler) may not have it.
+        None if scope == Scope::Project => install::path_command("claude-code"),
         None => install::default_command("claude-code")?,
     };
     if opts.add {
@@ -551,6 +556,28 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
         ));
         if !install::our_events(&before).is_empty() {
             summary.push("(Replaces the Agent Graph hooks already there.)".into());
+        }
+        if scope == Scope::Project && opts.hook_command.is_none() {
+            summary.push(
+                "Project settings are shared, so the hooks run `agent-graph` from PATH: \
+                 everyone who uses the project needs it installed."
+                    .into(),
+            );
+        }
+        if command == install::path_command("claude-code") {
+            match this_on_path {
+                None => summary.push(
+                    "Note: `agent-graph` isn't on your PATH, so these hooks won't run for you \
+                     until it is (cargo install --path .)."
+                        .into(),
+                ),
+                Some(false) => summary.push(
+                    "Note: the `agent-graph` on your PATH is a different copy from this one; \
+                     the hooks will run that."
+                        .into(),
+                ),
+                Some(true) => {}
+            }
         }
     } else {
         summary.push(format!(

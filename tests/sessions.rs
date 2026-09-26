@@ -624,3 +624,34 @@ fn a_finished_agents_old_wait_isnt_counted() {
     assert_eq!(blocked.on, [B]);
     assert_eq!(blocked.open_tasks, 0, "Z's task isn't holding A up");
 }
+
+/// R14: the same message recorded twice (hooks installed in two settings
+/// files that both ran) appears once on each side.
+#[test]
+fn a_message_recorded_twice_counts_once() {
+    let sent = hook(
+        "aaaa",
+        "PostToolUse",
+        json!({
+            "tool_name": "SendMessage",
+            "tool_use_id": "toolu_m",
+            "tool_input": { "to": "ag1", "summary": "Also run lint" },
+            "tool_response": { "msg_id": "msg-1" },
+        }),
+    );
+    let g = graph(vec![claude(
+        0,
+        &[
+            hook("aaaa", "SessionStart", json!({})),
+            hook(
+                "aaaa",
+                "SubagentStart",
+                json!({"agent_id": "ag1", "agent_type": "Explore"}),
+            ),
+            sent.clone(),
+            sent,
+        ],
+    )]);
+    assert_eq!(g.nodes[A].messages.len(), 1);
+    assert_eq!(g.nodes[&format!("{A}/ag1")].messages.len(), 1);
+}
