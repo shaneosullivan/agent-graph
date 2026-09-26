@@ -684,6 +684,102 @@ fn at_once(mut events: Vec<Envelope>) -> Vec<Envelope> {
     events
 }
 
+/// R41: a session request is paired with a run of a session that starts
+/// after it, not only with a session's first: one resumed from the shell
+/// (`claude --resume …`), whether it ran on its own before or from another
+/// request, which keeps the run it started; and one whose start lands in
+/// the request's millisecond but sorts before it.
+#[test]
+fn a_session_request_is_paired_with_any_run_it_starts() {
+    let claude = |secs: u64, data: Value| shell_child(secs, "claude-code:c", "claude-code", data);
+    let on_its_own = |secs: u64| {
+        let mut e = claude(secs, json!({}));
+        e.parent = None;
+        e
+    };
+    let ended = |secs: u64| ev(secs, "claude-code:c", "session.ended", json!({}));
+    let children = |events: Vec<Envelope>| {
+        let graph = reduce_at(events, 100_000);
+        let p = &graph.nodes["x:p"];
+        let spawns = p.spawns.iter().map(|s| (s.call_id.clone(), s.child.clone()));
+        let waits = p.waits.iter().map(|w| (w.wait_id.clone(), w.on.clone()));
+        let c = &graph.nodes["claude-code:c"];
+        (
+            spawns.collect::<Vec<_>>(),
+            waits.collect::<Vec<_>>(),
+            c.spawned_by.clone(),
+            c.parent.clone(),
+        )
+    };
+    let start = || ev(0, "x:p", "session.started", json!({}));
+    let c = || Some("claude-code:c".to_string());
+    let s = |call: &str| call.to_string();
+
+    // It ran on its own first.
+    let (spawns, waits, by, parent) = children(vec![
+        start(),
+        on_its_own(1),
+        ended(2),
+        session_request(5, "k", Some("claude"), false),
+        claude(6, json!({"source": "resume"})),
+    ]);
+    assert_eq!(spawns, [(s("k"), c())]);
+    assert_eq!(waits, [(s("k"), c())]);
+    assert_eq!((by.as_deref(), parent.as_deref()), (Some("k"), Some("x:p")));
+
+    // It ran from another request: that one keeps the run it started.
+    let (spawns, _, by, _) = children(vec![
+        start(),
+        session_request(1, "k1", Some("claude"), false),
+        claude(2, json!({})),
+        ended(3),
+        session_request(5, "k2", Some("claude"), false),
+        claude(6, json!({"source": "resume"})),
+    ]);
+    assert_eq!(spawns, [(s("k1"), c()), (s("k2"), c())]);
+    assert_eq!(by.as_deref(), Some("k2"));
+    // Resumed on its own, it's still the first's.
+    let (spawns, _, by, _) = children(vec![
+        start(),
+        session_request(1, "k1", Some("claude"), true),
+        claude(2, json!({})),
+        ended(3),
+        session_request(5, "k2", Some("claude"), true),
+        on_its_own(6),
+    ]);
+    assert_eq!(spawns, [(s("k1"), c()), (s("k2"), None)]);
+    assert_eq!(by.as_deref(), Some("k1"));
+    // A restart mid-run (after compaction, say) isn't a new run: a request
+    // made since isn't for it.
+    let (spawns, _, by, _) = children(vec![
+        start(),
+        claude(2, json!({})),
+        session_request(3, "k", Some("claude"), true),
+        claude(4, json!({"source": "compact"})),
+    ]);
+    assert_eq!(spawns, [(s("k"), None)]);
+    assert_eq!(by, None);
+
+    // Its start sorts before the request, in the same millisecond.
+    let mut events = vec![start()];
+    events.extend(at_once(vec![
+        claude(5, json!({})),
+        session_request(5, "k", Some("claude"), false),
+    ]));
+    let (spawns, waits, by, _) = children(events);
+    assert_eq!(spawns, [(s("k"), c())]);
+    assert_eq!(waits, [(s("k"), c())]);
+    assert_eq!(by.as_deref(), Some("k"));
+    // But not a start before it.
+    let (spawns, _, by, _) = children(vec![
+        start(),
+        claude(4, json!({})),
+        session_request(5, "k", Some("claude"), false),
+    ]);
+    assert_eq!(spawns, [(s("k"), None)]);
+    assert_eq!(by, None);
+}
+
 /// R28: a headless session's Stop and SessionEnd can land in the same
 /// millisecond, in either order. A status sorted just after
 /// `session.ended` (within `LATE_STATUS`) is a late one, and doesn't bring

@@ -376,6 +376,11 @@ struct Reducer {
     ended: BTreeMap<String, (SystemTime, String, bool)>,
     /// When each session last started.
     started: BTreeMap<String, SystemTime>,
+    /// The sessions whose runs started last (at this time, and `ts`), linked
+    /// to a parent but with no request to pair with: one in the same
+    /// millisecond may sort after them (hooks in separate processes get
+    /// random ids).
+    unpaired_runs: Option<(SystemTime, String, Vec<String>)>,
     /// Statuses ignored as late (see `LATE_STATUS`).
     #[serde(skip)]
     late: BTreeSet<String>,
@@ -425,6 +430,7 @@ impl Reducer {
         }) && self.processes.values().all(known)
             && self.requesters.values().flatten().all(known)
             && self.waiting_on.values().flatten().all(known)
+            && self.unpaired_runs.iter().flat_map(|(_, _, runs)| runs).all(known)
     }
 
     fn apply(&mut self, e: &Envelope) {
@@ -435,14 +441,19 @@ impl Reducer {
         }
         let provider = e.source.as_ref().map(|s| s.provider.clone());
         self.ensure(&e.node, provider.as_deref(), &e.ts);
-        // An explicit parent wins, unless a spawn binding already settled it.
+        let payload = e.payload();
+        // A session that had ended and starts again is on a new run, which
+        // may have been started from somewhere else.
+        let rerun = matches!(payload, Payload::SessionStarted(_))
+            && self.nodes[&e.node].state.is_terminal();
+        // An explicit parent wins, unless a spawn binding already settled it
+        // (for the run before, if this is a new one).
         if let Some(parent) = &e.parent {
-            if self.nodes[&e.node].spawned_by.is_none() {
+            if self.nodes[&e.node].spawned_by.is_none() || rerun {
                 self.reparent(&e.node, parent, provider.as_deref(), &e.ts);
             }
         }
 
-        let payload = e.payload();
         let node = self.nodes.get_mut(&e.node).expect("ensured above");
         node.last_event_at = e.ts.clone();
         // Any activity other than a status report means the human answered.
@@ -457,30 +468,53 @@ impl Reducer {
                 node.title = d.title.or(node.title.take());
                 // A resumed session comes back to life. A mid-turn restart
                 // (e.g. after compaction) leaves the current state alone.
-                if node.state.is_terminal() {
+                if rerun {
                     node.state = State::Idle;
                     node.ended_at = None;
                 }
                 self.ended.remove(&e.node);
-                self.started.insert(e.node.clone(), event_time(e));
+                let first = self
+                    .started
+                    .insert(e.node.clone(), event_time(e))
+                    .is_none();
                 // Only if the parent was taken (it's refused if it would
                 // put the session under itself).
-                if e.parent.is_some() && node.parent == e.parent {
+                let mut linked = e.parent.is_some() && node.parent == e.parent;
+                if linked {
                     node.link = d.link_method.clone().or(Some("env".to_string()));
                 }
                 let id = e.node.clone();
+                // A new run may have been started by another session's agent.
+                let unlinked = e.parent.is_none() && (node.parent.is_none() || rerun);
                 if let Some(process) = d.process {
                     node.process = Some(process.clone());
                     // Found by process, a parent must have started first.
-                    if e.parent.is_none() && node.parent.is_none() {
-                        self.link_by_process(&id, &d.ancestors, &e.ts);
+                    if unlinked {
+                        linked = self.link_by_process(&id, &d.ancestors, &e.ts);
                     }
                     self.processes.insert(process, id.clone());
-                } else if e.parent.is_none() && node.parent.is_none() {
-                    self.link_by_process(&id, &d.ancestors, &e.ts);
+                } else if unlinked {
+                    linked = self.link_by_process(&id, &d.ancestors, &e.ts);
                 }
-                if self.nodes[&id].parent.is_some() && self.nodes[&id].spawned_by.is_none() {
-                    self.bind_session_by_guess(&id);
+                // A new run linked to a parent is another request's, if
+                // any: the one before keeps the run it started.
+                let node = self.nodes.get_mut(&id).expect("ensured above");
+                if rerun && linked {
+                    node.spawned_by = None;
+                    node.requested_by = None;
+                }
+                // Not a restart mid-run (after compaction, say): a request
+                // made since isn't for it.
+                if node.parent.is_some() && node.spawned_by.is_none() && (first || rerun && linked)
+                {
+                    self.bind_session_by_guess(&id, &e.ts);
+                    if self.nodes[&id].spawned_by.is_none() {
+                        let at = event_time(e);
+                        match &mut self.unpaired_runs {
+                            Some((when, _, runs)) if *when == at => runs.push(id),
+                            runs => *runs = Some((at, e.ts.clone(), vec![id])),
+                        }
+                    }
                 }
             }
             Payload::SessionEnded(_) => {
@@ -634,6 +668,9 @@ impl Reducer {
                     returned: false,
                     requested_at: e.ts.clone(),
                 });
+                if d.kind == SpawnKind::Session {
+                    self.pair_runs_started_at(&e.node, event_time(e));
+                }
             }
             Payload::SpawnReturned(d) => {
                 end_wait(node, &d.call_id, &e.ts);
@@ -942,17 +979,19 @@ impl Reducer {
     }
 
     /// Links session `id` to the session whose agent process is the nearest
-    /// of `ancestors` (the processes above its own agent's).
-    fn link_by_process(&mut self, id: &str, ancestors: &[String], ts: &str) {
+    /// of `ancestors` (the processes above its own agent's), if there's one.
+    fn link_by_process(&mut self, id: &str, ancestors: &[String], ts: &str) -> bool {
         let parent = ancestors
             .iter()
             .find_map(|p| self.processes.get(p))
             .filter(|p| *p != id && !self.is_under(p, id))
             .cloned();
-        if let Some(parent) = parent {
-            self.reparent(id, &parent, None, ts);
-            self.nodes.get_mut(id).expect("exists").link = Some("process".to_string());
-        }
+        let Some(parent) = parent else {
+            return false;
+        };
+        self.reparent(id, &parent, None, ts);
+        self.nodes.get_mut(id).expect("exists").link = Some("process".to_string());
+        true
     }
 
     /// Whether `node` is `ancestor` or somewhere below it.
@@ -974,16 +1013,14 @@ impl Reducer {
 
     /// Pairs a session that has just linked itself to a parent with the
     /// request that started it: the oldest unpaired `kind: session` request
-    /// in the parent's session (or its agents) made before it started,
-    /// preferring one for the same program. Nothing names the child when the
-    /// shell command returns, so this guess is final.
-    fn bind_session_by_guess(&mut self, child: &str) {
+    /// in the parent's session (or its agents) made before it started (this
+    /// run, at `started`), preferring one for the same program. Nothing names
+    /// the child when the shell command returns, so this guess is final.
+    fn bind_session_by_guess(&mut self, child: &str, started: &str) {
         let Some(parent) = self.nodes[child].parent.clone() else {
             return;
         };
         let parent_session = parent.split('/').next().unwrap_or(&parent).to_string();
-        let started = self.nodes[child].started_at.clone().unwrap_or_default();
-        let started = started.as_str();
         let child_node = &self.nodes[child];
         let mut candidates: Vec<(bool, String, String, String, Option<String>)> =
             family(&self.nodes, &parent_session)
@@ -1029,6 +1066,32 @@ impl Reducer {
             .or_else(|| candidates.first());
         if let Some((_, _, requester, call_id, _)) = pick.cloned() {
             self.bind(&requester, &call_id, child);
+        }
+    }
+
+    /// Pairs the runs under `requester`'s session that started at `at`, the
+    /// time of a session request it has just made, and found no request:
+    /// their starts sorted before it.
+    fn pair_runs_started_at(&mut self, requester: &str, at: SystemTime) {
+        let Some((_, ts, runs)) = self.unpaired_runs.clone().filter(|(when, ..)| *when == at)
+        else {
+            return;
+        };
+        let session = requester.split('/').next().unwrap_or(requester);
+        for run in runs {
+            let unpaired_under = self.nodes.get(&run).is_some_and(|n| {
+                n.spawned_by.is_none()
+                    && n.parent
+                        .as_deref()
+                        .is_some_and(|p| p.split('/').next() == Some(session))
+            });
+            if unpaired_under {
+                self.bind_session_by_guess(&run, &ts);
+            }
+        }
+        let nodes = &self.nodes;
+        if let Some((_, _, runs)) = &mut self.unpaired_runs {
+            runs.retain(|run| nodes.get(run).is_some_and(|n| n.spawned_by.is_none()));
         }
     }
 
