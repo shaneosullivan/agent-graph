@@ -770,3 +770,25 @@ fn a_late_status_doesnt_revive_an_ended_session() {
     assert_eq!(g.nodes["x:s/a"].state, State::Working);
     assert_eq!(g.nodes["x:s"].state, State::Working);
 }
+
+/// R43: a node id with thousands of `/` (every level a placeholder) is made
+/// without a call per level, so it doesn't overflow the stack: here, one of
+/// 1 MiB, as the site's WebAssembly has.
+#[test]
+fn a_node_id_with_thousands_of_levels_doesnt_overflow_the_stack() {
+    let levels = 3000;
+    let id = |levels: usize| format!("x:s{}", "/a".repeat(levels));
+    let node = id(levels);
+    let graph = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || reduce_at(vec![ev(0, &node, "status", json!({"state": "working"}))], 1))
+        .expect("thread")
+        .join()
+        .expect("reduced");
+    assert_eq!(graph.nodes.len(), levels + 1);
+    assert_eq!(graph.roots, ["x:s"]);
+    for level in [1, levels] {
+        let parent = graph.nodes[&id(level)].parent.clone();
+        assert_eq!(parent, Some(id(level - 1)), "{level}");
+    }
+}
