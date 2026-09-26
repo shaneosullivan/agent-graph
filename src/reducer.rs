@@ -366,9 +366,6 @@ struct Reducer {
     /// Which session each agent process (`<pid>@<start>`) belongs to: the
     /// latest one started in it.
     processes: BTreeMap<String, String>,
-    /// The nodes that may have an open wait on each node, so a node's end
-    /// closes them without looking at every node.
-    waiting_on: BTreeMap<String, BTreeSet<String>>,
     /// The nodes that made each spawn request (by call id; normally one).
     requesters: BTreeMap<String, Vec<String>>,
     /// When each session ended (`session.ended`, as a time and as its
@@ -384,20 +381,83 @@ struct Reducer {
     /// Statuses ignored as late (see `LATE_STATUS`).
     #[serde(skip)]
     late: BTreeSet<String>,
+    /// Made from the nodes again when carrying on from a keyframe.
+    #[serde(skip)]
+    index: Index,
 }
 
-/// Node `session` and its agents (`session/…`): a range of the map, not a
-/// look at every node.
-fn family<'a>(
-    nodes: &'a BTreeMap<String, Node>,
-    session: &str,
-) -> impl Iterator<Item = (&'a String, &'a Node)> + 'a {
-    let prefix = format!("{session}/");
-    nodes.get_key_value(session).into_iter().chain(
-        nodes
-            .range(prefix.clone()..)
-            .take_while(move |(id, _)| id.starts_with(&prefix)),
-    )
+/// A request, in order of when it was made: when, by whom, and its call id.
+type Request = (String, String, String);
+
+/// Where to find what the nodes' requests and waits say, so that nothing
+/// looks through all of a node's (or a session's): a session can make
+/// thousands.
+#[derive(Default, Clone)]
+struct Index {
+    /// Each node's requests, by call id: where each is in its `spawns`, and
+    /// its wait (for one in the foreground) in its `waits`.
+    calls: BTreeMap<String, BTreeMap<String, (usize, Option<usize>)>>,
+    /// Each node's calls in the foreground that haven't returned (where they
+    /// are in its `spawns`).
+    unreturned: BTreeMap<String, BTreeSet<usize>>,
+    /// The requests in each session (by it or its agents) that may yet be
+    /// paired with a child, for agents (`false`) and for sessions (`true`),
+    /// oldest first.
+    unpaired: BTreeMap<(String, bool), BTreeSet<Request>>,
+    /// Each node's open waits, by wait id (where they are in its `waits`).
+    open: BTreeMap<String, BTreeMap<String, BTreeSet<usize>>>,
+    /// The open waits on each node: the node waiting, and where the wait is
+    /// in its `waits`.
+    on: BTreeMap<String, BTreeSet<(String, usize)>>,
+}
+
+impl Index {
+    /// `node`'s wait `at` (`wait`) is open.
+    fn open_wait(&mut self, node: &str, at: usize, wait: &Wait) {
+        self.open
+            .entry(node.to_string())
+            .or_default()
+            .entry(wait.wait_id.clone())
+            .or_default()
+            .insert(at);
+        if let Some(target) = &wait.on {
+            self.waiting_on(target, node, at, true);
+        }
+    }
+
+    /// `node`'s wait `at` (`wait`) is closed.
+    fn close_wait(&mut self, node: &str, at: usize, wait: &Wait) {
+        if let Some(open) = self.open.get_mut(node) {
+            if let Some(waits) = open.get_mut(&wait.wait_id) {
+                waits.remove(&at);
+                if waits.is_empty() {
+                    open.remove(&wait.wait_id);
+                }
+            }
+        }
+        if let Some(target) = &wait.on {
+            self.waiting_on(target, node, at, false);
+        }
+    }
+
+    /// Whether `node`'s wait `at`, which is open, is on `target`.
+    fn waiting_on(&mut self, target: &str, node: &str, at: usize, on: bool) {
+        let entry = (node.to_string(), at);
+        if on {
+            self.on.entry(target.to_string()).or_default().insert(entry);
+        } else if let Some(waiters) = self.on.get_mut(target) {
+            waiters.remove(&entry);
+            if waiters.is_empty() {
+                self.on.remove(target);
+            }
+        }
+    }
+
+    /// Where `node`'s request `call_id` is in its `spawns`, and its wait in
+    /// its `waits`.
+    fn call(&self, node: &str, call_id: &str) -> Option<(usize, Option<usize>)> {
+        self.calls.get(node)?.get(call_id).copied()
+    }
 }
 
 impl Reducer {
@@ -413,24 +473,64 @@ impl Reducer {
     /// The state a keyframe's text holds, if it's one the reducer could
     /// have made.
     fn unpack(text: &str) -> Option<Reducer> {
-        serde_json::from_slice::<Reducer>(&unpack_state(text)?)
+        let mut reducer = serde_json::from_slice::<Reducer>(&unpack_state(text)?)
             .ok()
-            .filter(Reducer::check)
+            .filter(Reducer::check)?;
+        reducer.reindex();
+        Some(reducer)
+    }
+
+    /// Makes `index` from the nodes.
+    fn reindex(&mut self) {
+        self.index = Index::default();
+        let mut spawns = Vec::new();
+        for (id, node) in &self.nodes {
+            let mut calls: BTreeMap<String, (usize, Option<usize>)> = node
+                .spawns
+                .iter()
+                .enumerate()
+                .map(|(at, spawn)| (spawn.call_id.clone(), (at, None)))
+                .collect();
+            for (at, wait) in node.waits.iter().enumerate() {
+                if wait.spawn {
+                    if let Some(call) = calls.get_mut(&wait.wait_id) {
+                        call.1.get_or_insert(at);
+                    }
+                }
+                if wait.open {
+                    self.index.open_wait(id, at, wait);
+                }
+            }
+            self.index.calls.insert(id.clone(), calls);
+            spawns.extend((0..node.spawns.len()).map(|at| (id.clone(), at)));
+        }
+        for (id, at) in spawns {
+            self.index_spawn(&id, at);
+        }
     }
 
     /// Whether this is a state the reducer could have made, as far as what
     /// it relies on goes: each node under its own id, each request's call id
-    /// once per node, and indexes that name only nodes there are. (A keyframe
-    /// from a pasted log can say anything.)
+    /// once per node, each child once under its parent, and indexes that name
+    /// only nodes there are. (A keyframe from a pasted log can say anything.)
     fn check(&self) -> bool {
         let known = |id: &String| self.nodes.contains_key(id);
         self.nodes.iter().all(|(id, node)| {
             let mut calls = BTreeSet::new();
-            *id == node.id && node.spawns.iter().all(|s| calls.insert(&s.call_id))
+            let mut children = BTreeSet::new();
+            *id == node.id
+                && node.spawns.iter().all(|s| calls.insert(&s.call_id))
+                && node.children.iter().all(|c| {
+                    children.insert(c)
+                        && self.nodes.get(c).and_then(|n| n.parent.as_ref()) == Some(id)
+                })
         }) && self.processes.values().all(known)
             && self.requesters.values().flatten().all(known)
-            && self.waiting_on.values().flatten().all(known)
-            && self.unpaired_runs.iter().flat_map(|(_, _, runs)| runs).all(known)
+            && self
+                .unpaired_runs
+                .iter()
+                .flat_map(|(_, _, runs)| runs)
+                .all(known)
     }
 
     fn apply(&mut self, e: &Envelope) {
@@ -473,10 +573,7 @@ impl Reducer {
                     node.ended_at = None;
                 }
                 self.ended.remove(&e.node);
-                let first = self
-                    .started
-                    .insert(e.node.clone(), event_time(e))
-                    .is_none();
+                let first = self.started.insert(e.node.clone(), event_time(e)).is_none();
                 // Only if the parent was taken (it's refused if it would
                 // put the session under itself).
                 let mut linked = e.parent.is_some() && node.parent == e.parent;
@@ -640,10 +737,10 @@ impl Reducer {
             },
             Payload::TaskDeleted(d) => node.tasks.retain(|t| t.id != d.id),
             Payload::SpawnRequested(d) => {
-                if node.spawns.iter().any(|s| s.call_id == d.call_id) {
+                if self.index.call(&e.node, &d.call_id).is_some() {
                     return;
                 }
-                if !d.background {
+                let wait = (!d.background).then(|| {
                     node.waits.push(Wait {
                         wait_id: d.call_id.clone(),
                         on: None,
@@ -653,11 +750,20 @@ impl Reducer {
                         started_at: e.ts.clone(),
                         ended_at: None,
                     });
+                    node.waits.len() - 1
+                });
+                if let Some(wait) = wait {
+                    self.index.open_wait(&e.node, wait, &node.waits[wait]);
                 }
                 self.requesters
                     .entry(d.call_id.clone())
                     .or_default()
                     .push(e.node.clone());
+                self.index
+                    .calls
+                    .entry(e.node.clone())
+                    .or_default()
+                    .insert(d.call_id.clone(), (node.spawns.len(), wait));
                 node.spawns.push(Spawn {
                     call_id: d.call_id,
                     kind: d.kind,
@@ -668,23 +774,27 @@ impl Reducer {
                     returned: false,
                     requested_at: e.ts.clone(),
                 });
+                let at = node.spawns.len() - 1;
+                self.index_spawn(&e.node, at);
                 if d.kind == SpawnKind::Session {
                     self.pair_runs_started_at(&e.node, event_time(e));
                 }
             }
             Payload::SpawnReturned(d) => {
-                end_wait(node, &d.call_id, &e.ts);
+                self.end_waits(&e.node, &d.call_id, &e.ts);
                 let requester = e.node.clone();
-                let known = match node.spawns.iter_mut().find(|s| s.call_id == d.call_id) {
-                    Some(spawn) => {
-                        spawn.returned = true;
-                        true
-                    }
-                    None => false,
-                };
+                let call = self.index.call(&requester, &d.call_id);
+                if let Some((at, _)) = call {
+                    self.nodes
+                        .get_mut(&requester)
+                        .expect("ensured above")
+                        .spawns[at]
+                        .returned = true;
+                    self.index_spawn(&requester, at);
+                }
                 if let Some(child) = d.child {
                     self.ensure(&child, provider.as_deref(), &e.ts);
-                    if known {
+                    if call.is_some() {
                         self.bind(&requester, &d.call_id, &child);
                     } else {
                         self.reparent(&child, &requester, provider.as_deref(), &e.ts);
@@ -692,11 +802,12 @@ impl Reducer {
                 }
             }
             Payload::WaitStarted(d) => {
-                if !node.waits.iter().any(|w| w.wait_id == d.wait_id && w.open) {
-                    self.waiting_on
-                        .entry(d.on.clone())
-                        .or_default()
-                        .insert(e.node.clone());
+                let open = self
+                    .index
+                    .open
+                    .get(&e.node)
+                    .is_some_and(|waits| waits.contains_key(&d.wait_id));
+                if !open {
                     node.waits.push(Wait {
                         wait_id: d.wait_id,
                         on: Some(d.on),
@@ -706,9 +817,11 @@ impl Reducer {
                         started_at: e.ts.clone(),
                         ended_at: None,
                     });
+                    let at = node.waits.len() - 1;
+                    self.index.open_wait(&e.node, at, &node.waits[at]);
                 }
             }
-            Payload::WaitEnded(d) => end_wait(node, &d.wait_id, &e.ts),
+            Payload::WaitEnded(d) => self.end_waits(&e.node, &d.wait_id, &e.ts),
             Payload::MessageSent(d) => {
                 // The same message recorded twice (say, hooks installed in
                 // two settings files with different commands) counts once.
@@ -837,10 +950,9 @@ impl Reducer {
             }
         }
         self.nodes.get_mut(child).expect("exists").parent = Some(parent.to_string());
+        // Not there yet: a node is among its parent's children, and only its.
         let parent = self.nodes.get_mut(parent).expect("ensured");
-        if !parent.children.iter().any(|c| c == child) {
-            parent.children.push(child.to_string());
-        }
+        parent.children.push(child.to_string());
     }
 
     /// Binds spawn `call_id` on `requester` to `child`, undoing any earlier guess.
@@ -849,12 +961,11 @@ impl Reducer {
         if self.is_under(requester, child) {
             return;
         }
+        let Some((at, wait)) = self.index.call(requester, call_id) else {
+            return;
+        };
         // Undo a guess that bound this spawn to a different child.
-        let previous = self.nodes[requester]
-            .spawns
-            .iter()
-            .find(|s| s.call_id == call_id)
-            .and_then(|s| s.child.clone());
+        let previous = self.nodes[requester].spawns[at].child.clone();
         let displaced = previous.filter(|p| p != child);
         if let Some(previous) = &displaced {
             if let Some(n) = self.nodes.get_mut(previous) {
@@ -873,43 +984,39 @@ impl Reducer {
             // node that made a request with that call id).
             let makers = match &self.nodes[child].requested_by {
                 Some(maker) => vec![maker.clone()],
-                None => self.requesters.get(&other_call).cloned().unwrap_or_default(),
+                None => self
+                    .requesters
+                    .get(&other_call)
+                    .cloned()
+                    .unwrap_or_default(),
             };
             for id in &makers {
-                let Some(node) = self.nodes.get_mut(id) else {
+                let Some((other_at, other_wait)) = self.index.call(id, &other_call) else {
                     continue;
                 };
                 // Only the request it was bound to: call ids aren't unique
                 // across sessions, and another's may have a child of its own.
-                if let Some(spawn) = node
-                    .spawns
-                    .iter_mut()
-                    .find(|s| s.call_id == other_call && s.child.as_deref() == Some(child))
-                {
+                let spawn = &mut self.nodes.get_mut(id).expect("indexed").spawns[other_at];
+                if spawn.child.as_deref() == Some(child) {
                     spawn.child = None;
-                    if let Some(wait) = node.waits.iter_mut().find(|w| w.wait_id == other_call) {
-                        wait.on = None;
+                    self.index_spawn(id, other_at);
+                    if let Some(other_wait) = other_wait {
+                        self.point_wait(id, other_wait, None);
                     }
                 }
             }
         }
 
-        let node = self.nodes.get_mut(requester).expect("exists");
-        let Some(spawn) = node.spawns.iter_mut().find(|s| s.call_id == call_id) else {
-            return;
-        };
+        let spawn = &mut self.nodes.get_mut(requester).expect("exists").spawns[at];
         spawn.child = Some(child.to_string());
         let (purpose, agent_type, background) = (
             spawn.purpose.clone(),
             spawn.agent_type.clone(),
             spawn.background,
         );
-        if let Some(wait) = node.waits.iter_mut().find(|w| w.wait_id == call_id) {
-            wait.on = Some(child.to_string());
-            self.waiting_on
-                .entry(child.to_string())
-                .or_default()
-                .insert(requester.to_string());
+        self.index_spawn(requester, at);
+        if let Some(wait) = wait {
+            self.point_wait(requester, wait, Some(child));
         }
 
         let child_node = self.nodes.get_mut(child).expect("exists");
@@ -945,23 +1052,18 @@ impl Reducer {
     fn bind_by_guess(&mut self, child: &str) {
         let session = child.split('/').next().unwrap_or(child);
         let child_type = self.nodes[child].agent_type.clone();
-        let mut candidates: Vec<(String, String, String, Option<String>)> =
-            family(&self.nodes, session)
-                .flat_map(|(id, n)| {
-                    n.spawns
-                        .iter()
-                        .filter(|s| s.child.is_none() && s.kind == SpawnKind::Agent && !s.returned)
-                        .map(move |s| {
-                            (
-                                s.requested_at.clone(),
-                                id.clone(),
-                                s.call_id.clone(),
-                                s.agent_type.clone(),
-                            )
-                        })
-                })
-                .collect();
-        candidates.sort();
+        // Oldest first.
+        let candidates: Vec<(String, String, String, Option<String>)> = self
+            .unpaired(session, false)
+            .map(|(id, s)| {
+                (
+                    s.requested_at.clone(),
+                    id.clone(),
+                    s.call_id.clone(),
+                    s.agent_type.clone(),
+                )
+            })
+            .collect();
         let pick = candidates
             .iter()
             .find(|c| c.3.is_some() && c.3 == child_type)
@@ -1022,41 +1124,31 @@ impl Reducer {
         };
         let parent_session = parent.split('/').next().unwrap_or(&parent).to_string();
         let child_node = &self.nodes[child];
-        let mut candidates: Vec<(bool, String, String, String, Option<String>)> =
-            family(&self.nodes, &parent_session)
-                .flat_map(|(id, n)| {
-                    n.spawns
-                        .iter()
-                        .filter(|s| {
-                            // A background launch returns before its child
-                            // starts, which it does soon after (or a little
-                            // later, if the command does other things
-                            // first); a foreground one returns only once
-                            // its child is done.
-                            s.kind == SpawnKind::Session
-                                && s.child.is_none()
-                                && (s.background || !s.returned)
-                                && *s.requested_at <= *started
-                                && (!s.background
-                                    || within(&s.requested_at, started, BACKGROUND_START))
-                                // Not one for an agent CLI it surely isn't running.
-                                && s.agent_type.as_deref().is_none_or(|p| !surely_not(child_node, p))
-                        })
-                        .map(move |s| {
-                            (
-                                // Behind the rest, a background request too
-                                // old to have launched it just now: it may
-                                // never launch anything (it failed, or wasn't
-                                // a launch at all).
-                                s.background && !within(&s.requested_at, started, FRESH_START),
-                                s.requested_at.clone(),
-                                id.clone(),
-                                s.call_id.clone(),
-                                s.agent_type.clone(),
-                            )
-                        })
-                })
-                .collect();
+        // A background launch returns before its child starts, which it does
+        // soon after (or a little later, if the command does other things
+        // first); a foreground one returns only once its child is done: only
+        // those that haven't are here.
+        let mut candidates: Vec<(bool, String, String, String, Option<String>)> = self
+            .unpaired(&parent_session, true)
+            .filter(|(_, s)| {
+                *s.requested_at <= *started
+                    && (!s.background || within(&s.requested_at, started, BACKGROUND_START))
+                    // Not one for an agent CLI it surely isn't running.
+                    && s.agent_type.as_deref().is_none_or(|p| !surely_not(child_node, p))
+            })
+            .map(|(id, s)| {
+                (
+                    // Behind the rest, a background request too old to have
+                    // launched it just now: it may never launch anything (it
+                    // failed, or wasn't a launch at all).
+                    s.background && !within(&s.requested_at, started, FRESH_START),
+                    s.requested_at.clone(),
+                    id.clone(),
+                    s.call_id.clone(),
+                    s.agent_type.clone(),
+                )
+            })
+            .collect();
         candidates.sort();
         // The first for its own program; failing that, the first that might
         // be it.
@@ -1100,44 +1192,113 @@ impl Reducer {
     /// provider said so: Claude Code only reports calls that succeed. Their
     /// waits close, and they can't be paired with a later child.
     fn calls_over(&mut self, id: &str, ts: &str) {
-        let Some(node) = self.nodes.get_mut(id) else {
-            return;
-        };
-        for wait in node.waits.iter_mut().filter(|w| w.open && w.spawn) {
-            wait.open = false;
-            wait.ended_at = Some(ts.to_string());
-        }
-        for spawn in node.spawns.iter_mut().filter(|s| !s.background) {
+        // Only calls in the foreground have waits, which stay open until
+        // they return.
+        for at in self.index.unreturned.remove(id).unwrap_or_default() {
+            let spawn = &mut self.nodes.get_mut(id).expect("indexed").spawns[at];
             spawn.returned = true;
+            let wait = self
+                .index
+                .call(id, &spawn.call_id)
+                .and_then(|(_, wait)| wait);
+            self.index_spawn(id, at);
+            if let Some(wait) = wait {
+                self.close_wait(id, wait, ts);
+            }
         }
     }
 
     /// Closes the open waits on `target` (its spawn waits too, if asked).
     fn close_waits_on(&mut self, target: &str, ts: &str, spawn_waits_too: bool) {
-        let Some(waiters) = self.waiting_on.remove(target) else {
-            return;
-        };
-        let on_target = |w: &Wait| w.open && w.on.as_deref() == Some(target);
-        let mut still = BTreeSet::new();
-        for id in waiters {
-            let Some(node) = self.nodes.get_mut(&id) else {
-                continue;
-            };
-            for wait in node
-                .waits
-                .iter_mut()
-                .filter(|w| on_target(w) && (spawn_waits_too || !w.spawn))
-            {
-                wait.open = false;
-                wait.ended_at = Some(ts.to_string());
-            }
-            if node.waits.iter().any(on_target) {
-                still.insert(id);
+        let waiters = self.index.on.get(target).cloned().unwrap_or_default();
+        for (id, at) in waiters {
+            if spawn_waits_too || !self.nodes[&id].waits[at].spawn {
+                self.close_wait(&id, at, ts);
             }
         }
-        if !still.is_empty() {
-            self.waiting_on.insert(target.to_string(), still);
+    }
+
+    /// Closes `node`'s wait `at`, if it's open.
+    fn close_wait(&mut self, node: &str, at: usize, ts: &str) {
+        let wait = &mut self.nodes.get_mut(node).expect("indexed").waits[at];
+        if wait.open {
+            wait.open = false;
+            wait.ended_at = Some(ts.to_string());
+            self.index.close_wait(node, at, wait);
         }
+    }
+
+    /// Closes `node`'s open waits with id `wait_id`.
+    fn end_waits(&mut self, node: &str, wait_id: &str, ts: &str) {
+        let open = self.index.open.get(node).and_then(|open| open.get(wait_id));
+        for at in open.cloned().unwrap_or_default() {
+            self.close_wait(node, at, ts);
+        }
+    }
+
+    /// Points `node`'s wait `at` at `target`.
+    fn point_wait(&mut self, node: &str, at: usize, target: Option<&str>) {
+        let wait = &mut self.nodes.get_mut(node).expect("indexed").waits[at];
+        if wait.open {
+            if let Some(old) = &wait.on {
+                self.index.waiting_on(old, node, at, false);
+            }
+            if let Some(target) = target {
+                self.index.waiting_on(target, node, at, true);
+            }
+        }
+        wait.on = target.map(String::from);
+    }
+
+    /// Puts `node`'s request `at` in the indexes of the calls that haven't
+    /// returned and of the requests that may yet be paired, or takes it
+    /// out, as it now stands.
+    fn index_spawn(&mut self, node: &str, at: usize) {
+        let spawn = &self.nodes[node].spawns[at];
+        let for_session = spawn.kind == SpawnKind::Session;
+        // A background launch returns before its child starts.
+        let pairable =
+            spawn.child.is_none() && (!spawn.returned || for_session && spawn.background);
+        let unreturned = !spawn.background && !spawn.returned;
+        let entry = (
+            spawn.requested_at.clone(),
+            node.to_string(),
+            spawn.call_id.clone(),
+        );
+        let session = node.split('/').next().unwrap_or(node);
+        let key = (session.to_string(), for_session);
+        if pairable {
+            self.index.unpaired.entry(key).or_default().insert(entry);
+        } else if let Some(requests) = self.index.unpaired.get_mut(&key) {
+            requests.remove(&entry);
+            if requests.is_empty() {
+                self.index.unpaired.remove(&key);
+            }
+        }
+        if unreturned {
+            let calls = self.index.unreturned.entry(node.to_string()).or_default();
+            calls.insert(at);
+        } else if let Some(calls) = self.index.unreturned.get_mut(node) {
+            calls.remove(&at);
+            if calls.is_empty() {
+                self.index.unreturned.remove(node);
+            }
+        }
+    }
+
+    /// The requests in `session` (by it or its agents) that may yet be paired
+    /// with a child, for a session or an agent, oldest first, with who made
+    /// them.
+    fn unpaired(
+        &self,
+        session: &str,
+        for_session: bool,
+    ) -> impl Iterator<Item = (&String, &Spawn)> + '_ {
+        let requests = self.index.unpaired.get(&(session.to_string(), for_session));
+        requests.into_iter().flatten().map(|(_, id, call_id)| {
+            let (at, _) = self.index.call(id, call_id).expect("indexed");
+            (id, &self.nodes[id].spawns[at])
+        })
     }
 
     /// A session's agents stop with it. Sessions it started are processes of
@@ -1326,17 +1487,6 @@ fn runs(node: &Node, program: &str) -> bool {
     node.provider == program
         || node.provider.starts_with(&format!("{program}-"))
         || (node.provider == "run" && node.title.as_deref() == Some(program))
-}
-
-fn end_wait(node: &mut Node, wait_id: &str, ts: &str) {
-    for wait in node
-        .waits
-        .iter_mut()
-        .filter(|w| w.open && w.wait_id == wait_id)
-    {
-        wait.open = false;
-        wait.ended_at = Some(ts.to_string());
-    }
 }
 
 fn headline(node: &Node) -> Option<String> {
