@@ -913,7 +913,8 @@ fn tail_puts_the_terminal_back_when_killed() {
                     &mut slave,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
-                    &mut size,
+                    // A raw pointer: it's `*const` on Linux, `*mut` on macOS.
+                    std::ptr::addr_of_mut!(size),
                 ),
                 0
             );
