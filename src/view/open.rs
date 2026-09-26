@@ -27,8 +27,8 @@ use crate::resume::Resume;
 
 /// Runs `r` in a new terminal window.
 pub fn in_terminal(r: &Resume) -> Result<(), String> {
-    let program =
-        find_program(r.program).ok_or_else(|| format!("can't find {} on your PATH", r.program))?;
+    let program = crate::paths::find_program(r.program)
+        .ok_or_else(|| format!("can't find {} on your PATH", r.program))?;
     let program = program.to_string_lossy();
     if cfg!(target_os = "macos") {
         macos(r, &program)
@@ -37,24 +37,6 @@ pub fn in_terminal(r: &Resume) -> Result<(), String> {
     } else {
         linux(r, &program)
     }
-}
-
-/// Where `program` is on `PATH`, skipping relative entries (like `.`), which
-/// would make the answer depend on the current folder. On Windows, each of
-/// `PATHEXT`'s extensions is tried (npm installs agents as `.cmd` files).
-pub fn find_program(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let extensions = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
-            .split(';')
-            .filter(|e| !e.is_empty())
-            .map(str::to_string)
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-    find_in(program, &path, &extensions)
 }
 
 /// `path` (a `PATH` value) without its relative entries.
@@ -75,37 +57,11 @@ fn safe_path() -> OsString {
     }
 }
 
-fn find_in(program: &str, path: &OsStr, extensions: &[String]) -> Option<PathBuf> {
-    std::env::split_paths(path)
-        .filter(|dir| dir.is_absolute())
-        .flat_map(|dir| {
-            extensions
-                .iter()
-                .map(move |ext| dir.join(format!("{program}{ext}")))
-        })
-        .find(|p| runnable(p))
-}
-
-fn runnable(path: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.is_file() && meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        meta.is_file()
-    }
-}
-
 /// The command to type yourself, for when a window can't be opened.
 /// It names the agent by its full path when it's on `PATH`, so pasting it
 /// doesn't run a program of the same name in the session's folder either.
 pub fn command_line(r: &Resume) -> String {
-    let program = find_program(r.program).map(|p| p.to_string_lossy().into_owned());
+    let program = crate::paths::find_program(r.program).map(|p| p.to_string_lossy().into_owned());
     command_line_for(r, program.as_deref(), cfg!(windows))
 }
 
@@ -253,7 +209,8 @@ fn linux(r: &Resume, agent: &str) -> Result<(), String> {
         None => TERMINALS
             .iter()
             .find_map(|(name, before)| {
-                find_program(name).map(|p| (p.to_string_lossy().into_owned(), *before))
+                crate::paths::find_program(name)
+                    .map(|p| (p.to_string_lossy().into_owned(), *before))
             })
             .ok_or("couldn't find a terminal; set $TERMINAL to yours")?,
     };
@@ -353,74 +310,6 @@ mod tests {
                 "abc-123"
             ]
         );
-    }
-
-    /// R8: the agent is found on PATH by full path; a relative entry (like
-    /// `.`, the session's folder when it runs) is never used.
-    #[test]
-    fn the_agent_is_found_by_full_path_and_never_in_the_folder() {
-        let root = tempfile::tempdir().unwrap();
-        let session = root.path().join("session");
-        let bin = root.path().join("bin");
-        std::fs::create_dir_all(&session).unwrap();
-        std::fs::create_dir_all(&bin).unwrap();
-        let name = if cfg!(windows) {
-            "claude.cmd"
-        } else {
-            "claude"
-        };
-        for dir in [&session, &bin] {
-            let file = dir.join(name);
-            std::fs::write(&file, "").unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
-        }
-        let exts: Vec<String> = if cfg!(windows) {
-            vec![".exe".into(), ".cmd".into()]
-        } else {
-            vec![String::new()]
-        };
-        let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
-
-        // A relative entry that really does lead to a runnable `claude` (a
-        // folder in the current one, like `.` would be the session's folder
-        // when the agent runs) is skipped.
-        let here = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
-        let planted = here.path().join(name);
-        std::fs::write(&planted, "").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let relative = PathBuf::from(here.path().file_name().unwrap());
-        assert!(relative.join(name).is_file(), "reachable relative to here");
-        let found = find_in("claude", &path(&[&relative, &bin]), &exts);
-        assert_eq!(found, Some(bin.join(name)));
-        assert_eq!(find_in("claude", &path(&[&relative]), &exts), None);
-        assert_eq!(
-            find_in("claude", &path(&[&session, &bin]), &exts),
-            Some(session.join(name)),
-            "absolute entries are used, in order"
-        );
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let plain = root.path().join("plain");
-            std::fs::create_dir_all(&plain).unwrap();
-            std::fs::write(plain.join("claude"), "").unwrap();
-            std::fs::set_permissions(plain.join("claude"), std::fs::Permissions::from_mode(0o644))
-                .unwrap();
-            assert_eq!(
-                find_in("claude", &path(&[&plain, &bin]), &exts),
-                Some(bin.join("claude")),
-                "a file that can't be run isn't the program"
-            );
-        }
     }
 
     /// R8: the agent's PATH keeps only absolute entries: here, and in the

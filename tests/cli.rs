@@ -856,3 +856,29 @@ fn run_keeps_signals_that_were_ignored_ignored() {
         assert!(out.status.success(), "{sig}: {:?}", out.status);
     }
 }
+
+/// R11: on Windows, a program installed as a `.cmd` file (as npm installs
+/// codex, gemini and often claude) is found by its bare name.
+#[cfg(windows)]
+#[test]
+fn run_starts_a_cmd_file_by_its_bare_name() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("agentgraphfake.cmd"), "@exit /b 3\r\n").unwrap();
+    let path = std::env::join_paths(std::iter::once(dir.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let out = bin()
+        .args(["run", "--", "agentgraphfake"])
+        .env("PATH", path)
+        .env("AGENT_GRAPH_HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

@@ -63,7 +63,7 @@ pub fn run(opts: Options) -> ExitCode {
     start.trace = Some(serde_json::json!({ "traceparent": traceparent }));
     log.record(vec![start, status(&node, State::Working, None)]);
 
-    let mut command = Command::new(program);
+    let mut command = Command::new(program_path(program));
     command
         .args(&opts.command[1..])
         .env(link::PARENT_VAR, &node)
@@ -182,6 +182,24 @@ fn signal(status: ExitStatus) -> Option<i32> {
 #[cfg(not(unix))]
 fn signal(_status: ExitStatus) -> Option<i32> {
     None
+}
+
+/// What to start for `program`. On Windows, `Command` only finds `.exe`
+/// files by name, but npm installs agents (`codex`, `gemini`, often
+/// `claude`) as `.cmd` files, so a bare name is looked up through `PATH` and
+/// `PATHEXT` as a shell would. Elsewhere, and for a path or a name with an
+/// extension, it's left to `Command`.
+fn program_path(program: &OsString) -> OsString {
+    if cfg!(windows) {
+        let name = program.to_string_lossy();
+        let bare = !name.contains(['/', '\\', '.']);
+        if bare {
+            if let Some(found) = crate::paths::find_program(&name) {
+                return found.into_os_string();
+            }
+        }
+    }
+    program.clone()
 }
 
 /// A program's name without its folder or Windows extension.

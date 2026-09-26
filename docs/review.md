@@ -77,8 +77,8 @@ Status is updated as each is done.
 ### R11. On Windows, `run` can't start npm-installed agents (`codex`, `gemini`, `claude`)
 - **Where:** `src/run.rs`
 - **Problem:** `Command::new("codex")` only finds `codex.exe`; npm installs `codex.cmd`, so `run -- codex` fails with "program not found".
-- **Fix:** on Windows, resolve the program through `PATH` and `PATHEXT`.
-- **Status:** open
+- **Fix:** on Windows, a bare program name is looked up through `PATH` and `PATHEXT` (as `cmd` would, using absolute entries) and its full path started; elsewhere nothing changes. The resolver is shared with Resume (R8), now in `paths.rs`.
+- **Status:** fixed. Test: `run_starts_a_cmd_file_by_its_bare_name` (tests/cli.rs, runs on Windows CI). Reviewed.
 
 ### R12. One invalid UTF-8 byte stops `tree`, `snapshot` and `watch-remote` for every session
 - **Where:** `src/store.rs` (`load_events`)
