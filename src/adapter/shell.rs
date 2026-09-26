@@ -249,7 +249,8 @@ const WRAPPER_VALUES: &[(&str, &[&str])] = &[
 pub struct Launch {
     /// The agent's program, e.g. `codex`. For `agent-graph run -- X`, X's.
     pub program: String,
-    /// It's put in the background with `&`, so the shell doesn't wait.
+    /// It's put in the background with `&`, and not waited for later (with
+    /// `wait`), so the shell doesn't wait for it.
     pub background: bool,
 }
 
@@ -512,6 +513,9 @@ struct Level {
     /// For each compound command open at this level (`{ … }`, `if … fi`,
     /// …), where the list it's part of starts.
     compounds: Vec<usize>,
+    /// The runs of the output this level's shell has put in the background
+    /// (as `(start, end)`) and not yet waited for.
+    jobs: Vec<(usize, usize)>,
 }
 
 impl Level {
@@ -549,6 +553,13 @@ impl Level {
         if self.opened == Opened::Array {
             self.words.clear();
         } else if !self.words.is_empty() {
+            // `wait` waits for the jobs this shell started (`wait $pid`, for
+            // one of them), so they're not in the background after all;
+            // `wait -n`, for only the first to finish.
+            let program = skip_prefixes(&self.words);
+            if program.first().is_some_and(|p| p == "wait") && !program.iter().any(|a| a == "-n") {
+                self.jobs.clear();
+            }
             out.push(std::mem::take(&mut self.words));
         }
         self.lead = 0;
@@ -589,9 +600,17 @@ fn open(level: &mut Level, around: &mut Vec<Level>, opened: Opened, start: usize
 }
 
 /// Ends a group or substitution, and carries on with the command around
-/// it, where a substitution is (part of) a word.
-fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<Vec<String>>) {
+/// it, where a substitution is (part of) a word. The jobs it didn't wait for
+/// go to `kept`: they're its shell's, so the one around it can't wait for
+/// them.
+fn close(
+    level: &mut Level,
+    around: &mut Vec<Level>,
+    out: &mut Vec<Vec<String>>,
+    kept: &mut Vec<(usize, usize)>,
+) {
     level.end_command(out);
+    kept.append(&mut level.jobs);
     let opened = level.opened;
     let empty = out.len() == level.start;
     let Some(outer) = around.pop() else {
@@ -615,7 +634,8 @@ fn close(level: &mut Level, around: &mut Vec<Level>, out: &mut Vec<Vec<String>>)
 /// runs them (a substitution before the command it's in).
 fn split(command: &str) -> Vec<(Vec<String>, bool)> {
     let mut out: Vec<Vec<String>> = Vec::new();
-    // The runs of `out` put in the background, as (start, end).
+    // The runs of `out` put in the background, as (start, end), by shells
+    // that have ended without waiting for them.
     let mut jobs: Vec<(usize, usize)> = Vec::new();
     let mut chars = command.chars().peekable();
     let mut single = false;
@@ -705,7 +725,7 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                 open(&mut cur, &mut around, Opened::Substitution, out.len());
             }
             '`' if cur.opened == Opened::Backticks => {
-                close(&mut cur, &mut around, &mut out);
+                close(&mut cur, &mut around, &mut out, &mut jobs);
                 backticks -= 1;
             }
             '`' => {
@@ -818,7 +838,7 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                         Opened::Group | Opened::Substitution | Opened::Array
                     )
                 {
-                    close(&mut cur, &mut around, &mut out);
+                    close(&mut cur, &mut around, &mut out, &mut jobs);
                 } else {
                     cur.end_list(&mut out);
                 }
@@ -839,7 +859,7 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
             // any groups and substitutions in it.
             '&' => {
                 cur.end_command(&mut out);
-                jobs.push((cur.list, out.len()));
+                cur.jobs.push((cur.list, out.len()));
                 cur.list = out.len();
             }
             _ => {
@@ -850,9 +870,10 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
     }
     // What isn't closed ends here.
     while !around.is_empty() {
-        close(&mut cur, &mut around, &mut out);
+        close(&mut cur, &mut around, &mut out, &mut jobs);
     }
     cur.end_command(&mut out);
+    jobs.append(&mut cur.jobs);
     // Which commands are in a job: a count of the jobs each starts and ends.
     let mut edges = vec![0i64; out.len() + 1];
     for (start, end) in jobs {
@@ -1380,6 +1401,35 @@ mod tests {
         assert_eq!(launch("arr+=(claude)\ncodex exec x"), fg("codex"));
         assert_eq!(launch("local arr=(\n  claude\n)"), None);
         assert_eq!(launch("arr=(\"$(claude -p a)\" b)"), fg("claude"));
+    }
+
+    /// R42: jobs the command then waits for (`wait`) aren't in the
+    /// background: the shell, and the call that ran it, waits for them.
+    #[test]
+    fn jobs_waited_for_arent_in_the_background() {
+        let bg = |program: &str| Some((program.to_string(), true));
+        assert_eq!(launch("claude -p a & claude -p b & wait"), fg("claude"));
+        assert_eq!(
+            launch("for f in *.md; do claude -p \"$f\" & done; wait"),
+            fg("claude")
+        );
+        assert_eq!(
+            launch("codex exec a > a.log 2>&1 &\npid=$!\necho started\nwait $pid"),
+            fg("codex")
+        );
+        assert_eq!(
+            launch("{ codex exec a & }; if true; then wait; fi"),
+            fg("codex")
+        );
+        // Only jobs started before it, by the same shell (a subshell's jobs
+        // aren't its parent's, nor the other way round)...
+        assert_eq!(launch("wait; claude -p a &"), bg("claude"));
+        assert_eq!(launch("(claude -p a &); wait"), bg("claude"));
+        assert_eq!(launch("claude -p a & (wait)"), bg("claude"));
+        assert_eq!(launch("claude -p a & x=$(wait)"), bg("claude"));
+        // ...and not `wait -n`, which waits for only one of them.
+        assert_eq!(launch("claude -p a & claude -p b & wait -n"), bg("claude"));
+        assert_eq!(launch("echo wait & claude -p a &"), bg("claude"));
     }
 
     #[test]
