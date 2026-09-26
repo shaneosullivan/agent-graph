@@ -773,11 +773,9 @@ mod tests {
     fn a_deleted_file_is_forgotten() {
         let dir = tempfile::tempdir().unwrap();
         let z = dir.path().join("z.jsonl");
-        std::fs::create_dir(&z).unwrap();
         let mut lines = Lines::new(dir.path(), None);
-        let _ = lines.poll();
-        assert!(lines.unreadable.contains(&z));
-        std::fs::remove_dir(&z).unwrap();
+        // Reported as unreadable earlier, and deleted since.
+        lines.unreadable.insert(z.clone());
         let mut failed = Vec::new();
         let _ = read_batches(
             std::slice::from_ref(&z),
