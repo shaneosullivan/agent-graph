@@ -202,19 +202,11 @@ fn program_path(program: &OsString) -> OsString {
     program.clone()
 }
 
-/// A program's name without its folder or Windows extension.
+/// A program's name without its folder or Windows extension: as the shell
+/// adapter names the program in the request that started this, so a
+/// session can be paired with it (`reducer::runs`).
 fn program_name(program: &OsString) -> String {
-    let path = std::path::Path::new(program);
-    path.file_stem()
-        .filter(|_| {
-            path.extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
-        })
-        .or_else(|| path.file_name())
-        .map_or_else(
-            || program.to_string_lossy().into_owned(),
-            |n| n.to_string_lossy().into_owned(),
-        )
+    crate::adapter::shell::program_name(&program.to_string_lossy())
 }
 
 /// Ctrl+C in a terminal goes to the command and to us. We stay until the
@@ -304,6 +296,16 @@ mod tests {
         assert_eq!(program_name(&"aider".into()), "aider");
         assert_eq!(program_name(&"/usr/bin/codex".into()), "codex");
         assert_eq!(program_name(&"./workers.sh".into()), "workers.sh");
+        // As the request that started it names it (R25).
+        for word in ["worker.cmd", "Worker.EXE", "tools/run.bat", "./My Agent"] {
+            let launch =
+                crate::adapter::shell::agent_launch(&format!("agent-graph run -- '{word}'"), &[]);
+            assert_eq!(
+                launch.map(|l| l.program),
+                Some(program_name(&word.into())),
+                "{word}"
+            );
+        }
         if cfg!(windows) {
             assert_eq!(program_name(&r"C:\bin\claude.exe".into()), "claude");
         }
