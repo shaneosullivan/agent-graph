@@ -201,39 +201,48 @@ Status is updated as each is done.
 
 ### R32. Two snapshots in the same second overwrite each other
 - **Where:** `src/cli.rs`
-- **Status:** open
+- **Problem:** `snapshot` without `--out` named its picture to the second and wrote it with `fs::write`, so a second snapshot in the same second replaced the first.
+- **Status:** fixed. The picture is created new (`store::write_new`), taking the next free `-2`, `-3`… suffix when the name is taken. Test: `a_snapshot_never_replaces_one_from_the_same_second` (tests/cli.rs). Reviewed.
 
 ### R33. U+FFFE or U+FFFF in any text breaks every image of that session
 - **Where:** `src/image.rs` (`escape`)
-- **Status:** open
+- **Problem:** XML forbids U+FFFE and U+FFFF, and `escape` passed them through, so one in any text made usvg reject the whole SVG, and every picture of that session failed.
+- **Status:** fixed. `escape` turns them into spaces, as it did control characters. Test: `escapes_characters_xml_forbids` (src/image.rs). Reviewed.
 
 ### R34. The per-step graph cache grows without limit
 - **Where:** `src/view/assets/app.js`
-- **Status:** open
+- **Problem:** The per-step graph cache kept a graph for every step visited and only started afresh at each refresh, so on a pasted log, dragging across a long timeline piled up graphs for as long as the page was open.
+- **Status:** fixed. It keeps the 32 most recently shown steps (`CACHED_STEPS`, `remember`). Test: "R34: only the most recently shown steps' graphs are kept" (site/tests/viewer.test.mjs). Reviewed.
 
 ### R35. Re-rendering scrolls the tree back to the ringed card
 - **Where:** `src/view/assets/app.js`
-- **Status:** open
+- **Problem:** `renderMain` scrolled the ringed card into view every time it drew, so choosing a card, or a live update while looking at a past step, undid the reader's scrolling.
+- **Status:** fixed. The ringed card is brought into view only when what it stands for changes (the session, the step, or the node it touched: `S.scrolledTo`), once it's actually drawn, so one whose node isn't in the graph still shown is scrolled to when its step's graph comes. Following live rings nothing, and clears the record. Tests: four "R35: …" tests (site/tests/viewer.test.mjs). Reviewed (three rounds).
 
 ### R36. A malformed URL hash blanks the viewer
 - **Where:** `src/view/assets/app.js` (`rootFromHash`)
-- **Status:** open
+- **Problem:** `hashId` (was `rootFromHash`) called `decodeURIComponent` unguarded, so an address with a bad %-escape made every refresh fail and the viewer stayed blank.
+- **Status:** fixed. An address that doesn't decode names nothing: the newest session is shown, and a malformed hash change does nothing. Test: "R36: an address that isn't a well-formed one names nothing, and the page still works" (site/tests/viewer.test.mjs). Reviewed.
 
 ### R37. Long unbroken text overflows cards and panels
 - **Where:** `src/view/assets/app.css`
-- **Status:** open
+- **Problem:** Text with nowhere to break (long titles, folders, purposes, headlines, message bodies) widened cards and panels.
+- **Status:** fixed. `.layout` has `overflow-wrap: anywhere`, inherited by the sessions list, main view and details. Test: "R37: long unbroken text wraps in cards and panels" (site/tests/viewer.test.mjs, app.css in jsdom). Reviewed.
 
 ### R38. Live updates drop keyboard focus and text selection
 - **Where:** `src/view/assets/app.js`
-- **Status:** open
+- **Problem:** Each live update rebuilt the sessions list, the tree and the details with `replaceChildren`, so keyboard focus went back to the page and a text selection was lost.
+- **Status:** fixed. Redraws change the elements already there in place (`morph`, `redraw`), carrying over text, attributes and click handlers; a focused control that now stands for something else, or has gone, hands focus to the one for the same node (`data-id`). Test: "R38: new events leave keyboard focus and selected text where they were" (site/tests/viewer.test.mjs). Reviewed.
 
 ### R39. The timeline's hover tip shows labels without cleaning them
 - **Where:** `src/view/assets/app.js` (`showTip`, `aria-valuetext`)
-- **Status:** open
+- **Problem:** `showTip` and `aria-valuetext` used a stop's label uncleaned: not an injection (it's set as text), but control characters and bidirectional overrides were shown and spoken, unlike everywhere else.
+- **Status:** fixed. Both pass it through `clean()`. Test: "R39: the timeline's hover tip and spoken step show a label as text, cleaned" (site/tests/viewer.test.mjs). Reviewed.
 
 ### R40. Snapshot layout: the stale flag overlaps, deep trees get negative widths, agents are uncapped
 - **Where:** `src/image.rs`
-- **Status:** open
+- **Problem:** The snapshot's "stale?" flag had no room kept for it (it ran over the "background" label, the task count and the header's margin); each tree level was indented 22 more pixels, so past about 22 levels cards got negative widths; and every agent and callout was drawn, so a session of 5,000 agents gave a 5 MB SVG.
+- **Status:** fixed. Names and titles are cut to leave room for the pill and flag (`pill_width`) and for what's right-aligned, which is measured. Every level is indented, with a smaller step for trees deeper than six, at most 132 pixels in all (`MAX_INDENT`), and connectors run beside cards, not through them. A session draws its first 30 agents (`MAX_AGENTS`, `tree_order`) and 3 callouts (`MAX_CALLOUTS`), then "+N more agents" and "+N more need you". Help updated. Tests (src/image.rs): `the_stale_flag_has_room`, `a_deep_tree_stays_inside_the_picture`, `a_deep_tree_keeps_its_shape`, `a_huge_session_draws_some_agents_and_counts_the_rest`, `agents_past_the_cap_are_counted_exactly`, sharing a layout checker (`assert_laid_out`). Reviewed (two rounds).
 
 ### R41. Session requests only pair at a child's first start
 - **Where:** `src/reducer.rs`
@@ -242,7 +251,8 @@ Status is updated as each is done.
 
 ### R42. `claude … & claude … & wait` counts as a background launch
 - **Where:** `src/adapter/shell.rs`
-- **Status:** open
+- **Problem:** `claude … & claude … & wait` counted as a background launch, but the call doesn't return until the jobs finish, so the requester is waiting on them.
+- **Status:** fixed. Each shell (the top, a subshell or a substitution) keeps the jobs it put in the background (`Level::jobs`), and a `wait` it runs itself takes back those started before it. Not counted: `wait -n`; a `wait` in a pipeline; one whose list a `&` ends; one in a function's body (any compound command after `NAME()` or `function NAME`). Known gap: a `wait` inside a compound that's then put in the background (`{ wait; } &`) still counts. Test: `jobs_waited_for_arent_in_the_background` (src/adapter/shell.rs). Reviewed (three rounds).
 
 ### R43. A node id with thousands of `/` overflows the stack
 - **Where:** `src/reducer.rs` (`ensure`)
@@ -250,41 +260,49 @@ Status is updated as each is done.
 
 ### R44. The log size cap doesn't bound storage
 - **Where:** `site/app/api/logs/[id]/append/route.ts`
-- **Status:** open
+- **Problem:** The 64 MiB cap was judged from offsets, so it bounded a log's span, not what it stored: chunks at overlapping offsets were each stored in full (only a log's own writer could do this).
+- **Status:** fixed. Each log counts the bytes its chunks hold (`stored`, the sum of their lengths `n`), in the append's transaction and each trim batch's; an append past `MAX_LOG_BYTES` gets 413 "This log is full" (a retry of a chunk already stored excepted). The count stays exact across the storage-id migration, which merges its metadata, never replaces a chunk, and counts uncounted chunks in transactions. Tests: "overlapping chunks count towards the size limit" (site/tests/api.test.mjs), "a log counts what it stores, and trimming gives it back" and "the size count is exact across the migration" (site/tests/store.test.mjs). Reviewed (two rounds).
 
 ### R45. Create and unlock buffer the whole body when there's no Content-Length
 - **Where:** `site/app/api/logs/**`
-- **Status:** open
+- **Problem:** Create and append checked Content-Length, but a body without one was read whole before being measured; unlock had no limit at all.
+- **Status:** fixed. `bodyText(req, max)` reads the body as it arrives and stops past `max`: 512 KB for create and append, 8 KB for unlock (`UNLOCK_BODY_BYTES`), answering 413 past them. Unlock strips a leading byte-order mark before parsing, as `req.json()` did. Tests: in site/tests/unlock.test.mts and "bad input is refused" (site/tests/api.test.mjs). Reviewed (two rounds).
 
 ### R46. Passwords of 1025–1050 bytes are accepted but can never unlock
 - **Where:** `site/lib/crypto.ts`, unlock route
-- **Status:** open
+- **Problem:** Creating a log allowed a 1050-byte password, but unlocking refused any over 1024 UTF-16 units, so some passwords could be set and never used; the CLI had no limit.
+- **Status:** fixed. One limit, `MAX_PASSWORD_BYTES` (1024 bytes of UTF-8, as hashed), for creating (400 past it), unlocking, and the CLI (`check_password`, before sending). Tests: "a password a log accepts can unlock it, and one it refuses can't" (site/tests/unlock.test.mts), in "bad input is refused" (site/tests/api.test.mjs), `a_password_too_long_for_the_site_is_refused` (tests/remote.rs). Reviewed.
 
 ### R47. The CLI's refusal to send a password over plain HTTP can be bypassed
 - **Where:** `src/remote.rs`
-- **Status:** open
+- **Problem:** The check parsed the URL by hand: an uppercase scheme, a userinfo password (`http://localhost:x@evil.example`) or any IPv6 literal starting `[::` passed as private, and redirects were followed with the password header.
+- **Status:** fixed. `sends_privately` judges the URL as the HTTP client parses it (`https`, or `http` to localhost or a loopback address), no redirects are followed, and plain HTTP to this machine skips any proxy. Tests: `a_password_is_only_sent_over_https_or_to_this_machine` (src/remote.rs), `a_redirect_is_not_followed` (tests/remote.rs). Reviewed.
 
 ### R48. `tail` leaves the terminal broken when killed
 - **Where:** `src/live.rs`
-- **Status:** open
+- **Problem:** In raw mode Ctrl+C is a key press, but SIGTERM, SIGHUP or SIGINT from elsewhere killed `tail` without restoring the terminal (left raw, on the alternate screen, cursor hidden).
+- **Status:** fixed. On Unix, `tail` catches them once each (unless started with them ignored), with `SA_RESETHAND` so a second still kills one stuck writing; the first stops the loop, restores the screen, and is raised again so the sender sees it die of it. Tests: `tail_puts_the_terminal_back_when_killed` (tests/cli.rs, on a pseudo-terminal), `a_second_signal_is_the_default` (src/live.rs). Reviewed (three rounds).
 
 ### R49. Every install or uninstall overwrites the backup, losing the original
 - **Where:** `src/cli.rs`
-- **Status:** open
+- **Problem:** Every install or uninstall copied the current settings over the backup, so after a reinstall or uninstall it held Agent Graph's hooks, not the user's original.
+- **Status:** fixed. Only a settings file without Agent Graph's hooks is backed up. Help updated. Test: `the_settings_backup_keeps_the_original` (tests/cli.rs). Reviewed.
 
 ### R50. On Windows, `run` turns exit codes above 255 into 1
 - **Where:** `src/run.rs`
-- **Status:** open
+- **Problem:** `run` exited with the child's code as a byte, or 1, so on Windows any code above 255 (a crash's 0xC0000005, say) became 1.
+- **Status:** fixed. `exit_with` picks the exit: a code that fits a byte as it is; on Windows any other passed whole via `process::exit`, after the run's recorded. Test: `windows_exit_codes_pass_through_whole` (src/run.rs). Reviewed.
 
 ### R51. `uninstall` leaves behind the empty folders `install` created
 - **Where:** `src/cli.rs`
-- **Status:** open
+- **Problem:** Uninstall left the empty `.agents/`, `.gemini/`, `.cursor/` folders install made, and `.claude/` holding a `settings.json` of `{}`.
+- **Status:** fixed. Uninstall also removes an agent folder left empty, and a settings file left as `{}` unless there's a backup beside it or it's a link. The help says exactly this. Test: `uninstall_leaves_no_empty_folders_behind` (tests/cli.rs). Reviewed (two rounds).
 
 ### R52. Creating a log with a password, or unlocking one with the right password, runs scrypt without limit
 - **Where:** `site/app/api/logs/route.ts` (`hashPassword`), `site/lib/unlock.ts`
 - **Problem:** Found reviewing R19. Only wrong guesses are limited, so one address can run scrypt (about 50 ms each) as often as it likes by unlocking its own log with the right password, or by creating logs with passwords, which isn't limited at all.
 - **Fix:** a generous per-address cap on every scrypt run (say 200 per 15 minutes), counted like R19's buckets.
-- **Status:** open
+- **Status:** fixed. Every scrypt run is counted, never given back, in buckets like R19's (the same TTL policy), per 15 minutes: 200 password checks at one log from one address (`SCRYPT_CHECKS_PER_LOG_AND_ADDRESS`), so a log's viewers behind one address hold back only that log there; and 2000 runs from one address in all (`SCRYPT_RUNS_PER_ADDRESS`), checks and logs created with a password, the bound on the server's time. Past either, 429 with `Retry-After`. Tests: "checking passwords at a log is limited per address" (site/tests/api.test.mjs), "scrypt runs are counted per address, and per log and address" (site/tests/store.test.mjs). Reviewed (two rounds).
 
 ### R53. Within one session, the reducer is still quadratic in its agents
 - **Where:** `src/reducer.rs` (`bind_by_guess`, the per-node `spawns` and `waits` lists)
@@ -308,31 +326,31 @@ Status is updated as each is done.
 - **Where:** `src/view/assets/app.js` (`refresh`), `site/public/viewer/site-source.js`
 - **Problem:** Found reviewing R23. A refresh asks for the graph and then the timeline, and each reduces every event; on the site, that's in the page's main thread (about 130 ms each for 32,800 events), so the page stalls on busy logs.
 - **Fix:** one request for both (reducing once), and run the WebAssembly in a Worker on the site.
-- **Status:** open
+- **Status:** fixed. A graph request for now also returns its tree's timeline (`stops`), from the same reduction, so a refresh is one request; `/api/timeline` and the WebAssembly `timeline` op are gone. On the site, `site-worker.js` reads the log and runs the WebAssembly in a Worker, and `site-source.js` talks to it by messages. Tests: `the_graph_now_carries_its_trees_timeline` (src/timeline.rs), `the_graph_endpoint_carries_the_timeline` (tests/view.rs), and in site/tests (wasm, viewer and site-source tests, the last with a stand-in Worker). Reviewed.
 
 ### R57. A named or wrapped `agent-graph run` can take another program's request
 - **Where:** `src/reducer.rs` (`bind_session_by_guess`), `src/run.rs`, `src/adapter/shell.rs`
 - **Problem:** Found reviewing R24. A run session is named for the run (`--name workers`) or the wrapper it was given (`npx`), not the agent CLI, so it might answer any request, including one for a CLI with no adapter (`codex exec … &`, which nothing else ever claims): it then takes that request's program, purpose and `background`, for good, and its own request shows as starting for the whole run.
 - **Fix:** record which requests were for `agent-graph run` (the shell adapter knows), and pair a run only with those, and nothing else with them; or have `run.rs` record the program it wraps, found as the shell adapter finds it.
-- **Status:** open
+- **Status:** fixed. The shell adapter says when a launch is through `agent-graph run`, and the Claude Code adapter records it on every session request (`spawn.requested`'s `run`). A run's session pairs only with a request for a run, and no other session with one; a request from a log written before `run` was recorded pairs as before (with a run's session only if the run's named for its program). Example logs regenerated. Tests: `runs_say_they_are_runs` (src/adapter/shell.rs), `a_run_is_paired_only_with_a_request_for_a_run`, `a_run_is_paired_with_an_old_logs_request_by_its_name` (tests/reducer.rs), `a_run_answers_the_request_made_for_it` (tests/sessions.rs). Reviewed (two rounds).
 
 ### R58. `&` puts only the last simple command in the background
 - **Where:** `src/adapter/shell.rs`
 - **Problem:** Found fixing R26. A trailing `&` backgrounds the whole and-or list or group before it, but the splitter marks only the last simple command, so `(cd x && codex exec y) &`, `{ codex exec y; } &`, `claude -p a && echo done &` and `claude -p a | tee log &` are foreground launches; `0<&3` is read as `&`, putting the command before it in the background; and an array assignment, `arr=(claude codex)`, is read as a group, so it's a launch.
 - **Fix:** mark everything since the list began (with its groups and substitutions) when a `&` ends it, keep `<&` in its word, and read `NAME=(…)` as a word.
-- **Status:** open
+- **Status:** fixed. A lone `&` puts everything since its list began in the background (`Level::list`), a compound command counting as one command of its list; `<&`, and the `&` of `|&` (a pipe), stay in their words; `NAME=(…)` is read as an array's values. Test: `a_background_list_is_all_in_the_background` (src/adapter/shell.rs). Reviewed (two rounds).
 
 ### R59. A `case` pattern after the first is read as a command
 - **Where:** `src/adapter/shell.rs`
 - **Problem:** Found reviewing R26. In `case $a in claude) …;; codex) …;; esac`, the patterns after `;;` (or on a line of their own) come out as simple commands, so `codex` is a launch that isn't there.
 - **Fix:** after `in` and after each `;;` (`;&`, `;;&`) in an open `case`, read the words up to `)` as a pattern and drop them.
-- **Status:** open
+- **Status:** fixed. After `case WORD in`, and after each `;;`, `;&` or `;;&`, the words up to `)` are a pattern and dropped (across newlines, `|` alternatives and a leading `(`); `esac` where a pattern would start closes the `case`. Test: `case_patterns_arent_commands` (src/adapter/shell.rs). Reviewed.
 
 ### R60. A heredoc ended by `EOF)` inside a substitution swallows the rest of the command
 - **Where:** `src/adapter/shell.rs`
 - **Problem:** Found reviewing R26. Bash ends a heredoc inside `$( … )` (or backticks) at a line that's the delimiter followed by the `)` (or backtick) that closes it; the splitter only ends one at a line that's the delimiter alone, so the rest of the command is taken as the body.
 - **Fix:** inside a substitution, end the body at the delimiter followed by its closing `)` or backtick, and read on from there.
-- **Status:** open
+- **Status:** fixed. Inside a substitution, a body line that's the delimiter followed by that substitution's closer ends the heredoc, and reading resumes at the closer (as bash does). Test: `a_heredoc_can_end_with_its_substitution` (src/adapter/shell.rs). Reviewed.
 
 ### R61. Upgrading through a package manager breaks the hooks
 - **Where:** `src/install.rs` (`default_command`)
