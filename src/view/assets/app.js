@@ -50,13 +50,16 @@ const clean = (s) =>
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
     .replace(/[\u202a-\u202e\u2066-\u2069]/g, '');
 
-/** Builds an element. Strings become text nodes, never markup. */
+/**
+ * Builds an element. Strings become text nodes, never markup. Handlers are
+ * set as properties (`onclick`), so `morph` can carry them over.
+ */
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
     if (v == null || v === false) continue;
     if (k === 'class') el.className = v;
-    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k.startsWith('on')) el[k] = v;
     else el.setAttribute(k, v === true ? '' : clean(v));
   }
   for (const kid of kids.flat(Infinity)) {
@@ -64,6 +67,51 @@ function h(tag, props, ...kids) {
     el.append(kid instanceof Node ? kid : clean(kid));
   }
   return el;
+}
+
+/**
+ * Makes `el`'s children look like `kids`, as `replaceChildren(...kids)`
+ * would, but keeps each node that's still there (the same tag, at the same
+ * place), changing only what differs: its text, or its attributes and click
+ * handler. So a redraw as events arrive leaves focus and selected text alone
+ * wherever nothing changed.
+ */
+function morph(el, kids) {
+  const old = [...el.childNodes];
+  kids.forEach((kid, i) => {
+    const was = old[i];
+    if (!was) el.append(kid);
+    else if (was.nodeName !== kid.nodeName) was.replaceWith(kid);
+    else if (was.nodeType === Node.TEXT_NODE) {
+      if (was.data !== kid.data) was.data = kid.data;
+    } else {
+      for (const { name } of [...was.attributes]) if (!kid.hasAttribute(name)) was.removeAttribute(name);
+      for (const { name, value } of [...kid.attributes]) if (was.getAttribute(name) !== value) was.setAttribute(name, value);
+      was.onclick = kid.onclick;
+      morph(was, [...kid.childNodes]);
+    }
+  });
+  for (const gone of old.slice(kids.length)) gone.remove();
+}
+
+/**
+ * Redraws `el` with `kids` (see `morph`). A control that had focus and now
+ * stands for something else, or has gone (a session listed above it moved
+ * it down, say), gives it to the one that stands for what it did.
+ */
+function redraw(el, kids) {
+  const focused = el.contains(document.activeElement) ? document.activeElement : null;
+  const key = focused && controlKey(focused);
+  morph(el, kids);
+  if (key && controlKey(focused) !== key) {
+    const again = [...el.querySelectorAll('[data-id]')].find((e) => controlKey(e) === key);
+    if (again) again.focus({ preventScroll: true });
+  }
+}
+
+/** What control `el` is, if it stands for a node: which node, and what it does with it. */
+function controlKey(el) {
+  return el.isConnected && el.dataset.id != null ? `${el.dataset.id} ${el.classList[0]}` : null;
 }
 
 /**
@@ -458,18 +506,17 @@ function renderMode() {
 }
 
 function renderSessions() {
-  const list = $('#session-list');
-  list.replaceChildren();
-  if (!S.live) return;
+  redraw($('#session-list'), sessionItems());
+}
+
+function sessionItems() {
+  if (!S.live) return [];
   const roots = visibleRoots();
   if (!roots.length) {
     const hidden = S.live.roots.length;
-    list.append(
-      h('li', { class: 'empty-note' }, hidden ? `${plural(hidden, 'older session')} hidden.` : 'No sessions yet.'),
-    );
-    return;
+    return [h('li', { class: 'empty-note' }, hidden ? `${plural(hidden, 'older session')} hidden.` : 'No sessions yet.')];
   }
-  for (const id of roots) {
+  return roots.map((id) => {
     // What's going on in the session's tree, worked out where the graph is.
     const root = S.live.sessions[id];
     const { agents, needs_you: needsYou, deadlocked, stuck, busy } = root;
@@ -478,102 +525,118 @@ function renderSessions() {
     const meta = [root.provider, agents ? plural(agents, 'agent') : null, root.tasks ? `tasks ${done}/${root.tasks}` : null]
       .filter(Boolean)
       .join(' · ');
-    list.append(
+    return h(
+      'li',
+      null,
       h(
-        'li',
-        null,
-        h(
-          'button',
-          {
-            class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}`,
-            'aria-current': id === S.root ? 'true' : null,
-            onclick: () => selectRoot(id),
-          },
-          h('span', { class: `dot ${dotState}` }),
-          h('span', { class: 's-title', title: root.cwd || id }, nodeName(root)),
-          h('span', { class: 's-when' }, ago(root.last_event_at)),
-          needsYou
-            ? h('span', { class: 's-sub attention' }, `Needs you: ${needsYou.attention || nodeName(needsYou)}`)
-            : deadlocked
-              ? h('span', { class: 's-sub problem' }, 'Deadlocked: waiting on a session that waits on it')
-              : stuck
-                ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck.id === id ? 'no activity' : nodeName(stuck)}`)
-                : h('span', { class: 's-sub' }, root.headline || STATE_LABEL[root.state]),
-          h('span', { class: 's-meta' }, meta),
-        ),
+        'button',
+        {
+          class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}`,
+          'data-id': id,
+          'aria-current': id === S.root ? 'true' : null,
+          onclick: () => selectRoot(id),
+        },
+        h('span', { class: `dot ${dotState}` }),
+        h('span', { class: 's-title', title: root.cwd || id }, nodeName(root)),
+        h('span', { class: 's-when' }, ago(root.last_event_at)),
+        needsYou
+          ? h('span', { class: 's-sub attention' }, `Needs you: ${needsYou.attention || nodeName(needsYou)}`)
+          : deadlocked
+            ? h('span', { class: 's-sub problem' }, 'Deadlocked: waiting on a session that waits on it')
+            : stuck
+              ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck.id === id ? 'no activity' : nodeName(stuck)}`)
+              : h('span', { class: 's-sub' }, root.headline || STATE_LABEL[root.state]),
+        h('span', { class: 's-meta' }, meta),
       ),
     );
-  }
+  });
 }
 
 function renderMain() {
   const view = $('#view');
-  view.replaceChildren();
-  if (!S.live) return;
+  const { kids, graph, ringed, flash } = mainView();
+  redraw(view, kids);
+  if (!graph) return;
+  // A card flashes each time an event touches it, even if it did last time.
+  const flashed = flash && view.querySelector('.node.flash');
+  if (flashed) {
+    flashed.classList.remove('flash');
+    void flashed.offsetWidth;
+    flashed.classList.add('flash');
+  }
+  // Brought into view when the step changes; not whenever the tree is drawn
+  // again (a card chosen, new events), or it would undo the reader's scrolling.
+  const ring = view.querySelector('.node.current');
+  if (ring && (S.scrolledTo.graph !== graph || S.scrolledTo.id !== ringed)) ring.scrollIntoView({ block: 'nearest' });
+  S.scrolledTo = { graph, id: ringed };
+}
+
+/**
+ * What the main view shows (`kids`), and when it's a tree, the graph it's
+ * from, and the nodes it rings and flashes.
+ */
+function mainView() {
+  if (!S.live) return { kids: [] };
 
   if (!S.live.roots.length) {
-    view.append(
-      h(
-        'div',
-        { class: 'empty' },
-        h('h2', null, 'No sessions recorded yet'),
-        h('p', null, 'Install the hooks, then start a new Claude Code session. It will appear here as soon as it starts.'),
-        h('pre', null, h('code', null, 'agent-graph install claude-code')),
-        S.info && S.info.where ? h('p', null, 'Watching ', h('code', null, S.info.where)) : null,
-      ),
-    );
-    return;
+    return {
+      kids: [
+        h(
+          'div',
+          { class: 'empty' },
+          h('h2', null, 'No sessions recorded yet'),
+          h('p', null, 'Install the hooks, then start a new Claude Code session. It will appear here as soon as it starts.'),
+          h('pre', null, h('code', null, 'agent-graph install claude-code')),
+          S.info && S.info.where ? h('p', null, 'Watching ', h('code', null, S.info.where)) : null,
+        ),
+      ],
+    };
   }
   if (!S.root) {
-    view.append(
-      h(
-        'div',
-        { class: 'empty' },
-        h('h2', null, 'Nothing in the last 24 hours'),
-        h('p', null, 'Tick “Older” in the sessions list to see earlier sessions.'),
-      ),
-    );
-    return;
+    return {
+      kids: [
+        h(
+          'div',
+          { class: 'empty' },
+          h('h2', null, 'Nothing in the last 24 hours'),
+          h('p', null, 'Tick “Older” in the sessions list to see earlier sessions.'),
+        ),
+      ],
+    };
   }
 
   const graph = S.shown || S.live;
   const root = graph.nodes[S.root];
   // Its summary until its tree comes.
   const liveRoot = S.live.nodes[S.root] || S.live.sessions[S.root] || (S.live.others || {})[S.root];
-  if (!liveRoot) {
-    view.append(h('p', { class: 'empty-note' }, 'Loading…'));
-    return;
-  }
+  if (!liveRoot) return { kids: [h('p', { class: 'empty-note' }, 'Loading…')] };
   const stop = S.stops[S.pos];
 
-  view.append(
+  const head = h(
+    'div',
+    { class: 'view-head' },
     h(
       'div',
-      { class: 'view-head' },
-      h(
-        'div',
-        { class: 'title-row' },
-        h('h1', null, nodeName(liveRoot), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
-        root ? saveImageLink(stop) : null,
-      ),
-      h(
-        'div',
-        { class: 'meta' },
-        h('span', null, liveRoot.provider),
-        h('span', { class: 'mono', title: liveRoot.id }, short(liveRoot.id)),
-        liveRoot.cwd ? h('span', { class: 'mono', title: liveRoot.cwd }, liveRoot.cwd) : null,
-        liveRoot.started_at ? h('span', null, `Started ${clock(liveRoot.started_at)}`) : null,
-      ),
-      !S.following && stop
-        ? h('div', { class: 'past-note' }, `As of ${clock(stop.ts)} — step ${S.pos + 1} of ${S.stops.length}`)
-        : null,
+      { class: 'title-row' },
+      h('h1', null, nodeName(liveRoot), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
+      root ? saveImageLink(stop) : null,
     ),
+    h(
+      'div',
+      { class: 'meta' },
+      h('span', null, liveRoot.provider),
+      h('span', { class: 'mono', title: liveRoot.id }, short(liveRoot.id)),
+      liveRoot.cwd ? h('span', { class: 'mono', title: liveRoot.cwd }, liveRoot.cwd) : null,
+      liveRoot.started_at ? h('span', null, `Started ${clock(liveRoot.started_at)}`) : null,
+    ),
+    !S.following && stop
+      ? h('div', { class: 'past-note' }, `As of ${clock(stop.ts)} — step ${S.pos + 1} of ${S.stops.length}`)
+      : null,
   );
 
   if (!root) {
     const note = S.following ? 'Loading…' : 'This session hadn’t started yet at this point.';
-    view.append(h('p', { class: 'empty-note' }, note));
-    return;
+    return { kids: [head, h('p', { class: 'empty-note' }, note)] };
   }
 
   // Which node to ring: the one the current step touched.
@@ -586,12 +649,7 @@ function renderMain() {
     S.lastFlashed = last.id;
   }
 
-  view.append(h('div', { class: 'tree' }, branch(graph, root, ringed, flash)));
-  // Brought into view when the step changes; not whenever the tree is drawn
-  // again (a card chosen, new events), or it would undo the reader's scrolling.
-  const ring = view.querySelector('.node.current');
-  if (ring && (S.scrolledTo.graph !== graph || S.scrolledTo.id !== ringed)) ring.scrollIntoView({ block: 'nearest' });
-  S.scrolledTo = { graph, id: ringed };
+  return { kids: [head, h('div', { class: 'tree' }, branch(graph, root, ringed, flash))], graph, ringed, flash };
 }
 
 /** A download link for a PNG of this session, at the step being viewed. */
@@ -710,8 +768,13 @@ function blockedText(graph, b) {
 }
 
 function renderDetail() {
-  const pane = $('#detail');
-  pane.replaceChildren();
+  const pane = h('div');
+  drawDetail(pane);
+  redraw($('#detail'), [...pane.childNodes]);
+}
+
+/** Draws what's known of the selected node, as of the step shown, into `pane`. */
+function drawDetail(pane) {
   const graph = S.shown || S.live;
   const n = graph && S.selected ? graph.nodes[S.selected] : null;
   if (!n) {
@@ -730,9 +793,9 @@ function renderDetail() {
   // A node of this tree is shown here; one outside it, by showing its own tree.
   const link = (id) =>
     graph.nodes[id]
-      ? h('button', { class: 'linkish', onclick: () => selectNode(id) }, nameOf(graph, id))
+      ? h('button', { class: 'linkish', 'data-id': id, onclick: () => selectNode(id) }, nameOf(graph, id))
       : nodeOf(graph, id)
-        ? h('button', { class: 'linkish', title: 'Show its own tree', onclick: () => switchTo(id) }, nameOf(graph, id))
+        ? h('button', { class: 'linkish', 'data-id': id, title: 'Show its own tree', onclick: () => switchTo(id) }, nameOf(graph, id))
         : short(id);
 
   pane.append(
