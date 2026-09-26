@@ -94,6 +94,11 @@ struct GraphResponse<'a> {
     /// `Environment::Local`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     open: BTreeMap<&'a str, Open>,
+    /// For the graph now (no `until`), that tree's timeline, as `timeline`
+    /// gives it, from the same reduction: so the page refreshes with one
+    /// request, and the history is reduced once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stops: Option<Vec<Stop>>,
 }
 
 /// What names a node (as the page does), and how it's doing.
@@ -200,7 +205,8 @@ pub fn graph_at(
 
 /// `graph_at` as JSON, for a page in `env`: every session's summary, and
 /// the tree under `root` (or, if it's not given or not in the graph, under
-/// the most recently active session).
+/// the most recently active session), with, for the graph now, that tree's
+/// timeline.
 pub fn graph(
     events: &[Timed],
     until: Option<&str>,
@@ -244,6 +250,9 @@ pub fn graph(
             .collect(),
         Environment::Site => BTreeMap::new(),
     };
+    let stops = until
+        .is_none()
+        .then(|| root.map_or_else(Vec::new, |root| stops(events, &graph, root)));
     Ok(to_json(&GraphResponse {
         at: until,
         events: count,
@@ -255,6 +264,7 @@ pub fn graph(
         nodes,
         others,
         open,
+        stops,
     }))
 }
 
@@ -331,22 +341,27 @@ pub fn timeline(
     if !now.nodes.contains_key(root) {
         return Err(ApiError::NotFound(format!("no node {root}")));
     }
-    let members = subtree(&now, root);
+    let stops = stops(events, &now, root);
+    Ok(to_json(&TimelineResponse { root, stops }))
+}
+
+/// Every event in the tree under `root`, as `now` (all of `events`,
+/// reduced) has it, labelled.
+fn stops(events: &[Timed], now: &Graph, root: &str) -> Vec<Stop> {
+    let members = subtree(now, root);
     // A log that starts from a keyframe starts there.
     let (base, rest) = split_base(events);
     let base = base.map(|e| Stop {
         node: root.to_string(),
-        ..stop(e, &now)
+        ..stop(e, now)
     });
-    let stops = base
-        .into_iter()
+    base.into_iter()
         .chain(
             rest.iter()
                 .filter(|t| members.contains(t.event.node.as_str()))
-                .map(|t| stop(&t.event, &now)),
+                .map(|t| stop(&t.event, now)),
         )
-        .collect();
-    Ok(to_json(&TimelineResponse { root, stops }))
+        .collect()
 }
 
 fn position(events: &[Timed], id: &str) -> Result<usize, ApiError> {
@@ -973,6 +988,34 @@ mod tests {
         let child = spawn["child"].as_str().unwrap();
         assert!(json["nodes"].get(child).is_none(), "moved to x:t's tree");
         assert!(json["others"].get(child).is_some(), "but named");
+    }
+
+    /// R56: the graph now carries its tree's timeline, from the same
+    /// reduction, so the page refreshes with one request; a step's doesn't.
+    #[test]
+    fn the_graph_now_carries_its_trees_timeline() {
+        let events = fixture_events();
+        let now = SystemTime::now();
+        let at = |events: &[Timed], until: Option<&str>, root: Option<&str>| -> Value {
+            serde_json::from_str(&graph(events, until, root, now, STALE, LOCAL).unwrap()).unwrap()
+        };
+        let agent = format!("{SESSION}/a1f00d");
+        for root in [SESSION, &agent] {
+            let timeline: Value =
+                serde_json::from_str(&timeline(&events, root, now, STALE).unwrap()).unwrap();
+            assert_eq!(at(&events, None, Some(root))["stops"], timeline["stops"]);
+        }
+        // None asked for: the tree the reply holds.
+        let newest = at(&events, None, None);
+        assert_eq!(newest["root"], SESSION);
+        assert_eq!(newest["stops"].as_array().unwrap().len(), events.len());
+        assert_eq!(at(&[], None, None)["stops"], serde_json::json!([]));
+        assert!(
+            at(&events, Some(&events[6].event.id), Some(SESSION))
+                .get("stops")
+                .is_none(),
+            "a step's is the same timeline"
+        );
     }
 
     #[test]

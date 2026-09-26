@@ -1,6 +1,7 @@
 // The viewer's behaviour, in jsdom. See viewer-harness.mjs.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { asServer, graph, loadViewer, node, until } from "./viewer-harness.mjs";
@@ -22,11 +23,9 @@ test("R7: the local page takes its key from the link, keeps it, and sends it", a
   const g = graph([node("x:a")]);
   const fetch = async (url, init = {}) => {
     requests.push({ url: String(url), key: init.headers && init.headers["X-Agent-Graph-Key"] });
-    const body = String(url).startsWith("/api/timeline")
-      ? { stops: [] }
-      : String(url).startsWith("/api/info")
-        ? { now_ms: Date.now(), events_dir: "x" }
-        : asServer(g, new URL(String(url), "http://x").searchParams.get("root"));
+    const body = String(url).startsWith("/api/info")
+      ? { now_ms: Date.now(), events_dir: "x" }
+      : { ...asServer(g, new URL(String(url), "http://x").searchParams.get("root")), stops: [] };
     return { ok: true, status: 200, json: async () => body, text: async () => "", blob: async () => ({}) };
   };
   class EventSource {
@@ -89,7 +88,7 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   const late = graph([node("x:a"), node("x:b")]);
   let stops = stopsOf(["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8"]);
   // Every step but e2 waits until the test lets it through; so does the
-  // timeline, while `hold` is set.
+  // timeline (and so the graph now, which carries it), while `hold` is set.
   const pending = [];
   const calls = {};
   let hold = null;
@@ -144,26 +143,17 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   await settle();
   assert.equal(v.S.shown, cachedStep, "the cached step");
 
-  // The session goes, so a refresh goes live on another, while a step
-  // loads: the step arrives before the new session's timeline does, and
-  // the old session's steps can't be stepped to meanwhile.
+  // The session goes, so a refresh goes live on another (its tree and its
+  // timeline come together), while a step loads: the step arrives after.
   slow = await loading(3);
   live = graph([node("x:b"), node("x:c")]);
-  let release = holding();
   v.scheduleRefresh();
   await until(() => v.S.root === "x:b");
+  const refreshed = () => v.S.following && v.S.stops.length && v.S.pos === v.S.stops.length - 1;
+  assert.ok(refreshed());
   slow.resolve(late);
   await settle();
-  assert.equal(v.S.shown, v.S.live, "live, not the step of the session that went");
-  assert.equal(window.document.querySelector("#step-count").textContent, "No events yet", "and the page says so");
-  assert.equal(window.document.querySelector("#prev").disabled, true, "with nothing to step back to");
-  v.goTo(1);
-  await settle();
-  assert.equal(v.S.shown, v.S.live, "not a step of the session that went");
-  release();
-  const refreshed = () => v.S.following && v.S.stops.length && v.S.pos === v.S.stops.length - 1;
-  await until(refreshed);
-  assert.equal(v.S.shown, v.S.live, "the other session, live");
+  assert.equal(v.S.shown, v.S.live, "the other session, live, not the step of the session that went");
   // Nor was it kept for later: it's from before the refresh.
   v.goTo(3);
   await settle();
@@ -173,9 +163,9 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   assert.equal(v.S.shown, late);
 
   // Choosing another session while a step loads: the step arrives before
-  // the new session's timeline does.
+  // the new session's tree does.
   slow = await loading(4);
-  release = holding();
+  let release = holding();
   v.selectRoot("x:c");
   slow.resolve(late);
   await settle();
@@ -190,7 +180,7 @@ test("R20: a step's graph arriving late never replaces the graph shown since", a
   await until(() => v.S.shown === cachedStep);
   release = holding();
   v.selectRoot("x:b");
-  assert.equal(v.S.shown, v.S.live, "before its timeline comes");
+  assert.equal(v.S.shown, v.S.live, "before its tree comes");
   v.goTo(1);
   await settle();
   assert.equal(v.S.shown, v.S.live, "not a step of the session left");
@@ -381,15 +371,11 @@ test("R21: a refresh overtaken by a change of session shows nothing of the old o
 test("R21: choosing a session that has just gone is ignored, and the page recovers", async (t) => {
   let live = graph([node("x:a"), node("x:b")]);
   const stops = stopsOf(["a1", "a2"]);
-  let hold = null;
   const window = loadViewer(
     t,
     {
       graph: async () => live,
-      timeline: async () => {
-        if (hold) await hold.promise;
-        return { stops };
-      },
+      timeline: async () => ({ stops }),
     },
     { hash: "#x:a" },
   );
@@ -397,16 +383,14 @@ test("R21: choosing a session that has just gone is ignored, and the page recove
   const count = () => window.document.querySelector("#step-count").textContent;
   await until(() => v.S.stops.length === 2);
 
-  // x:b goes; while the refresh that finds out waits for x:a's timeline,
-  // x:b (still listed) is chosen.
+  // x:b goes; once the refresh that finds out has come, x:b's button (as
+  // it was when pressed) is pressed.
+  const button = window.document.querySelector('#session-list .session[data-id="x:b"]');
   live = graph([node("x:a")]);
-  hold = deferred();
   v.scheduleRefresh();
   await until(() => v.S.live === live);
-  v.selectRoot("x:b");
+  button.click();
   assert.equal(v.S.root, "x:a", "not a session that has gone");
-  hold.resolve();
-  hold = null;
   await settle();
   assert.equal(v.S.root, "x:a");
   assert.equal(count(), "Step 2 of 2");
@@ -675,4 +659,369 @@ test("R23: with no session named and none recent, none is shown", async (t) => {
   await until(() => window.document.querySelector("#view h2"));
   assert.equal(window.__viewer.S.root, null);
   assert.equal(window.document.querySelector("#view h2").textContent, "Nothing in the last 24 hours");
+});
+
+test("R34: only the most recently shown steps' graphs are kept", async (t) => {
+  const ids = Array.from({ length: 50 }, (_, i) => `e${i}`);
+  const stops = ids.map((id, i) => ({
+    id,
+    ts: new Date(Date.UTC(2026, 8, 25, 10, 0, i)).toISOString(),
+    label: id,
+    category: "status",
+  }));
+  const calls = {};
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => {
+        if (at) calls[at] = (calls[at] || 0) + 1;
+        return { ...graph([node("x:a")]), at: at || null };
+      },
+      timeline: async () => ({ stops }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  await until(() => v.S.stops.length === stops.length);
+  const show = async (pos) => {
+    v.goTo(pos);
+    await until(() => v.S.shown && v.S.shown.at === ids[pos]);
+  };
+  assert.ok(v.CACHED_STEPS < ids.length - 2, "more steps than are kept");
+  for (let pos = 0; pos < ids.length - 1; pos++) await show(pos);
+  assert.ok(v.S.cache.size <= v.CACHED_STEPS, `${v.S.cache.size} kept`);
+
+  // The first was shown long ago: it's asked for again. Going back to one
+  // shown lately keeps it among the most recent, as the others go.
+  await show(0);
+  assert.equal(calls.e0, 2, "asked for again");
+  await show(ids.length - 2);
+  for (let pos = 1; pos < v.CACHED_STEPS; pos++) await show(pos);
+  await show(ids.length - 2);
+  assert.equal(calls[ids.at(-2)], 1, "kept, as it was shown lately");
+  assert.ok(v.S.cache.size <= v.CACHED_STEPS, `${v.S.cache.size} kept`);
+});
+
+test("R35: the tree scrolls to the ringed card when the step changes, not whenever it's drawn", async (t) => {
+  const a = node("x:a", { children: ["x:a/b"] });
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore" });
+  let stops = stopsOf(["e1", "e2", "e3"]).map((s) => ({ ...s, node: "x:a/b" }));
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => ({ ...graph([a, b]), at: at || null }),
+      timeline: async () => ({ stops }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const scrolls = () => window.__scrolls || 0;
+  await until(() => v.S.stops.length === 3);
+  v.goTo(0);
+  await until(() => window.document.querySelector("#view .node.current"));
+  assert.equal(scrolls(), 1, "to the step's card");
+
+  // Drawn again: a card chosen, new events. The page stays where it's been scrolled to.
+  v.selectNode("x:a");
+  stops = [...stops, ...stopsOf(["e4"])];
+  v.scheduleRefresh();
+  await until(() => v.S.stops.length === 4);
+  v.renderAll();
+  assert.equal(window.document.querySelector("#view .node.current").dataset.id, "x:a/b");
+  assert.equal(scrolls(), 1, "not scrolled back");
+
+  v.goTo(1);
+  await until(() => v.S.shown.at === "e2");
+  assert.equal(scrolls(), 2, "to the next step's card");
+});
+
+test("R35: while following, events elsewhere don't scroll the tree", async (t) => {
+  const a = node("x:a", { children: ["x:a/b"] });
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore" });
+  let live = graph([a, b, node("x:z", { headline: "one" })]);
+  const window = loadViewer(
+    t,
+    {
+      graph: async () => live,
+      timeline: async () => ({ stops: stopsOf(["e1", "e2"]).map((s) => ({ ...s, node: "x:a/b" })) }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const scrolls = () => window.__scrolls || 0;
+  await until(() => v.S.stops.length === 2 && window.document.querySelectorAll("#view .node").length === 2);
+  const before = scrolls();
+
+  // Only x:z changes: a new graph, the same tree, the same step.
+  for (const headline of ["two", "three"]) {
+    live = graph([a, b, node("x:z", { headline })]);
+    v.scheduleRefresh();
+    await until(() => v.S.live === live);
+    await settle();
+  }
+  assert.equal(scrolls(), before, "not scrolled");
+});
+
+test("R35: a step's card is scrolled to once, though its graph comes after it's ringed", async (t) => {
+  const a = node("x:a", { children: ["x:a/b"] });
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore" });
+  const stops = [
+    { ...stopsOf(["e1"])[0], node: "x:a" },
+    { ...stopsOf(["e1", "e2"])[1], node: "x:a/b" },
+    { ...stopsOf(["e1", "e2", "e3"])[2], node: "x:a" },
+  ];
+  let hold = null;
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => {
+        if (at === "e2" && hold) await hold.promise;
+        return { ...graph([a, b]), at: at || null };
+      },
+      timeline: async () => ({ stops }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const doc = window.document;
+  const scrolls = () => window.__scrolls || 0;
+  await until(() => v.S.stops.length === 3);
+  v.goTo(0);
+  await until(() => v.S.shown.at === "e1");
+  assert.equal(scrolls(), 1);
+
+  // To e2, whose graph is slow; meanwhile the tree is drawn again (new
+  // events), ringing e2's card on e1's graph.
+  hold = deferred();
+  v.goTo(1);
+  v.renderAll();
+  assert.equal(doc.querySelector("#view .node.current").dataset.id, "x:a/b");
+  assert.equal(scrolls(), 2, "to e2's card");
+  hold.resolve();
+  await until(() => v.S.shown.at === "e2");
+  assert.equal(scrolls(), 2, "not again when its graph comes");
+});
+
+test("R35: a step's card that wasn't drawn yet is scrolled to when its graph comes", async (t) => {
+  const a = node("x:a", { children: ["x:a/b"] });
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore" });
+  const stops = [
+    { ...stopsOf(["e1"])[0], node: "x:a" },
+    { ...stopsOf(["e1", "e2"])[1], node: "x:a/b" },
+    { ...stopsOf(["e1", "e2", "e3"])[2], node: "x:a" },
+  ];
+  let hold = null;
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => {
+        if (at === "e2" && hold) await hold.promise;
+        // At e1, agent b hasn't started.
+        return { ...graph(at === "e1" ? [node("x:a")] : [a, b]), at: at || null };
+      },
+      timeline: async () => ({ stops }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const doc = window.document;
+  const scrolls = () => window.__scrolls || 0;
+  await until(() => v.S.stops.length === 3);
+  v.goTo(0);
+  await until(() => v.S.shown.at === "e1");
+  assert.equal(scrolls(), 1);
+
+  // To e2 (b starting), whose graph is slow; meanwhile the tree is drawn
+  // again from e1's graph, which has no card for b to ring.
+  hold = deferred();
+  v.goTo(1);
+  v.renderAll();
+  assert.equal(doc.querySelector("#view .node.current"), null);
+  assert.equal(scrolls(), 1);
+  hold.resolve();
+  await until(() => v.S.shown.at === "e2");
+  assert.equal(doc.querySelector("#view .node.current").dataset.id, "x:a/b");
+  assert.equal(scrolls(), 2, "to b's card, once it's there");
+
+  // Live (nothing ringed), then back to the same step: to its card again.
+  v.goLive();
+  v.goTo(1);
+  await until(() => v.S.shown.at === "e2");
+  assert.equal(scrolls(), 3, "to b's card again");
+});
+
+test("R36: an address that isn't a well-formed one names nothing, and the page still works", async (t) => {
+  const { source } = treeSource([node("x:a"), node("x:b")]);
+  const window = loadViewer(t, source, { hash: "#x%3Ab%E0%A4%A" });
+  const v = window.__viewer;
+  const banner = window.document.querySelector("#banner");
+  await until(() => v.S.stops.length === 2 || !banner.hidden);
+  assert.equal(banner.hidden, true, banner.textContent);
+  assert.equal(v.S.root, "x:a", "the newest session");
+
+  // Changed to one in the page: nothing happens.
+  window.location.hash = "#%";
+  await settle();
+  assert.equal(banner.hidden, true, banner.textContent);
+  assert.equal(v.S.root, "x:a");
+  window.location.hash = "#x%3Ab";
+  await until(() => v.S.root === "x:b" && v.S.live.root === "x:b");
+});
+
+test("R37: long unbroken text wraps in cards and panels", async (t) => {
+  const long = (what) => `${what}-${"x".repeat(300)}`;
+  const a = node("x:a", { title: long("title"), cwd: `/${long("folder")}`, headline: long("headline"), children: ["x:a/b"] });
+  const b = node("x:a/b", {
+    parent: "x:a",
+    agent_type: long("type"),
+    purpose: long("purpose"),
+    headline: long("headline"),
+    state: "input_required",
+    attention: long("attention"),
+    messages: [{ direction: "received", peer: "x:a", ts: a.started_at, summary: long("summary"), body: long("body") }],
+  });
+  const window = loadViewer(t, { graph: async () => graph([a, b]) }, { hash: "#x:a" });
+  const doc = window.document;
+  const style = doc.createElement("style");
+  style.textContent = readFileSync(new URL("../../src/view/assets/app.css", import.meta.url), "utf8");
+  doc.head.append(style);
+  await until(() => doc.querySelectorAll("#view .node").length === 2);
+  window.__viewer.selectNode("x:a/b");
+
+  // Whether it may break anywhere: from its own style or (as overflow-wrap
+  // is inherited) the nearest that sets it. jsdom doesn't inherit it itself.
+  const wraps = (el) => {
+    for (let e = el; e; e = e.parentElement) {
+      const value = window.getComputedStyle(e).overflowWrap;
+      if (value && value !== "normal") return value === "anywhere" || value === "break-word";
+    }
+    return false;
+  };
+  const texts = [...doc.querySelectorAll("#view *, #detail *")].filter((el) =>
+    [...el.childNodes].some((k) => k.nodeType === 3 && /x{300}/.test(k.data)),
+  );
+  assert.ok(texts.length >= 10, `${texts.length} texts`);
+  for (const el of texts) {
+    // Cut short with an ellipsis instead is fine too.
+    const cut = (e) => e && (window.getComputedStyle(e).textOverflow === "ellipsis" || cut(e.parentElement));
+    assert.ok(wraps(el) || cut(el), `${el.className || el.tagName}: ${el.textContent.slice(0, 20)}`);
+  }
+});
+
+test("R38: new events leave keyboard focus and selected text where they were", async (t) => {
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore", purpose: "Read the whole codebase" });
+  const tree = (headline) => [node("x:a", { children: ["x:a/b"], headline }), b, node("x:z", { cwd: "/w/z" })];
+  let live = graph(tree("one"));
+  let stops = stopsOf(["e1"]);
+  const window = loadViewer(t, { graph: async () => live, timeline: async () => ({ stops }) }, { hash: "#x:a" });
+  const v = window.__viewer;
+  const doc = window.document;
+  const arrive = async (nodes) => {
+    live = graph(nodes);
+    stops = [...stops, ...stopsOf([`e${stops.length + 1}`])];
+    v.scheduleRefresh();
+    await until(() => v.S.stops.length === stops.length && v.S.live === live);
+  };
+  await until(() => v.S.stops.length === 1);
+  v.selectNode("x:a/b");
+
+  // A card, focused from the keyboard.
+  const card = () => doc.querySelector('#view .node[data-id="x:a/b"]');
+  card().focus();
+  assert.equal(doc.activeElement, card());
+  await arrive(tree("two"));
+  assert.match(doc.querySelector("#view").textContent, /two/, "redrawn");
+  assert.equal(doc.activeElement, card(), "still focused");
+
+  // Text selected in the details.
+  const lead = doc.querySelector("#detail .lead");
+  const range = doc.createRange();
+  range.selectNodeContents(lead);
+  window.getSelection().removeAllRanges();
+  window.getSelection().addRange(range);
+  assert.equal(window.getSelection().toString(), "Read the whole codebase");
+  await arrive(tree("three"));
+  assert.match(doc.querySelector("#view").textContent, /three/, "redrawn");
+  assert.equal(window.getSelection().toString(), "Read the whole codebase", "still selected");
+
+  // A session in the list, focused, while a new one is listed above it: it
+  // stays with the session, and does what it says.
+  const item = (id) => doc.querySelector(`#session-list .session[data-id="${id}"]`);
+  item("x:z").focus();
+  await arrive([node("x:new"), ...tree("four")]);
+  assert.ok(item("x:new"), "listed");
+  assert.equal(doc.activeElement, item("x:z"), "still on x:z");
+  // (x:a's is the one that was x:z's.)
+  item("x:a").click();
+  await settle();
+  assert.equal(v.S.root, "x:a", "x:a's does what x:a's should");
+  doc.activeElement.click();
+  await until(() => v.S.root === "x:z" && v.S.live.root === "x:z");
+});
+
+test("R39: the timeline's hover tip and spoken step show a label as text, cleaned", async (t) => {
+  const label = "Task: <img src=x onerror=alert(1)>‮gnp.exe\u0007⁦ done\u0085";
+  const stops = stopsOf(["e1", "e2", "e3"]).map((s) => ({ ...s, label }));
+  const window = loadViewer(t, { graph: async () => graph([node("x:a")]), timeline: async () => ({ stops }) }, { hash: "#x:a" });
+  const doc = window.document;
+  await until(() => window.__viewer.S.stops.length === 3);
+  const unclean = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/;
+
+  const slider = doc.querySelector("#slider");
+  slider.dispatchEvent(new window.MouseEvent("mousemove", { clientX: 0, bubbles: true }));
+  const tip = doc.querySelector("#hover-tip");
+  assert.equal(tip.hidden, false);
+  assert.equal(tip.querySelector("img"), null, "not markup");
+  assert.match(tip.textContent, /<img src=x onerror=alert\(1\)>/, "shown as text");
+  assert.doesNotMatch(tip.textContent, unclean, JSON.stringify(tip.textContent));
+
+  const spoken = slider.getAttribute("aria-valuetext");
+  assert.match(spoken, /Step 3 of 3: Task: <img/);
+  assert.doesNotMatch(spoken, unclean, JSON.stringify(spoken));
+});
+
+test("R56: a refresh is one request: the graph now, with its tree's timeline", async (t) => {
+  const requests = [];
+  const g = graph([node("x:a"), node("x:b")]);
+  let stops = stopsOf(["e1", "e2"]).map((s) => ({ ...s, node: "x:a" }));
+  const fetch = async (url) => {
+    requests.push(String(url));
+    const u = new URL(String(url), "http://x");
+    const body =
+      u.pathname === "/api/info"
+        ? { now_ms: Date.now(), events_dir: "x" }
+        : u.pathname === "/api/graph"
+          ? { ...asServer(g, u.searchParams.get("root")), ...(u.searchParams.get("until") ? {} : { stops }) }
+          : null;
+    return body
+      ? { ok: true, status: 200, json: async () => body }
+      : { ok: false, status: 404, text: async () => "Not found" };
+  };
+  class EventSource {
+    addEventListener() {}
+  }
+  const window = loadViewer(t, null, { hash: "#x:a", fetch, EventSource });
+  const v = window.__viewer;
+  const banner = window.document.querySelector("#banner");
+  const graphs = () => requests.filter((r) => r.startsWith("/api/graph"));
+  await until(() => v.S.stops.length === 2 || !banner.hidden);
+  assert.equal(banner.hidden, true, banner.textContent);
+  assert.deepEqual(graphs(), ["/api/graph?root=x%3Aa"]);
+  assert.deepEqual(
+    requests.filter((r) => !r.startsWith("/api/graph") && r !== "/api/info"),
+    [],
+    "and nothing else",
+  );
+
+  stops = [...stops, ...stopsOf(["e3"])];
+  v.scheduleRefresh();
+  await until(() => v.S.stops.length === 3);
+  assert.equal(graphs().length, 2);
+  assert.equal(window.document.querySelector("#step-count").textContent, "Step 3 of 3");
+
+  // Another session: one request brings its tree and its timeline.
+  v.selectRoot("x:b");
+  await until(() => v.S.root === "x:b" && v.S.live.root === "x:b" && v.S.stops.length === 3);
+  assert.deepEqual(graphs().slice(2), ["/api/graph?root=x%3Ab"]);
+  assert.equal(banner.hidden, true, banner.textContent);
 });
