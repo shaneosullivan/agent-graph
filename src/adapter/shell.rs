@@ -826,8 +826,26 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
             ' ' | '\t' | '\r' => cur.end_word(),
             '\n' => {
                 cur.end_list(&mut out);
-                for (delimiter, tabs) in heredocs.drain(..) {
+                // In a substitution, a body can also end at a line that's
+                // WORD followed by the `)` (or backtick) that closes it,
+                // which is read on from there.
+                let closer = match cur.opened {
+                    Opened::Substitution => Some(')'),
+                    Opened::Backticks => Some('`'),
+                    _ => None,
+                };
+                'bodies: for (delimiter, tabs) in heredocs.drain(..) {
                     loop {
+                        if let Some(closer) = closer {
+                            let mut ahead = chars.clone();
+                            while tabs && ahead.next_if_eq(&'\t').is_some() {}
+                            if delimiter.chars().all(|d| ahead.next() == Some(d))
+                                && ahead.peek() == Some(&closer)
+                            {
+                                chars = ahead;
+                                break 'bodies;
+                            }
+                        }
                         let line: String = chars.by_ref().take_while(|c| *c != '\n').collect();
                         let line = line.trim_end_matches('\r');
                         let line = if tabs {
@@ -1514,6 +1532,31 @@ mod tests {
             fg("codex")
         );
         assert_eq!(launch("echo case x in; codex exec x"), fg("codex"));
+    }
+
+    /// R60: in a substitution, a heredoc's body can end at its WORD followed
+    /// by the `)` (or backtick) that closes the substitution, as bash reads
+    /// it; the command goes on from there.
+    #[test]
+    fn a_heredoc_can_end_with_its_substitution() {
+        assert_eq!(
+            launch("x=$(cat <<EOF\nhi\nEOF)\nclaude -p \"$x\""),
+            fg("claude")
+        );
+        let commit = "git commit -m \"$(cat <<'EOF'\nFix it\nEOF)\" && codex exec x";
+        assert_eq!(launch(commit), fg("codex"));
+        assert_eq!(launch("y=`cat <<EOF\nhi\nEOF`; claude -p hi"), fg("claude"));
+        assert_eq!(
+            launch("z=\"$(cat <<-EOF\n\tclaude -p hi\n\tEOF)\"; codex exec x"),
+            fg("codex")
+        );
+        // The body up to there is still text...
+        assert_eq!(launch("x=$(cat <<EOF\nclaude -p hi\nEOF)"), None);
+        // ...and only its own closer ends it there: not outside a
+        // substitution, nor with anything else after WORD.
+        assert_eq!(launch("cat <<EOF\nEOF)\nclaude -p hi\nEOF"), None);
+        assert_eq!(launch("x=$(cat <<EOF\nEOF;\nclaude -p hi\nEOF\n)"), None);
+        assert_eq!(launch("x=`cat <<EOF\nEOF)\nclaude -p hi\nEOF\n`"), None);
     }
 
     #[test]
