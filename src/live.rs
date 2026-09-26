@@ -371,11 +371,20 @@ mod signals {
         CAUGHT.store(sig, Ordering::SeqCst);
     }
 
+    /// Each is caught once: `tail` may be stuck writing to a terminal nobody
+    /// reads (a suspended ssh client), and then the next one stops it as it
+    /// would have without this.
     pub fn catch() {
         for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
             if !ignored(sig) {
                 // SAFETY: the handler only stores to an atomic.
-                unsafe { libc::signal(sig, note as *const () as libc::sighandler_t) };
+                unsafe {
+                    let mut action: libc::sigaction = std::mem::zeroed();
+                    action.sa_sigaction = note as *const () as libc::sighandler_t;
+                    action.sa_flags = libc::SA_RESTART | libc::SA_RESETHAND;
+                    libc::sigemptyset(&mut action.sa_mask);
+                    libc::sigaction(sig, &action, std::ptr::null_mut());
+                }
             }
         }
     }
@@ -398,11 +407,36 @@ mod signals {
 
     /// Whether `sig` is set to be ignored.
     fn ignored(sig: libc::c_int) -> bool {
+        handler(sig) == Some(libc::SIG_IGN)
+    }
+
+    /// What `sig` is set to do.
+    fn handler(sig: libc::c_int) -> Option<libc::sighandler_t> {
         // SAFETY: a null new action only reads the current one into `old`.
         unsafe {
             let mut old: libc::sigaction = std::mem::zeroed();
-            libc::sigaction(sig, std::ptr::null(), &mut old) == 0
-                && old.sa_sigaction == libc::SIG_IGN
+            (libc::sigaction(sig, std::ptr::null(), &mut old) == 0).then_some(old.sa_sigaction)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// R48: the first signal asks `tail` to stop; if it's stuck (writing
+        /// to a terminal nobody reads, say), the next one stops it.
+        #[test]
+        fn a_second_signal_is_the_default() {
+            catch();
+            assert_eq!(handler(libc::SIGHUP), Some(note as *const () as usize));
+            // SAFETY: the handler only stores to an atomic.
+            unsafe { libc::raise(libc::SIGHUP) };
+            assert!(caught());
+            assert_eq!(handler(libc::SIGHUP), Some(libc::SIG_DFL));
+            for sig in [libc::SIGINT, libc::SIGTERM] {
+                // SAFETY: puts back the default, as it was.
+                unsafe { libc::signal(sig, libc::SIG_DFL) };
+            }
         }
     }
 }
