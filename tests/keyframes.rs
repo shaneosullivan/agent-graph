@@ -78,7 +78,7 @@ fn log() -> Vec<Envelope> {
         // Linked by its process (`processes`).
         ev(70_000, UNDER, "session.started", json!({"process": "78@1", "ancestors": ["77@1"]})),
         // Paired by a guess, put right (`requesters`), and waited on until
-        // it ends (`waiting_on`).
+        // it ends (the waits on each node).
         ev(80_000, SESSION, "spawn.requested", json!({"call_id": "r1", "kind": "session", "agent_type": "claude"})),
         ev(80_100, SESSION, "spawn.requested", json!({"call_id": "r2", "kind": "session", "agent_type": "claude"})),
         with_parent(ev(80_500, GUESSED, "session.started", json!({"link_method": "env"})), SESSION),
@@ -95,8 +95,21 @@ fn log() -> Vec<Envelope> {
     // millisecond (`unpaired_runs`), once the calls before have returned.
     events.push(ev(99_000, SESSION, "status", json!({"state": "idle"})));
     let mut early = [
-        with_parent(ev(100_000, EARLY, "session.started", json!({"link_method": "env"})), SESSION),
-        ev(100_000, SESSION, "spawn.requested", json!({"call_id": "e1", "kind": "session", "agent_type": "claude"})),
+        with_parent(
+            ev(
+                100_000,
+                EARLY,
+                "session.started",
+                json!({"link_method": "env"}),
+            ),
+            SESSION,
+        ),
+        ev(
+            100_000,
+            SESSION,
+            "spawn.requested",
+            json!({"call_id": "e1", "kind": "session", "agent_type": "claude"}),
+        ),
     ];
     for (i, e) in early.iter_mut().enumerate() {
         e.id = format!("{}{i:016}", &e.id[..10]);
@@ -271,15 +284,21 @@ fn a_keyframe_that_couldnt_be_is_refused() {
         state[index]["somewhere"] = value;
         state
     };
+    // A child under a node that isn't its parent.
+    let mut adopted = state.clone();
+    adopted["nodes"][SESSION]["children"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(QUICK));
     let mut runs = state.clone();
     runs["unpaired_runs"][2] = json!(["x:nobody"]);
     for bad in [
         with(&moved, 0, 1),
         with(&twice, 0, 1),
+        with(&adopted, 0, 1),
         with(&runs, 0, 1),
         with(&missing("processes", json!("x:nobody")), 0, 1),
         with(&missing("requesters", json!(["x:nobody"])), 0, 1),
-        with(&missing("waiting_on", json!(["x:nobody"])), 0, 1),
         with(&json!({"nodes": 5}), 0, 1),
         with(&json!("not a state"), 0, 1),
         with(&state, 0, 2),

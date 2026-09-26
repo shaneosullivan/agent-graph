@@ -281,8 +281,8 @@ fn cpu_time() -> f64 {
 
 /// R22: reducing grows in step with the number of sessions, not with its
 /// square: an agent's or a session's start and finish look only at its own
-/// session (and the waits on it), not at every node. (Within one session,
-/// they still look at its nodes and waits: see R53.)
+/// session (and the waits on it), not at every node. (Nor, since R53, at
+/// every node of its session: see below.)
 #[test]
 fn reducing_grows_in_step_with_the_history() {
     let (small, large) = (100, 1600);
@@ -337,6 +337,111 @@ fn reducing_grows_in_step_with_the_history() {
             assert_eq!(child.parent.as_deref(), Some(session.id.as_str()));
         }
     }
+}
+
+/// One session's `turns` turns: in each, it starts four agents, which it
+/// waits on (each guessed as its own, then named when it returns), and a
+/// session from its shell; then it goes idle, and is prompted again.
+fn busy_session(turns: usize) -> Vec<Envelope> {
+    let s = "x:s";
+    let mut events = vec![ev(0, s, "session.started", json!({}))];
+    for t in 0..turns {
+        let at = 1 + 10 * t as u64;
+        events.push(ev(at, s, "status", json!({"state": "working"})));
+        for a in 0..4 {
+            let agent = format!("{s}/a{t}-{a}");
+            let call = format!("c{t}-{a}");
+            events.extend([
+                ev(
+                    at,
+                    s,
+                    "spawn.requested",
+                    json!({"call_id": call, "kind": "agent"}),
+                ),
+                ev(
+                    at,
+                    s,
+                    "wait.started",
+                    json!({"wait_id": format!("w{t}-{a}"), "on": agent}),
+                ),
+                ev(at + 1, &agent, "agent.spawned", json!({})),
+                ev(
+                    at + 2,
+                    &agent,
+                    "agent.finished",
+                    json!({"status": "completed"}),
+                ),
+                ev(
+                    at + 3,
+                    s,
+                    "spawn.returned",
+                    json!({"call_id": call, "child": agent}),
+                ),
+            ]);
+        }
+        let child = format!("x:c{t}");
+        let call = format!("k{t}");
+        events.extend([
+            ev(
+                at,
+                s,
+                "spawn.requested",
+                json!({"call_id": call, "kind": "session"}),
+            ),
+            under(ev(at + 1, &child, "session.started", json!({})), s),
+            ev(at + 2, &child, "session.ended", json!({})),
+            ev(at + 3, s, "spawn.returned", json!({"call_id": call})),
+            ev(at + 4, s, "status", json!({"state": "idle"})),
+        ]);
+    }
+    events
+}
+
+/// R53: within one session, reducing grows in step with its agents (and
+/// the sessions it starts), not with their square: an agent's start finds
+/// the session's unpaired requests directly, a finish the waits on it, and
+/// a turn's end its calls still open.
+#[test]
+fn reducing_grows_in_step_with_a_sessions_agents() {
+    let (small, large) = (64, 1024);
+    let histories = [busy_session(small), busy_session(large)];
+    let mut best = [f64::MAX; 2];
+    for _ in 0..3 {
+        for (i, events) in histories.iter().enumerate() {
+            let events = events.clone();
+            let start = cpu_time();
+            let graph = reduce_at(events, 0);
+            best[i] = best[i].min(cpu_time() - start);
+            assert_eq!(graph.nodes.len(), 1 + [small, large][i] * 5);
+        }
+    }
+    let ratio = best[1] / best[0];
+    // 16 times the agents: about 16× as long in step with them, 256× with their square.
+    assert!(
+        ratio < 48.0,
+        "16× the agents took {ratio:.1}× as long ({:.3}, then {:.3})",
+        best[0],
+        best[1]
+    );
+
+    // And it's still right: every child is paired with its own request, and
+    // every wait closed.
+    let graph = reduce_at(busy_session(50), 0);
+    let s = &graph.nodes["x:s"];
+    assert!(s.waits.iter().all(|w| !w.open), "{:?}", s.waits);
+    for spawn in &s.spawns {
+        let child = spawn.child.as_deref().expect("paired");
+        let own = match spawn.call_id.strip_prefix('k') {
+            Some(t) => format!("x:c{t}"),
+            None => format!("x:s/a{}", &spawn.call_id[1..]),
+        };
+        assert_eq!(child, own);
+        assert_eq!(
+            graph.nodes[child].spawned_by.as_deref(),
+            Some(spawn.call_id.as_str())
+        );
+    }
+    assert_eq!(s.spawns.len(), 250);
 }
 
 fn under(mut e: Envelope, parent: &str) -> Envelope {
@@ -701,7 +806,10 @@ fn a_session_request_is_paired_with_any_run_it_starts() {
     let children = |events: Vec<Envelope>| {
         let graph = reduce_at(events, 100_000);
         let p = &graph.nodes["x:p"];
-        let spawns = p.spawns.iter().map(|s| (s.call_id.clone(), s.child.clone()));
+        let spawns = p
+            .spawns
+            .iter()
+            .map(|s| (s.call_id.clone(), s.child.clone()));
         let waits = p.waits.iter().map(|w| (w.wait_id.clone(), w.on.clone()));
         let c = &graph.nodes["claude-code:c"];
         (
