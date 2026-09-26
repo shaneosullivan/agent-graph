@@ -21,6 +21,13 @@ const INDENT: f32 = 22.0;
 const FONT: &str = "Inter, -apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, \
                     'Noto Sans', 'DejaVu Sans', 'Liberation Sans', sans-serif";
 const MAX_TASKS: usize = 12;
+/// Agents drawn per session, so a huge one still makes a picture that
+/// renders and fits on a phone; the rest are counted.
+const MAX_AGENTS: usize = 30;
+const MAX_CALLOUTS: usize = 3;
+/// Levels of the tree that are indented; deeper ones line up under the
+/// last, so cards keep room for their text.
+const MAX_DEPTH: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
@@ -212,7 +219,12 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
             .to_string(),
         NodeKind::Agent => name(root),
     };
-    let title = fit(&title, WIDTH - 2.0 * PAD - 110.0, 20.0, true);
+    let title = fit(
+        &title,
+        WIDTH - 2.0 * PAD - 10.0 - pill_width(root.state, root.stale),
+        20.0,
+        true,
+    );
     c.text(PAD, y + 20.0, 20.0, 700, p.text, "start", &title);
     let pill_x = PAD + text_width(&title, 20.0, true) + 10.0;
     c.pill(pill_x, y + 5.0, root.state, root.stale, p);
@@ -241,7 +253,11 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
     y += 26.0;
 
     // Anything that needs the user, first.
-    for node in nodes.iter().filter(|n| n.state == State::InputRequired) {
+    let waiting: Vec<&&Node> = nodes
+        .iter()
+        .filter(|n| n.state == State::InputRequired)
+        .collect();
+    for node in waiting.iter().take(MAX_CALLOUTS) {
         let who = if node.kind == NodeKind::Session {
             crate::render::card_name(node)
         } else {
@@ -268,9 +284,35 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
         }
         y += h + 10.0;
     }
+    if waiting.len() > MAX_CALLOUTS {
+        c.text(
+            PAD + 14.0,
+            y + 12.0,
+            12.0,
+            600,
+            p.input,
+            "start",
+            &format!("+{} more need you", waiting.len() - MAX_CALLOUTS),
+        );
+        y += 24.0;
+    }
 
-    // The tree.
-    y = card_tree(c, graph, root, PAD, y, p);
+    // The tree, up to `MAX_AGENTS` of it.
+    let mut drawn = BTreeSet::new();
+    y = card_tree(c, graph, root, 0, y, p, &mut drawn);
+    let hidden = nodes.len() - drawn.len();
+    if hidden > 0 {
+        c.text(
+            PAD + 22.0,
+            y + 8.0,
+            12.0,
+            400,
+            p.faint,
+            "start",
+            &format!("+{hidden} more agent{}", if hidden == 1 { "" } else { "s" }),
+        );
+        y += 18.0;
+    }
 
     // The session's own tasks.
     if !root.tasks.is_empty() {
@@ -321,42 +363,48 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
     y
 }
 
-/// Draws `node`'s card at (x, y) and its children below, indented and joined
-/// by connector lines. Returns the next free y.
-fn card_tree(c: &mut Canvas, graph: &Graph, node: &Node, x: f32, y: f32, p: &Palette) -> f32 {
-    card_tree_from(c, graph, node, x, y, p, &mut BTreeSet::new())
-}
-
-/// `card_tree`, skipping nodes already drawn (the reducer never makes a
-/// cycle, but a drawing must end whatever it's given).
-fn card_tree_from<'a>(
+/// Draws `node`'s card at `depth` in the tree, from `y` down, and its
+/// children below, indented and joined by connector lines. Nodes already in
+/// `drawn` are skipped (the reducer never makes a cycle, but a drawing must
+/// end whatever it's given), and none past `MAX_AGENTS`. Returns the next
+/// free y.
+fn card_tree<'a>(
     c: &mut Canvas,
     graph: &'a Graph,
     node: &'a Node,
-    x: f32,
+    depth: usize,
     y: f32,
     p: &Palette,
     drawn: &mut BTreeSet<&'a str>,
 ) -> f32 {
     drawn.insert(&node.id);
+    let x = PAD + depth.min(MAX_DEPTH) as f32 * INDENT;
     let height = card(c, graph, node, x, y, p);
     let mut next = y + height + 8.0;
     let spine = x + 11.0;
     for child in node.children.iter().filter_map(|id| graph.nodes.get(id)) {
+        if drawn.len() > MAX_AGENTS {
+            break;
+        }
         if drawn.contains(child.id.as_str()) {
             continue;
         }
         let child_y = next;
-        c.path(
-            &format!(
-                "M{spine} {} V{} H{}",
-                y + height,
-                child_y + 20.0,
-                x + INDENT
-            ),
-            p.line,
-        );
-        next = card_tree_from(c, graph, child, x + INDENT, child_y, p, drawn);
+        if depth < MAX_DEPTH {
+            c.path(
+                &format!(
+                    "M{spine} {} V{} H{}",
+                    y + height,
+                    child_y + 20.0,
+                    x + INDENT
+                ),
+                p.line,
+            );
+        } else {
+            // Not indented: the line runs straight down into the child.
+            c.path(&format!("M{spine} {} V{child_y}", y + height), p.line);
+        }
+        next = card_tree(c, graph, child, depth + 1, child_y, p, drawn);
     }
     next
 }
@@ -366,7 +414,22 @@ fn card(c: &mut Canvas, graph: &Graph, n: &Node, x: f32, y: f32, p: &Palette) ->
     let w = WIDTH - PAD - x;
     let inner = w - 28.0 - 12.0;
     let done = matches!(n.state, State::Completed | State::Canceled);
-    let progress_w = if n.tasks.is_empty() { 0.0 } else { 64.0 };
+    // On the name's line, right-aligned: how many tasks are done (with a
+    // bar), and whether it runs in the background.
+    let progress = (!n.tasks.is_empty()).then(|| {
+        let total = n.tasks.len();
+        (total - n.open_tasks, total)
+    });
+    let count = progress.map(|(finished, total)| format!("{finished}/{total}"));
+    let progress_w = count.as_deref().map_or(0.0, |count| {
+        text_width(count, 12.0, false) + 6.0 + 44.0 + 8.0
+    });
+    let background = n.background == Some(true);
+    let background_w = if background {
+        text_width("background", 11.0, false) + 8.0
+    } else {
+        0.0
+    };
 
     // Lay out the text first so we know the height.
     let name = if n.kind == NodeKind::Session {
@@ -374,7 +437,12 @@ fn card(c: &mut Canvas, graph: &Graph, n: &Node, x: f32, y: f32, p: &Palette) ->
     } else {
         name(n)
     };
-    let name = fit(&name, inner - progress_w - 90.0, 14.0, true);
+    let name = fit(
+        &name,
+        inner - progress_w - background_w - 8.0 - pill_width(n.state, n.stale),
+        14.0,
+        true,
+    );
     let mut body: Vec<(String, f32, u16, &str)> = Vec::new(); // text, size, weight, colour
     // Why it was started: for agents, and sessions another started.
     if n.kind == NodeKind::Agent || n.parent.is_some() {
@@ -434,7 +502,7 @@ fn card(c: &mut Canvas, graph: &Graph, n: &Node, x: f32, y: f32, p: &Palette) ->
         n.stale,
         p,
     );
-    if n.background == Some(true) {
+    if background {
         // Marked so it's clear the parent isn't waiting for it.
         c.text(
             x + w - 12.0 - progress_w,
@@ -446,19 +514,9 @@ fn card(c: &mut Canvas, graph: &Graph, n: &Node, x: f32, y: f32, p: &Palette) ->
             "background",
         );
     }
-    if !n.tasks.is_empty() {
-        let total = n.tasks.len();
-        let finished = total - n.open_tasks;
+    if let (Some((finished, total)), Some(count)) = (progress, &count) {
         let bx = x + w - 12.0 - 44.0;
-        c.text(
-            bx - 6.0,
-            y + 25.0,
-            12.0,
-            500,
-            p.muted,
-            "end",
-            &format!("{finished}/{total}"),
-        );
+        c.text(bx - 6.0, y + 25.0, 12.0, 500, p.muted, "end", count);
         c.rect(bx, y + 18.0, 44.0, 5.0, 2.5, p.line, None);
         if finished > 0 {
             c.rect(
@@ -524,6 +582,16 @@ fn state_color(state: State, p: &Palette) -> &str {
         State::Completed => p.completed,
         State::Failed => p.failed,
         State::Canceled => p.faint,
+    }
+}
+
+/// How wide `Canvas::pill` draws, so text beside it can leave room.
+fn pill_width(state: State, stale: bool) -> f32 {
+    let w = text_width(state_label(state), 11.0, true) + 16.0;
+    if stale {
+        w + 8.0 + text_width("stale?", 11.5, true)
+    } else {
+        w
     }
 }
 
@@ -728,12 +796,12 @@ impl Canvas {
         );
     }
 
-    /// Draws the state pill (plus a "stale?" flag when `stale`) and returns
-    /// how wide it all is.
-    fn pill(&mut self, x: f32, y: f32, state: State, stale: bool, p: &Palette) -> f32 {
+    /// Draws the state pill, plus a "stale?" flag when `stale`: `pill_width`
+    /// in all.
+    fn pill(&mut self, x: f32, y: f32, state: State, stale: bool, p: &Palette) {
         let label = state_label(state);
         let color = state_color(state, p);
-        let w = text_width(label, 11.0, true) + 16.0;
+        let w = pill_width(state, false);
         if stale {
             self.text(
                 x + w + 8.0,
@@ -750,11 +818,6 @@ impl Canvas {
             "<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"19\" rx=\"9.5\" fill=\"{color}\" fill-opacity=\"0.14\"/>"
         );
         self.text(x + w / 2.0, y + 13.5, 11.0, 650, color, "middle", label);
-        if stale {
-            w + 8.0 + text_width("stale?", 11.5, true)
-        } else {
-            w
-        }
     }
 
     fn task_icon(&mut self, cx: f32, cy: f32, status: TaskStatus, p: &Palette) {
@@ -863,6 +926,151 @@ mod tests {
             "stale": false,
         }))
         .unwrap()
+    }
+
+    /// A graph of `nodes`, each the child of its `parent`.
+    fn graph_of(nodes: Vec<Node>) -> Graph {
+        let mut g = Graph {
+            nodes: Default::default(),
+            roots: vec![],
+            late: Default::default(),
+        };
+        for n in nodes {
+            match &n.parent {
+                Some(parent) => g.nodes.get_mut(parent).unwrap().children.push(n.id.clone()),
+                None => g.roots.push(n.id.clone()),
+            }
+            g.nodes.insert(n.id.clone(), n);
+        }
+        g
+    }
+
+    /// Checks the drawing of `g` (as far as estimated text widths can tell):
+    /// no two pieces of text overlap, all of it is inside the margins, every
+    /// shape has a positive size, and it renders.
+    fn assert_laid_out(g: &Graph) -> String {
+        let svg = svg(g, &g.roots, &test_options());
+        let attr = |tag: &str, name: &str| -> Option<f32> {
+            let tag = format!(" {tag}");
+            let at = tag.find(&format!(" {name}=\""))? + name.len() + 3;
+            tag[at..].split('"').next()?.parse().ok()
+        };
+        for part in svg.split("<rect ").skip(1) {
+            let tag = part.split_once('>').unwrap().0;
+            for dim in ["width", "height"] {
+                if let Some(v) = attr(tag, dim) {
+                    assert!(v > 0.0, "a rect has {dim} {v}: {tag}");
+                }
+            }
+        }
+        let mut boxes: Vec<(f32, f32, f32, f32, String)> = Vec::new();
+        for part in svg.split("<text ").skip(1) {
+            let (tag, rest) = part.split_once('>').unwrap();
+            let content = rest.split("</text>").next().unwrap();
+            let content = content
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&amp;", "&");
+            let (x, y, size) = (
+                attr(tag, "x").unwrap(),
+                attr(tag, "y").unwrap(),
+                attr(tag, "font-size").unwrap(),
+            );
+            let w = text_width(&content, size, attr(tag, "font-weight").unwrap() >= 600.0);
+            let left = if tag.contains("text-anchor=\"end\"") {
+                x - w
+            } else if tag.contains("text-anchor=\"middle\"") {
+                x - w / 2.0
+            } else {
+                x
+            };
+            boxes.push((left, left + w, y - size, y, content));
+        }
+        for (i, a) in boxes.iter().enumerate() {
+            assert!(
+                a.0 >= PAD - 0.01 && a.1 <= WIDTH - PAD + 0.01,
+                "{:?} is outside the margins ({}..{})",
+                a.4,
+                a.0,
+                a.1
+            );
+            for b in &boxes[i + 1..] {
+                let apart = a.1 <= b.0 || b.1 <= a.0 || a.3 <= b.2 || b.3 <= a.2;
+                assert!(apart, "{:?} overlaps {:?}", a.4, b.4);
+            }
+        }
+        png(&svg).expect("renders");
+        svg
+    }
+
+    fn agent(id: &str, parent: &str) -> Node {
+        let mut n = node(id, NodeKind::Agent, Some(parent));
+        n.agent_type = Some("general-purpose".into());
+        n
+    }
+
+    /// R40: the "stale?" flag used to be drawn after the state pill without
+    /// room kept for it, over a card's "background" and progress, and past
+    /// the header's right margin.
+    #[test]
+    fn the_stale_flag_has_room() {
+        let mut root = node("p:s", NodeKind::Session, None);
+        root.title = Some("W".repeat(80));
+        root.state = State::InputRequired;
+        root.stale = true;
+        let mut child = agent("p:s/a", "p:s");
+        child.agent_type = Some("M".repeat(80));
+        child.state = State::InputRequired;
+        child.stale = true;
+        child.background = Some(true);
+        child.tasks = (0..10)
+            .map(|i| crate::reducer::Task {
+                id: i.to_string(),
+                text: "t".into(),
+                active_text: None,
+                status: TaskStatus::Pending,
+            })
+            .collect();
+        child.open_tasks = 10;
+        assert_laid_out(&graph_of(vec![root, child]));
+    }
+
+    /// R40: each level of the tree is indented, so a deep enough one used to
+    /// give cards negative widths.
+    #[test]
+    fn a_deep_tree_stays_inside_the_picture() {
+        let mut nodes = vec![node("p:s", NodeKind::Session, None)];
+        for i in 0..30 {
+            let parent = nodes.last().unwrap().id.clone();
+            let mut n = agent(&format!("p:s/{i:08}"), &parent);
+            n.stale = true;
+            nodes.push(n);
+        }
+        let svg = assert_laid_out(&graph_of(nodes));
+        assert!(svg.contains(">general-purpose 00000029<"), "all are drawn");
+    }
+
+    /// R40: a session with thousands of agents drew them all, making a
+    /// picture too tall to render or share. It draws the first few and
+    /// counts the rest.
+    #[test]
+    fn a_huge_session_draws_some_agents_and_counts_the_rest() {
+        let mut nodes = vec![node("p:s", NodeKind::Session, None)];
+        for i in 0..5000 {
+            let mut n = agent(&format!("p:s/{i:08}"), "p:s");
+            n.state = State::InputRequired;
+            nodes.push(n);
+        }
+        let g = graph_of(nodes);
+        let svg = svg(&g, &g.roots, &test_options());
+        assert!(svg.len() < 200_000, "{} bytes", svg.len());
+        let drawn = svg.matches(">general-purpose 0").count();
+        assert!(drawn > 0 && drawn < 100, "{drawn} drawn");
+        assert!(svg.contains(">+4970 more agents<"), "the rest are counted");
+        assert!(svg.contains("more need you<"), "so are their callouts");
+        assert_laid_out(&g);
     }
 
     #[test]

@@ -233,7 +233,7 @@
       "summary": "Save a picture of a session, sized for a phone, and print its path",
       "description": [
         { "text": "Save a picture of a session and print where it went." },
-        { "text": "The picture is sized for a phone (1080 pixels wide). From the top: the session's name and state, a callout for anything that needs you, its agents as a tree (stuck ones flagged), and its task list. It's made for sharing: an agent can run this and send you the image, which is what the /agent-graph command does." },
+        { "text": "The picture is sized for a phone (1080 pixels wide). From the top: the session's name and state, a callout for anything that needs you, its agents as a tree (stuck ones flagged), and its task list. A big session shows its first 30 agents and counts the rest. It's made for sharing: an agent can run this and send you the image, which is what the /agent-graph command does." },
         { "heading": "Which session it draws" },
         {
           "table": [
