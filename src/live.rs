@@ -427,16 +427,39 @@ mod signals {
         /// to a terminal nobody reads, say), the next one stops it.
         #[test]
         fn a_second_signal_is_the_default() {
+            /// What the signals were set to before, put back however the
+            /// test ends (the tests may have been started with some ignored).
+            struct Restore(Vec<(libc::c_int, libc::sigaction)>);
+            impl Drop for Restore {
+                fn drop(&mut self) {
+                    for (sig, old) in &self.0 {
+                        // SAFETY: sets back an action sigaction gave us.
+                        unsafe { libc::sigaction(*sig, old, std::ptr::null_mut()) };
+                    }
+                }
+            }
+            let _restore = Restore(
+                [libc::SIGINT, libc::SIGTERM, libc::SIGHUP]
+                    .into_iter()
+                    .map(|sig| {
+                        // SAFETY: a null new action only reads the current one.
+                        unsafe {
+                            let mut old: libc::sigaction = std::mem::zeroed();
+                            libc::sigaction(sig, std::ptr::null(), &mut old);
+                            (sig, old)
+                        }
+                    })
+                    .collect(),
+            );
+            // SAFETY: the default, so it's caught even under `nohup`.
+            unsafe { libc::signal(libc::SIGHUP, libc::SIG_DFL) };
+
             catch();
             assert_eq!(handler(libc::SIGHUP), Some(note as *const () as usize));
             // SAFETY: the handler only stores to an atomic.
             unsafe { libc::raise(libc::SIGHUP) };
             assert!(caught());
             assert_eq!(handler(libc::SIGHUP), Some(libc::SIG_DFL));
-            for sig in [libc::SIGINT, libc::SIGTERM] {
-                // SAFETY: puts back the default, as it was.
-                unsafe { libc::signal(sig, libc::SIG_DFL) };
-            }
         }
     }
 }
