@@ -44,7 +44,7 @@ export function loadViewer(t, source, { hash = "", path = "", fetch, EventSource
       ...(source.graph ? { graph: async (until, root) => asServer(await source.graph(until, root), root) } : {}),
     };
   window.eval(
-    `${app}\nwindow.__viewer = { S, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll };`,
+    `${app}\nwindow.__viewer = { S, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, CACHED_STEPS };`,
   );
   return window;
 }
