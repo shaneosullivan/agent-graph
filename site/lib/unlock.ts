@@ -50,7 +50,8 @@ export async function unlock(req: Request, id: string, deps: UnlockDeps = defaul
   if (text === null) return new Response("Too long.", { status: 413 });
   let password = "";
   try {
-    const body = JSON.parse(text) as { password?: unknown };
+    // (Without a byte-order mark, which bodyText keeps and req.json() dropped.)
+    const body = JSON.parse(text.replace(/^\uFEFF/, "")) as { password?: unknown };
     if (typeof body.password === "string") password = body.password;
   } catch {
     return new Response('Expected JSON: { "password": "…" }.', { status: 400 });

@@ -205,3 +205,16 @@ test("an unlock body is read only as far as its limit", async () => {
   assert.ok(big.pulled() <= 1024 * 1024, `${big.pulled()} bytes read`);
   assert.deepEqual(calls, []);
 });
+
+// R45: as req.json() did, a byte-order mark before the JSON is ignored
+// (Windows tools write UTF-8 with one).
+test("an unlock body may start with a byte-order mark", async () => {
+  const { deps, calls } = fakes();
+  const req = new Request(`https://site.test/api/logs/${ID}/unlock`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: `\uFEFF${JSON.stringify({ password: "right" })}`,
+  });
+  assert.equal((await unlock(req, ID, deps)).status, 204);
+  assert.deepEqual(calls, ["take", "check", "give back"]);
+});
