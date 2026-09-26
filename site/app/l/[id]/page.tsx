@@ -19,8 +19,9 @@ export const metadata: Metadata = {
 
 /**
  * A shared log. The page is the same viewer `agent-graph view` serves
- * (public/viewer/app.js), fed by site-source.js, which fetches the log and
- * computes graphs in the browser with the reducer compiled to WebAssembly.
+ * (public/viewer/app.js), fed by site-source.js, whose worker
+ * (site-worker.js) fetches the log and computes graphs in the browser with
+ * the reducer compiled to WebAssembly.
  */
 export default async function LogPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

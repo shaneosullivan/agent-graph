@@ -112,6 +112,9 @@ h1, h2, h3 { margin: 0; }
   display: grid;
   grid-template-columns: 290px minmax(0, 1fr) 360px;
   min-height: 0;
+  /* Model-written text with nowhere to break (a path, a URL, a hash) wraps
+     anywhere rather than widening the card or panel it's in. */
+  overflow-wrap: anywhere;
 }
 .layout > * { min-height: 0; overflow: auto; }
 
