@@ -206,6 +206,33 @@ fn a_big_keyframe_is_split_and_merged() {
     assert_eq!(shown(from), whole);
 }
 
+/// R43: moving a node with no children skips looking for a cycle, which
+/// is only safe if a node's parent lists it. A keyframe whose parent
+/// doesn't is refused, so a later event can't make a cycle, leaving no
+/// roots and both nodes out of sight.
+#[test]
+fn a_keyframe_whose_parent_doesnt_list_its_child_cant_make_a_cycle() {
+    let events = vec![
+        ev(0, "x:a", "session.started", json!({})),
+        with_parent(ev(1, "x:b", "session.started", json!({})), "x:a"),
+    ];
+    let base =
+        reducer::merge_keyframe(&reducer::keyframe(None, &events, KEYFRAME_PART).unwrap()).unwrap();
+    let text = base.data["text"].as_str().unwrap();
+    let mut state: Value = serde_json::from_slice(&reducer::unpack_state(text).unwrap()).unwrap();
+    assert_eq!(state["nodes"]["x:b"]["parent"], "x:a");
+    state["nodes"]["x:a"]["children"] = json!([]);
+    let mut crafted = base.clone();
+    crafted.data =
+        json!({"part": 0, "parts": 1, "text": reducer::pack_state(state.to_string().as_bytes())});
+    let after = vec![with_parent(
+        ev(2, "x:a", "status", json!({"state": "working"})),
+        "x:b",
+    )];
+    let graph = reducer::reduce_from(Some(&crafted), after, &opts());
+    assert!(!graph.roots.is_empty(), "{:?}", graph.nodes.keys());
+}
+
 /// A keyframe written before R41, R53 and R54 changed what the reducer
 /// keeps (it has `waiting_on`, now made from the nodes, and neither
 /// `unpaired_runs` nor who made each child's request) still loads: a log
@@ -322,12 +349,23 @@ fn a_keyframe_that_couldnt_be_is_refused() {
         .as_array_mut()
         .unwrap()
         .push(json!(QUICK));
+    // A child its parent doesn't list, or whose parent isn't there.
+    let mut disowned = state.clone();
+    assert_eq!(disowned["nodes"][CHILD]["parent"], SESSION);
+    disowned["nodes"][SESSION]["children"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|c| c != CHILD);
+    let mut orphaned = state.clone();
+    orphaned["nodes"][QUICK]["parent"] = json!("x:nobody");
     let mut runs = state.clone();
     runs["unpaired_runs"][2] = json!(["x:nobody"]);
     for bad in [
         with(&moved, 0, 1),
         with(&twice, 0, 1),
         with(&adopted, 0, 1),
+        with(&disowned, 0, 1),
+        with(&orphaned, 0, 1),
         with(&runs, 0, 1),
         with(&missing("processes", json!("x:nobody")), 0, 1),
         with(&missing("requesters", json!(["x:nobody"])), 0, 1),
