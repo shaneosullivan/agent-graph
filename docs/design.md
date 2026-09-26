@@ -108,7 +108,7 @@ Many sessions write at the same time. If they all rewrite one `state.json`, two 
 | `tasks.updated` | `items: [{id, text, active_text?, status}]` | A todo tool sent its full list. Replaces the node's list |
 | `task.upserted` | `id`, `text?`, `active_text?`, `status?` | An incremental task tool created or changed one task |
 | `task.deleted` | `id` | A task was removed |
-| `spawn.requested` | `call_id`, `kind` (agent/session), `agent_type?`, `purpose?`, `background` | A node asked for a child to start. Unless `background`, the node is blocked until the matching `spawn.returned`, or until it goes idle or ends (§4) |
+| `spawn.requested` | `call_id`, `kind` (agent/session), `agent_type?`, `purpose?`, `background`, `run?` (through `agent-graph run`) | A node asked for a child to start. Unless `background`, the node is blocked until the matching `spawn.returned`, or until it goes idle or ends (§4) |
 | `spawn.returned` | `call_id`, `child?`, `outcome?` | The spawning call returned. `child`, when the provider reports it, is authoritative |
 | `wait.started` | `wait_id`, `on` (node id), `reason?` | A node blocks on another node for some other reason |
 | `wait.ended` | `wait_id`, `outcome?` | That block clears |
@@ -256,7 +256,7 @@ The adapter turns that into:
 | `PostToolUse` on `TaskCreate` / `TaskUpdate` | `task.upserted` (the new id comes from `tool_response.task.id`), or `task.deleted` |
 | `PostToolUse` on `TodoWrite` | `tasks.updated` with the full list |
 | `PostToolUse` on `SendMessage` | `message.sent` with `to`, `summary` and `msg_id`. The body only with body capture on |
-| `PreToolUse` on `Bash`, when the command starts another agent | `spawn.requested` with `kind: session`, the program as `agent_type`, the call's `description` as the purpose, and `background` for `&` (unless a `wait` follows) or `run_in_background` |
+| `PreToolUse` on `Bash`, when the command starts another agent | `spawn.requested` with `kind: session`, the program as `agent_type`, the call's `description` as the purpose, `background` for `&` (unless a `wait` follows) or `run_in_background`, and `run` for `agent-graph run` |
 | `PostToolUse` on `Bash`, for the same command | `spawn.returned`, without a `child`: the reducer pairs it (below) |
 | `PreToolUse`/`PostToolUse` on any other `Bash` command | Nothing |
 | `Notification`: `permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog` | `status: input_required`, with the notification's message |
@@ -275,7 +275,7 @@ Claude Code migrated from `TodoWrite` to `TaskCreate`/`TaskUpdate`, but headless
 **Waiting on a separate session.** When session A runs another agent CLI from its shell *in the foreground*, hooks alone show the whole exchange (checked with Claude Code running `claude -p` from its shell):
 
 1. A's `PreToolUse(Bash)` fires. The command starts a known agent CLI, so we emit `spawn.requested` with `kind: session`. A is now waiting on a session that's "starting".
-2. The child starts. Its own `SessionStart` hook links it to A (§6), and the reducer pairs it with A's oldest unpaired session request made before it started for its own program (`claude` for a `claude-code` session), or failing that the oldest that might be it. A request for another known agent CLI that the child's provider doesn't run (`codex`, for a Claude Code session) is never used; one for a command added with `AGENT_GRAPH_AGENT_COMMANDS` might be it, and an `agent-graph run` child might answer any request. Nor is a background request made more than ten minutes before: it returned at once, so what it launched started soon after (allowing for whatever the command did first, like `npm ci && claude …`); one more than a minute old comes after the others of its program, since it may never launch anything. A is now waiting on it.
+2. The child starts. Its own `SessionStart` hook links it to A (§6), and the reducer pairs it with A's oldest unpaired session request made before it started for its own program (`claude` for a `claude-code` session), or failing that the oldest that might be it. A request for another known agent CLI that the child's provider doesn't run (`codex`, for a Claude Code session) is never used; one for a command added with `AGENT_GRAPH_AGENT_COMMANDS` might be it. An `agent-graph run` child is named for the run (`--name`) or the wrapper it was given, not the program, so it's paired only with a request for a run (`run`), and only it is. Nor is a background request made more than ten minutes before: it returned at once, so what it launched started soon after (allowing for whatever the command did first, like `npm ci && claude …`); one more than a minute old comes after the others of its program, since it may never launch anything. A is now waiting on it.
 3. A's `PostToolUse(Bash)` fires when the child exits. That's the `spawn.returned`, and the wait ends. (If the command fails, `PostToolUse` doesn't fire; the wait ends when A's turn does.)
 
 How commands are recognised (`adapter/shell.rs`):

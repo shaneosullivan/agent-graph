@@ -121,6 +121,9 @@ pub struct Spawn {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
     pub background: bool,
+    /// It's for `agent-graph run` (see `SpawnRequested::run`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child: Option<String>,
     pub returned: bool,
@@ -626,6 +629,7 @@ impl Reducer {
                     agent_type: d.agent_type,
                     purpose: d.purpose,
                     background: d.background,
+                    run: d.run,
                     child: None,
                     returned: false,
                     requested_at: e.ts.clone(),
@@ -975,6 +979,10 @@ impl Reducer {
                                     || within(&s.requested_at, started, BACKGROUND_START))
                                 // Not one for an agent CLI it surely isn't running.
                                 && s.agent_type.as_deref().is_none_or(|p| !surely_not(child_node, p))
+                                // A run's session is named for the run, so
+                                // it's paired with a request for a run, and
+                                // only it is.
+                                && s.run == (child_node.provider == "run")
                         })
                         .map(move |s| {
                             (
@@ -1216,8 +1224,9 @@ const PROVIDER_PROGRAMS: &[(&str, &[&str])] = &[("claude-code", &["claude"])];
 /// Whether session `node` surely isn't running `program`, the command a
 /// spawn request named: `node`'s provider is one whose CLIs are known, and
 /// `program` is another of the agent CLIs the shell adapter knows. Anything
-/// less certain (a wrapper, a command added by `AGENT_GRAPH_AGENT_COMMANDS`,
-/// an `agent-graph run`) might be it.
+/// less certain (a wrapper, a command added by `AGENT_GRAPH_AGENT_COMMANDS`)
+/// might be it. (An `agent-graph run` is paired only with a request for a
+/// run: see `bind_session_by_guess`.)
 fn surely_not(node: &Node, program: &str) -> bool {
     PROVIDER_PROGRAMS
         .iter()

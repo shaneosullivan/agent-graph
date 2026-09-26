@@ -485,6 +485,15 @@ fn session_request(secs: u64, call: &str, program: Option<&str>, background: boo
     ev(secs, "x:p", "spawn.requested", data)
 }
 
+/// A request for `agent-graph run -- <program> …`.
+fn run_request(secs: u64, call: &str, program: &str, background: bool) -> Envelope {
+    let data = json!({
+        "call_id": call, "kind": "session", "agent_type": program,
+        "background": background, "run": true,
+    });
+    ev(secs, "x:p", "spawn.requested", data)
+}
+
 /// Which request the child session `child` was paired with.
 fn paired_with(events: Vec<Envelope>, child: &str) -> Option<String> {
     reduce_at(events, 100_000).nodes[child].spawned_by.clone()
@@ -523,11 +532,12 @@ fn a_shell_session_isnt_paired_with_another_programs_request() {
             "{program:?}"
         );
     }
-    // `agent-graph run --name build -- claude …`: named for the run, so it might be anything.
+    // `agent-graph run --name build -- claude …`: named for the run, so it
+    // might be any run (R57).
     let run = shell_child(5, "run:r", "run", json!({"title": "build"}));
     assert_eq!(
         paired_with(
-            vec![start(), session_request(1, "k", Some("claude"), false), run],
+            vec![start(), run_request(1, "k", "claude", false), run],
             "run:r"
         )
         .as_deref(),
@@ -570,8 +580,8 @@ fn a_shell_session_isnt_paired_with_another_programs_request() {
         paired_with(
             vec![
                 start(),
-                session_request(1, "unknown", None, false),
-                session_request(2, "own", Some("claude"), false),
+                run_request(1, "other", "aider", false),
+                run_request(2, "own", "claude", false),
                 run,
             ],
             "run:r"
@@ -579,6 +589,60 @@ fn a_shell_session_isnt_paired_with_another_programs_request() {
         .as_deref(),
         Some("own")
     );
+}
+
+/// R57: an `agent-graph run` session is named for the run (`--name`) or
+/// the wrapper it was given (`npx`), so it might be any run: it's paired only
+/// with a request for a run, and nothing else is (it would take the other's
+/// program, purpose and `background`, for good).
+#[test]
+fn a_run_is_paired_only_with_a_request_for_a_run() {
+    let start = || ev(0, "x:p", "session.started", json!({}));
+    let run = || shell_child(5, "run:r", "run", json!({"title": "workers"}));
+
+    // Not a request for another program (`codex exec … &`, which nothing
+    // else would claim), nor one whose program isn't known...
+    for request in [
+        session_request(1, "k", Some("codex"), true),
+        session_request(1, "k", None, false),
+        session_request(1, "k", Some("workers"), false),
+    ] {
+        assert_eq!(
+            paired_with(vec![start(), request.clone(), run()], "run:r"),
+            None,
+            "{request:?}"
+        );
+    }
+    // ...but a request for a run, whatever it runs, even after one that isn't.
+    assert_eq!(
+        paired_with(
+            vec![
+                start(),
+                session_request(1, "codex", Some("codex"), true),
+                run_request(2, "run", "worker.sh", false),
+                run(),
+            ],
+            "run:r"
+        )
+        .as_deref(),
+        Some("run")
+    );
+    // A request for a run is the run's: a session it didn't start itself
+    // isn't paired with it.
+    for (child, provider) in [("claude-code:c", "claude-code"), ("x:c", "other")] {
+        assert_eq!(
+            paired_with(
+                vec![
+                    start(),
+                    run_request(1, "run", "claude", false),
+                    shell_child(5, child, provider, json!({})),
+                ],
+                child
+            ),
+            None,
+            "{provider}"
+        );
+    }
 }
 
 /// R24: a background request returns at once, so a session started long
