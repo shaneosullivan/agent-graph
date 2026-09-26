@@ -571,18 +571,20 @@ impl Reducer {
         self.ensure(&e.node, provider.as_deref(), &e.ts);
         let payload = e.payload();
         // A session that starts again is on a new run, which may have been
-        // started from somewhere else, if it had ended, or if the start says
-        // it's a launch (not a restart mid-run, after compaction) or comes
-        // from another process: the last may have had no end (killed).
+        // started from somewhere else, if it had ended, or if the start comes
+        // from another process (`claude --resume` always does): the last may
+        // have had no end (killed). Not a restart in the same process (after
+        // compaction), nor the same start recorded twice (hooks in two
+        // settings files), whatever its `source` says; nor, unless it ended,
+        // one whose process or the session's isn't known.
         let rerun = match &payload {
             Payload::SessionStarted(d) => {
                 let node = &self.nodes[&e.node];
-                let launch = matches!(d.source.as_deref(), Some("startup" | "resume"));
                 let moved = d
                     .process
                     .as_ref()
                     .is_some_and(|p| node.process.as_ref().is_some_and(|q| q != p));
-                node.state.is_terminal() || self.started.contains_key(&e.node) && (launch || moved)
+                node.state.is_terminal() || self.started.contains_key(&e.node) && moved
             }
             _ => false,
         };
