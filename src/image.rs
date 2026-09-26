@@ -799,8 +799,10 @@ fn escape(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
-            // Control characters aren't allowed in XML.
+            // Characters XML doesn't allow: control characters (bar tab),
+            // and the noncharacters U+FFFE and U+FFFF.
             c if (c as u32) < 0x20 && c != '\t' => out.push(' '),
+            '\u{FFFE}' | '\u{FFFF}' => out.push(' '),
             c => out.push(c),
         }
     }
@@ -817,6 +819,50 @@ mod tests {
             escape("<script>&\"'\u{1}"),
             "&lt;script&gt;&amp;&quot;&apos; "
         );
+    }
+
+    /// R33: XML forbids U+FFFE and U+FFFF; one in any text used to make
+    /// the whole picture fail to render.
+    #[test]
+    fn escapes_characters_xml_forbids() {
+        let mut g = Graph {
+            nodes: Default::default(),
+            roots: vec![],
+            late: Default::default(),
+        };
+        let mut root = node("p:s", NodeKind::Session, None);
+        root.title = Some("title \u{FFFE}\u{FFFF}".into());
+        root.headline = Some("\u{FFFF}".into());
+        g.nodes.insert(root.id.clone(), root);
+        let svg = svg(&g, &["p:s".into()], &test_options());
+        png(&svg).expect("renders");
+        assert_eq!(escape("a\u{FFFE}b\u{FFFF}c\u{0}\u{1F}\u{7F}"), "a b c   ");
+    }
+
+    fn test_options() -> Options {
+        Options {
+            theme: Theme::Light,
+            as_of: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn node(id: &str, kind: NodeKind, parent: Option<&str>) -> Node {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "kind": kind,
+            "provider": "p",
+            "parent": parent,
+            "children": [],
+            "state": "working",
+            "tasks": [],
+            "spawns": [],
+            "waits": [],
+            "messages": [],
+            "last_event_at": "2026-01-01T00:00:00Z",
+            "open_tasks": 0,
+            "stale": false,
+        }))
+        .unwrap()
     }
 
     #[test]
