@@ -570,10 +570,22 @@ impl Reducer {
         let provider = e.source.as_ref().map(|s| s.provider.clone());
         self.ensure(&e.node, provider.as_deref(), &e.ts);
         let payload = e.payload();
-        // A session that had ended and starts again is on a new run, which
-        // may have been started from somewhere else.
-        let rerun = matches!(payload, Payload::SessionStarted(_))
-            && self.nodes[&e.node].state.is_terminal();
+        // A session that starts again is on a new run, which may have been
+        // started from somewhere else, if it had ended, or if the start says
+        // it's a launch (not a restart mid-run, after compaction) or comes
+        // from another process: the last may have had no end (killed).
+        let rerun = match &payload {
+            Payload::SessionStarted(d) => {
+                let node = &self.nodes[&e.node];
+                let launch = matches!(d.source.as_deref(), Some("startup" | "resume"));
+                let moved = d
+                    .process
+                    .as_ref()
+                    .is_some_and(|p| node.process.as_ref().is_some_and(|q| q != p));
+                node.state.is_terminal() || self.started.contains_key(&e.node) && (launch || moved)
+            }
+            _ => false,
+        };
         // An explicit parent wins, unless a spawn binding already settled it
         // (for the run before, if this is a new one).
         if let Some(parent) = &e.parent {
@@ -596,7 +608,7 @@ impl Reducer {
                 node.title = d.title.or(node.title.take());
                 // A resumed session comes back to life. A mid-turn restart
                 // (e.g. after compaction) leaves the current state alone.
-                if rerun {
+                if node.state.is_terminal() {
                     node.state = State::Idle;
                     node.ended_at = None;
                 }
