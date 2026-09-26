@@ -339,7 +339,10 @@ fn a_run_answers_the_request_made_for_it() {
         .collect();
     assert_eq!(
         requests,
-        [(json!("codex"), None), (json!("tsx"), Some(json!(true)))]
+        [
+            (json!("codex"), Some(json!(false))),
+            (json!("tsx"), Some(json!(true)))
+        ]
     );
     let g = graph(vec![parent, vec![started(5, RUN, Some(A), None, &[])]]);
     assert_eq!(g.nodes[RUN].spawned_by.as_deref(), Some("toolu_run"));

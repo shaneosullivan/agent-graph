@@ -478,7 +478,8 @@ fn shell_child(secs: u64, child: &str, provider: &str, data: Value) -> Envelope 
 }
 
 fn session_request(secs: u64, call: &str, program: Option<&str>, background: bool) -> Envelope {
-    let mut data = json!({"call_id": call, "kind": "session", "background": background});
+    let mut data =
+        json!({"call_id": call, "kind": "session", "background": background, "run": false});
     if let Some(p) = program {
         data["agent_type"] = json!(p);
     }
@@ -643,6 +644,42 @@ fn a_run_is_paired_only_with_a_request_for_a_run() {
             "{provider}"
         );
     }
+}
+
+/// R57: a request in a log from before requests said whether they were for
+/// a run (no `run`) is paired with a run's session as it was then: when the
+/// run is named for the program it asked for.
+#[test]
+fn a_run_is_paired_with_an_old_logs_request_by_its_name() {
+    let old = |program: &str| {
+        let data = json!({"call_id": "k", "kind": "session", "agent_type": program});
+        ev(1, "x:p", "spawn.requested", data)
+    };
+    let paired = |title: &str| {
+        paired_with(
+            vec![
+                ev(0, "x:p", "session.started", json!({})),
+                old("codex"),
+                shell_child(5, "run:r", "run", json!({ "title": title })),
+            ],
+            "run:r",
+        )
+    };
+    assert_eq!(paired("codex").as_deref(), Some("k"));
+    assert_eq!(paired("workers"), None);
+    // Any other session is paired with one as before.
+    assert_eq!(
+        paired_with(
+            vec![
+                ev(0, "x:p", "session.started", json!({})),
+                old("claude"),
+                shell_child(5, "claude-code:c", "claude-code", json!({})),
+            ],
+            "claude-code:c",
+        )
+        .as_deref(),
+        Some("k")
+    );
 }
 
 /// R24: a background request returns at once, so a session started long

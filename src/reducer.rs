@@ -121,9 +121,10 @@ pub struct Spawn {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
     pub background: bool,
-    /// It's for `agent-graph run` (see `SpawnRequested::run`).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub run: bool,
+    /// Whether it's for `agent-graph run`, if known (see
+    /// `SpawnRequested::run`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child: Option<String>,
     pub returned: bool,
@@ -981,8 +982,14 @@ impl Reducer {
                                 && s.agent_type.as_deref().is_none_or(|p| !surely_not(child_node, p))
                                 // A run's session is named for the run, so
                                 // it's paired with a request for a run, and
-                                // only it is.
-                                && s.run == (child_node.provider == "run")
+                                // only it is. A request from before that was
+                                // recorded: only if the run is named for its
+                                // program, as then.
+                                && match s.run {
+                                    Some(run) => run == (child_node.provider == "run"),
+                                    None => child_node.provider != "run"
+                                        || s.agent_type.as_deref().is_some_and(|p| runs(child_node, p)),
+                                }
                         })
                         .map(move |s| {
                             (
