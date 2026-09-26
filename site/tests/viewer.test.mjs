@@ -735,6 +735,73 @@ test("R35: the tree scrolls to the ringed card when the step changes, not whenev
   assert.equal(scrolls(), 2, "to the next step's card");
 });
 
+test("R35: while following, events elsewhere don't scroll the tree", async (t) => {
+  const a = node("x:a", { children: ["x:a/b"] });
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore" });
+  let live = graph([a, b, node("x:z", { headline: "one" })]);
+  const window = loadViewer(
+    t,
+    {
+      graph: async () => live,
+      timeline: async () => ({ stops: stopsOf(["e1", "e2"]).map((s) => ({ ...s, node: "x:a/b" })) }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const scrolls = () => window.__scrolls || 0;
+  await until(() => v.S.stops.length === 2 && window.document.querySelectorAll("#view .node").length === 2);
+  const before = scrolls();
+
+  // Only x:z changes: a new graph, the same tree, the same step.
+  for (const headline of ["two", "three"]) {
+    live = graph([a, b, node("x:z", { headline })]);
+    v.scheduleRefresh();
+    await until(() => v.S.live === live);
+    await settle();
+  }
+  assert.equal(scrolls(), before, "not scrolled");
+});
+
+test("R35: a step's card is scrolled to once, though its graph comes after it's ringed", async (t) => {
+  const a = node("x:a", { children: ["x:a/b"] });
+  const b = node("x:a/b", { parent: "x:a", agent_type: "Explore" });
+  const stops = [
+    { ...stopsOf(["e1"])[0], node: "x:a" },
+    { ...stopsOf(["e1", "e2"])[1], node: "x:a/b" },
+    { ...stopsOf(["e1", "e2", "e3"])[2], node: "x:a" },
+  ];
+  let hold = null;
+  const window = loadViewer(
+    t,
+    {
+      graph: async (at) => {
+        if (at === "e2" && hold) await hold.promise;
+        return { ...graph([a, b]), at: at || null };
+      },
+      timeline: async () => ({ stops }),
+    },
+    { hash: "#x:a" },
+  );
+  const v = window.__viewer;
+  const doc = window.document;
+  const scrolls = () => window.__scrolls || 0;
+  await until(() => v.S.stops.length === 3);
+  v.goTo(0);
+  await until(() => v.S.shown.at === "e1");
+  assert.equal(scrolls(), 1);
+
+  // To e2, whose graph is slow; meanwhile the tree is drawn again (new
+  // events), ringing e2's card on e1's graph.
+  hold = deferred();
+  v.goTo(1);
+  v.renderAll();
+  assert.equal(doc.querySelector("#view .node.current").dataset.id, "x:a/b");
+  assert.equal(scrolls(), 2, "to e2's card");
+  hold.resolve();
+  await until(() => v.S.shown.at === "e2");
+  assert.equal(scrolls(), 2, "not again when its graph comes");
+});
+
 test("R36: an address that isn't a well-formed one names nothing, and the page still works", async (t) => {
   const { source } = treeSource([node("x:a"), node("x:b")]);
   const window = loadViewer(t, source, { hash: "#x%3Ab%E0%A4%A" });
