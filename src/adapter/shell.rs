@@ -907,7 +907,10 @@ fn split(command: &str) -> Vec<(Vec<String>, bool)> {
                 }
             }
             '|' => {
-                chars.next_if_eq(&'|');
+                // `||`, or `|&` (which pipes standard error too): not a `&`.
+                if chars.next_if_eq(&'|').is_none() {
+                    chars.next_if_eq(&'&');
+                }
                 cur.end_command(&mut out);
             }
             // `2>&1`, `&>` and `<&3` redirect: the `&` is part of the word.
@@ -1478,6 +1481,10 @@ mod tests {
         // `<&` duplicates a file descriptor: nothing goes in the background.
         assert_eq!(launch("claude -p a 0<&3"), fg("claude"));
         assert_eq!(launch("claude -p a <&- ; echo"), fg("claude"));
+        // Nor does `|&`, which pipes standard error too.
+        assert_eq!(launch("claude -p a |& tee log"), fg("claude"));
+        assert_eq!(launch("claude -p a |& tee log; echo"), fg("claude"));
+        assert_eq!(launch("claude -p a |& tee log &"), bg("claude"));
         // An array's values aren't commands, but a substitution in them is.
         assert_eq!(launch("arr=(claude codex)"), None);
         assert_eq!(launch("arr+=(claude)\ncodex exec x"), fg("codex"));
