@@ -134,10 +134,14 @@ PATH="$(brew --prefix llvm)/bin:$PATH" cargo xwin build --cross-compiler clang -
 
 The binary is at `target/aarch64-pc-windows-msvc/dist/agent-graph.exe`. Run it in a Windows 11 on ARM virtual machine (UTM or Parallels): `agent-graph.exe --version`. It isn't signed, so a copy that arrives through a browser gets a SmartScreen warning.
 
-### If linking for Windows fails with `Library not loaded: @rpath/libLLVM.dylib`
+### If linking fails with `Library not loaded: @rpath/libLLVM.dylib`
 
-Some Rust toolchains ship `rust-lld`, which links Windows binaries, looking for `libLLVM.dylib` in a folder it isn't in, so it can't start. (The same fault makes `rust-objcopy` fail, which cargo reports as a harmless warning: `stripping debug info with rust-objcopy failed`.) The script checks for this and, if so, links with Zig's copy of lld instead, through a small `lld-link` wrapper on PATH. Reinstalling the toolchain may also fix it:
+Some Rust toolchains for macOS (1.98.1, for one) ship `rust-lld`, which links the WebAssembly and Windows binaries, looking for `libLLVM.dylib` in `lib/rustlib/<host>/lib`, but put the library in the toolchain's `lib`, so it can't start. (The same fault makes `rust-objcopy` fail, which cargo reports as a harmless warning: `stripping debug info with rust-objcopy failed`.) Reinstalling the toolchain doesn't help.
+
+`scripts/fix-rust-lld.sh` links the library in where `rust-lld` looks, if it's missing there, and otherwise does nothing. This script, `scripts/test-all.sh` and the site's `npm run build-wasm` run it first. The link is in the toolchain, so a `rustup update` replaces it; the next build puts it back if the new toolchain needs it. To run it yourself:
 
 ```bash
-rustup toolchain uninstall stable && rustup toolchain install stable
+scripts/fix-rust-lld.sh
 ```
+
+If the link can't be made, this script still links Windows binaries, with Zig's copy of lld, through a small `lld-link` wrapper on PATH.

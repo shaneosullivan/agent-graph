@@ -46,6 +46,9 @@ if command -v brew >/dev/null 2>&1 && [ -d "$(brew --prefix llvm 2>/dev/null)/bi
   PATH="$(brew --prefix llvm)/bin:$PATH"
 fi
 
+# The toolchain's own linker, if it can't find its library.
+bash scripts/fix-rust-lld.sh
+
 missing=()
 need() {
   command -v "$1" >/dev/null 2>&1 || missing+=("$1 ($2)")
