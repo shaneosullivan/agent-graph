@@ -397,7 +397,7 @@ claude-code:e0000002  search-indexer  [working]  Rebuilding the index schema (+1
 
 ### `agent-graph view`: live, in the browser
 
-Serves port 7777, and prints its link with this run's key, `http://127.0.0.1:7777/?key=…` (`--open` opens it). The layout:
+Serves port 7777, and prints its link with this run's key, `http://127.0.0.1:7777/?key=…` (`--open` opens it). If a viewer of the same events is already running on the port, it prints that one's link (and opens it with `--open`) and exits, rather than failing: each viewer records its port and key in the data folder (`view-<port>.json`, readable only by you), and the link is only given once that viewer has taken the key and said it reads the same events. The layout:
 - **Session names** are Claude Code's own, after the session's folder ("agent-graph: Fix the login bug"), and a rename shows within about a second. No hook fires on a rename, so the log only gets the new name at the session's next prompt or turn end. The viewer, which runs where the sessions do, checks each open Claude Code session's transcript once a second (reading its end, and only after it grows) and shows the latest name. That's for display only, and only for now: nothing is written to the log, and shared links and the timeline catch up at the next turn. In the timeline, the step that first carries a new name says so ("Session is working; renamed “…”"), and stepping back shows the name the session had then.
 - **Sessions sidebar.** Each entry shows what's happening. Anything that needs you, is deadlocked or looks stuck is called out there, so trouble is visible without clicking.
 - **Tree.** Cards coloured by state, with task progress and what each node is waiting on.
