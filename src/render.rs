@@ -125,13 +125,9 @@ fn node_line(graph: &Graph, node: &Node) -> Line {
 
     parts.push(match node.kind {
         NodeKind::Session => {
-            // Named by its title (e.g. `agent-graph run --name`), else its folder.
-            let dir = node.title.as_deref().map(Into::into).or_else(|| {
-                node.cwd
-                    .as_deref()
-                    .and_then(|c| Path::new(c).file_name())
-                    .map(|f| f.to_string_lossy())
-            });
+            // Named by its title (e.g. `agent-graph run --name`) after its
+            // folder, else its folder.
+            let dir = session_title(node).or_else(|| folder(node));
             let id = span(format!("{}:{}", node.provider, short(local_id)), Tone::Dim);
             match dir {
                 Some(dir) => vec![id, span("  ", Tone::Plain), span(dir, Tone::Strong)],
@@ -239,16 +235,9 @@ pub fn state_tone(state: State) -> Tone {
 pub fn name(node: &Node) -> String {
     let local = node.id.rsplit(['/', ':']).next().unwrap_or(&node.id);
     match node.kind {
-        NodeKind::Session => node
-            .title
-            .clone()
+        NodeKind::Session => session_title(node)
             .or_else(|| node.purpose.clone())
-            .or_else(|| {
-                node.cwd
-                    .as_deref()
-                    .and_then(|c| Path::new(c).file_name())
-                    .map(|f| f.to_string_lossy().into_owned())
-            })
+            .or_else(|| folder(node))
             .unwrap_or_else(|| format!("session {}", short(local))),
         NodeKind::Agent => format!(
             "{} {}",
@@ -258,18 +247,38 @@ pub fn name(node: &Node) -> String {
     }
 }
 
+/// A session's title as it's shown: after its folder, as in
+/// "agent-graph: Fix the login bug", so sessions in one folder, or named
+/// alike in different ones, are told apart. Just the title if it is the
+/// folder's name, or there's no folder.
+pub fn session_title(node: &Node) -> Option<String> {
+    let title = node.title.as_deref()?;
+    Some(match folder(node) {
+        Some(dir) if dir != title => format!("{dir}: {title}"),
+        _ => title.to_string(),
+    })
+}
+
+/// The last part of a node's folder.
+fn folder(node: &Node) -> Option<String> {
+    node.cwd
+        .as_deref()
+        .and_then(|c| Path::new(c).file_name())
+        .map(|f| f.to_string_lossy().into_owned())
+}
+
 /// What a card calls its node: an agent's type and id; a session's title
-/// (its agent's name for it, or `agent-graph run --name`), or else what
-/// started it for; a session started by another, its agent and id (its
-/// folder is often its parent's); otherwise just "Session".
+/// (its agent's name for it, or `agent-graph run --name`) after its folder,
+/// or else what started it for; a session started by another, its agent and
+/// id (its folder is often its parent's); otherwise just "Session".
 pub fn card_name(node: &Node) -> String {
     match (
         node.kind,
-        node.title.as_ref().or(node.purpose.as_ref()),
+        session_title(node).or_else(|| node.purpose.clone()),
         &node.parent,
     ) {
         (NodeKind::Agent, _, _) => name(node),
-        (NodeKind::Session, Some(title), _) => title.clone(),
+        (NodeKind::Session, Some(title), _) => title,
         (NodeKind::Session, None, Some(_)) => {
             let local = node.id.rsplit(['/', ':']).next().unwrap_or(&node.id);
             format!("{} session {}", provider_name(&node.provider), short(local))
@@ -295,4 +304,37 @@ fn short(id: &str) -> &str {
 
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(title: Option<&str>, cwd: Option<&str>) -> Node {
+        let data = serde_json::json!({ "title": title, "cwd": cwd });
+        let line = format!(
+            r#"{{"v":1,"id":"01K0000000000000000000000A","ts":"2026-09-25T10:00:00.000Z","type":"session.started","node":"x:a","data":{data}}}"#
+        );
+        let opts = crate::reducer::Options {
+            now: std::time::SystemTime::now(),
+            stale_after: std::time::Duration::from_secs(600),
+        };
+        let mut graph =
+            crate::reducer::reduce_from(None, vec![serde_json::from_str(&line).unwrap()], &opts);
+        graph.nodes.remove("x:a").unwrap()
+    }
+
+    #[test]
+    fn a_titled_session_is_named_after_its_folder() {
+        let named = session(Some("Viewer display testing"), Some("/w/agent-graph"));
+        assert_eq!(name(&named), "agent-graph: Viewer display testing");
+        assert_eq!(card_name(&named), "agent-graph: Viewer display testing");
+        // Its folder's name, or no folder: just the title.
+        assert_eq!(
+            name(&session(Some("agent-graph"), Some("/w/agent-graph"))),
+            "agent-graph"
+        );
+        assert_eq!(name(&session(Some("Fix it"), None)), "Fix it");
+        assert_eq!(name(&session(None, Some("/w/agent-graph"))), "agent-graph");
+    }
 }

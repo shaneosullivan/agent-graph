@@ -229,7 +229,11 @@ const PROVIDER_NAME = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'G
 function nodeName(node) {
   if (!node) return 'Unknown';
   if (node.kind === 'session') {
-    if (node.title) return node.title;
+    // After its folder, so sessions in one folder, or named alike, are told apart.
+    if (node.title) {
+      const dir = basename(node.cwd);
+      return dir && dir !== node.title ? `${dir}: ${node.title}` : node.title;
+    }
     // Untitled (a headless run, say): what the session that started it said it was for.
     if (node.purpose) return node.purpose;
     // One session started by another often shares its folder, so say which.
@@ -725,7 +729,8 @@ function mainView() {
     h(
       'div',
       { class: 'title-row' },
-      h('h1', null, nodeName(liveRoot), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
+      // Named as it was at the step being viewed: sessions get renamed.
+      h('h1', null, nodeName(root || liveRoot), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
       root ? saveImageLink(stop) : null,
     ),
     h(

@@ -207,16 +207,14 @@ fn session(c: &mut Canvas, graph: &Graph, root: &Node, mut y: f32, p: &Palette) 
 
     // Header.
     let title = match root.kind {
-        NodeKind::Session => root
-            .title
-            .as_deref()
+        NodeKind::Session => crate::render::session_title(root)
             .or_else(|| {
                 root.cwd
                     .as_deref()
                     .and_then(|cwd| cwd.rsplit(['/', '\\']).find(|s| !s.is_empty()))
+                    .map(String::from)
             })
-            .unwrap_or("Session")
-            .to_string(),
+            .unwrap_or_else(|| "Session".to_string()),
         NodeKind::Agent => name(root),
     };
     let title = fit(
