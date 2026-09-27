@@ -79,6 +79,8 @@ agent-graph watch-remote
 
 This prints a link to a web viewer (the same one as `view`) and keeps it updated as your agents work, until you stop it. You can also paste or upload a log at [agentgraph.chofter.com](https://agentgraph.chofter.com).
 
+Run it again later and it carries on with the same share and link, without sending what the site already has. `--new` starts a new one.
+
 The site keeps a log's recent history: its last 1,000 to 2,000 events, with where everything stood before them. A log that has had no event for a week is deleted. Your own log keeps everything.
 
 | Option | Effect |
@@ -86,6 +88,7 @@ The site keeps a log's recent history: its last 1,000 to 2,000 events, with wher
 | `--password=…` | Viewers must enter it. `--password=` shares without one, even if a default is saved. |
 | `--save-default-password` | Saves `--password` for future runs, in a file only you can read. With `--password=`, clears it. |
 | `--session=…` | Shares one session instead of all of them. |
+| `--new` | Starts a new share, with a new link, rather than carry on with the last one. |
 | `--url=…` | Shares to another copy of the site, e.g. `http://localhost:3000` while developing it. |
 
 Only the machine that created a shared log can add to it. Every update must carry a key that the site returned when the log was created, and the CLI keeps that key only in memory. The site is in [site/](site/README.md).

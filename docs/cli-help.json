@@ -281,18 +281,22 @@
         },
         { "text": "A password is only sent over HTTPS, or to your own machine." },
         { "heading": "Who can change it" },
-        { "text": "Only this run. The site gives it a key when the log is created, every update must carry it, and it's kept only in memory." },
-        { "text": "It checks for new events once a second and sends them together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why. The site deletes a log that has had no new events for a week: sharing it then stops." }
+        { "text": "Only you. The site gives the share a key when it's made, and every update must carry it. It's kept in ~/.agent-graph/shares/, readable only by you, so the next run can carry on." },
+        { "text": "It checks for new events once a second and sends them together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why. The site deletes a log that has had no new events for a week: sharing it then stops." },
+        { "heading": "Running it again" },
+        { "text": "The next run for the same site and the same sessions carries on with the same share, so the link stays the same. What the site already has isn't sent again: it starts again from one summary of the log as it is now, and deletes what came before. A different password means a new share (the site keeps a share's password for good), as does --new, and so does a share the site has deleted. If the share's being shared now, by another run, that run's link is printed instead." }
       ],
       "options": [
         { "id": "url", "flag": "--url <URL>", "text": "The site to share on." },
         { "id": "password", "flag": "--password <PASSWORD>", "text": "Viewers must enter this. `--password=` shares without one, even if a default is saved." },
         { "id": "save_default_password", "flag": "--save-default-password", "text": "Save --password as the default for future runs; with an empty --password=, forget it." },
-        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code session this runs in; if that isn't recorded, it stops rather than guess)." }
+        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code session this runs in; if that isn't recorded, it stops rather than guess)." },
+        { "id": "new", "flag": "--new", "text": "Start a new share, with a new link, rather than carry on with the last one." }
       ],
       "examples": [
         { "command": "agent-graph watch-remote", "text": "Share every session, live. The first line printed is the link." },
         { "command": "agent-graph watch-remote --session current", "text": "Share just the session this runs in." },
+        { "command": "agent-graph watch-remote --new", "text": "Share every session under a new link, rather than carry on with the last share." },
         { "command": "agent-graph watch-remote --password=s3cret --save-default-password", "text": "Require a password, and use it from now on." },
         { "command": "agent-graph watch-remote --password= --save-default-password", "text": "Forget the saved password (and share this time without one)." },
         { "command": "agent-graph watch-remote --url=http://localhost:3000", "text": "Share to a copy of the site you're running yourself." }
