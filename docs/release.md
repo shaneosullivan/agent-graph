@@ -38,7 +38,7 @@ The Linux binaries are linked statically against musl, so they run on any distri
 |---|---|
 | `dist-workspace.toml` | dist's config: targets, installers, publish jobs, signing |
 | `.github/workflows/release.yml` | **Generated** from the config by `dist generate`. Don't edit it: change the config and regenerate. |
-| `.github/build-setup.yml` | A step dist adds before every build: it has macOS signing use the hardened runtime, which notarization requires |
+| `.github/build-setup.yml` | A step dist adds before every build: it has macOS signing use the hardened runtime, which notarization requires, and has cargo-xwin pass clang's flags, not clang-cl's, which `ring` needs for Windows on ARM |
 | `.github/workflows/notarize.yml` | Notarizes the macOS binaries (below). A publish job: the release isn't announced unless it succeeds. |
 | `.github/workflows/winget.yml` | Opens the winget-pkgs pull request, once the release is announced |
 | `wasm/Cargo.toml` | Marked `dist = false`: the WebAssembly crate is built for the site, not released |
@@ -50,6 +50,8 @@ dist generate
 ```
 
 (`brew install cargo-dist` installs `dist`; keep it at the version the config names, `cargo-dist-version`.) `dist plan` lists what a release would contain without building anything.
+
+To build the binaries and try them before releasing, see [local-builds.md](local-builds.md).
 
 ## Making a release
 
@@ -134,4 +136,4 @@ Scoop's shims and npm's global folder don't change between versions, so they nee
 
 ## Before the first release
 
-- **The Windows ARM build is cross-compiled** (cargo-xwin on Linux), the build most likely to need fixing on the first run. If it can't be made to work, dist can build it natively on `windows-11-arm` instead (`github-custom-runners` in the config).
+- **The Windows ARM build is cross-compiled** (cargo-xwin on Linux), the build most likely to need fixing on the first run. It builds on a Mac with the same settings (`scripts/build-local.sh`). If it can't be made to work, dist can build it natively on `windows-11-arm` instead (`github-custom-runners` in the config).

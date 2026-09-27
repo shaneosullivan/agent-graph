@@ -1,5 +1,14 @@
-# dist's macOS signing passes CODESIGN_OPTIONS to `codesign --options`:
+# Steps dist runs before every build (dist-workspace.toml, github-build-setup).
+#
+# CODESIGN_OPTIONS: dist's macOS signing passes it to `codesign --options`:
 # the hardened runtime, which Apple requires to notarize.
-- name: Sign with the hardened runtime
+#
+# XWIN_CROSS_COMPILER: Windows on ARM is cross-compiled with cargo-xwin,
+# which by default passes clang-cl's flags; ring compiles its C for that
+# target with clang, which doesn't take them. `clang` has cargo-xwin pass
+# clang's (scripts/build-local.sh does the same).
+- name: Set up signing and cross-compiling
   shell: bash
-  run: echo "CODESIGN_OPTIONS=runtime" >> "$GITHUB_ENV"
+  run: |
+    echo "CODESIGN_OPTIONS=runtime" >> "$GITHUB_ENV"
+    echo "XWIN_CROSS_COMPILER=clang" >> "$GITHUB_ENV"
