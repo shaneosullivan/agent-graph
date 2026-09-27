@@ -736,6 +736,7 @@ impl Reducer {
                 }
                 let node = self.nodes.get_mut(&e.node).expect("ensured above");
                 node.state = d.state;
+                node.title = d.title.or(node.title.take());
                 if d.state == State::InputRequired {
                     node.attention = d.summary;
                 } else {

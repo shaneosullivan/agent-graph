@@ -188,6 +188,15 @@ impl<'a> SessionSummary<'a> {
     }
 }
 
+/// Names the sessions in `titles` (session id → name) that `graph` has.
+pub fn retitle(graph: &mut Graph, titles: &BTreeMap<String, String>) {
+    for (id, title) in titles {
+        if let Some(node) = graph.nodes.get_mut(id) {
+            node.title = Some(title.clone());
+        }
+    }
+}
+
 /// The graph after every event up to and including `until` (or all of them,
 /// judged at `now`). When looking back, staleness is judged from that moment.
 pub fn graph_at(
@@ -218,7 +227,22 @@ pub fn graph(
     stale_after: Duration,
     env: Environment,
 ) -> Result<String, ApiError> {
-    let (graph, count, _) = graph_at(events, until, now, stale_after)?;
+    graph_with(events, until, root, now, stale_after, env, &BTreeMap::new())
+}
+
+/// `graph`, with sessions named by `titles` (session id → name) where it
+/// has them: names newer than the log's, read from the agents' own records.
+pub fn graph_with(
+    events: &[Timed],
+    until: Option<&str>,
+    root: Option<&str>,
+    now: SystemTime,
+    stale_after: Duration,
+    env: Environment,
+    titles: &BTreeMap<String, String>,
+) -> Result<String, ApiError> {
+    let (mut graph, count, _) = graph_at(events, until, now, stale_after)?;
+    retitle(&mut graph, titles);
     let sessions = graph
         .roots
         .iter()
@@ -657,6 +681,7 @@ mod tests {
             Payload::Status(Status {
                 state: State::InputRequired,
                 summary: Some("Allow rm -rf?".into()),
+                title: None,
             }),
         );
         let events: Vec<Timed> = stamp(vec![started], &source, t0)

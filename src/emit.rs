@@ -302,6 +302,7 @@ mod tests {
                 Payload::Status(Status {
                     state: State::Idle,
                     summary: None,
+                    title: None,
                 }),
             )
         };
@@ -329,6 +330,7 @@ mod tests {
             Payload::Status(Status {
                 state: State::Idle,
                 summary: Some(summary),
+                title: None,
             }),
         );
         let source = Source {
@@ -349,6 +351,7 @@ mod tests {
             Payload::Status(Status {
                 state: State::Idle,
                 summary: None,
+                title: None,
             }),
         );
         let source = Source {

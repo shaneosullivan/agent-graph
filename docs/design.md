@@ -104,7 +104,7 @@ Many sessions write at the same time. If they all rewrite one `state.json`, two 
 | `session.ended` | `reason?` | A session exits. A status less than 2 s after it, for the session or its agents, is a late one (a headless session's Stop can land in the same millisecond, either way round), and is ignored unless it says how the session ended (an agent first seen in one ended with the session), except that after an end less than 2 s after the session's start (a quick run's, or the last run's landing as a resumed run starts) only an idle one (a Stop) is; a later status, or a new `session.started`, brings it back |
 | `agent.spawned` | `agent_type?`, `purpose?`, `background?` | A subagent starts |
 | `agent.finished` | `status` (completed/failed/canceled), `summary?` | A subagent stops |
-| `status` | `state`, `summary?` | The state changes (see below) |
+| `status` | `state`, `summary?`, `title?` | The state changes (see below). `title` is the session's name as its agent shows it, which can change (Claude Code names a session after its first prompt, and `/rename` renames it) |
 | `tasks.updated` | `items: [{id, text, active_text?, status}]` | A todo tool sent its full list. Replaces the node's list |
 | `task.upserted` | `id`, `text?`, `active_text?`, `status?` | An incremental task tool created or changed one task |
 | `task.deleted` | `id` | A task was removed |
@@ -247,8 +247,8 @@ The adapter turns that into:
 
 | Claude Code hook | Agent Graph event |
 |---|---|
-| `SessionStart` (`source`: startup/resume/clear/compact) | `session.started`. A new session is `idle` until its first prompt |
-| `UserPromptSubmit` | `status: working` |
+| `SessionStart` (`source`: startup/resume/clear/compact) | `session.started`. A new session is `idle` until its first prompt. A resumed one's `title` is its name, the last `custom-title` in its transcript |
+| `UserPromptSubmit` | `status: working`, with the session's name as `title` once Claude Code has named it (`Stop` carries it too) |
 | `PreToolUse` on `Agent`/`Task` | `spawn.requested` with the call's `tool_use_id`, `description` as the purpose, `subagent_type`, and `run_in_background` |
 | `SubagentStart` | `agent.spawned` for `<session>/<agent_id>` |
 | `SubagentStop` | `agent.finished`. `last_assistant_message` becomes the summary only with body capture on |
@@ -260,11 +260,11 @@ The adapter turns that into:
 | `PostToolUse` on `Bash`, for the same command | `spawn.returned`, without a `child`: the reducer pairs it (below) |
 | `PreToolUse`/`PostToolUse` on any other `Bash` command | Nothing |
 | `Notification`: `permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog` | `status: input_required`, with the notification's message |
-| `Notification`: `idle_prompt` | `status: idle` |
+| `Notification`: `idle_prompt` | `status: idle`, or `working` as for `Stop` |
 | `PreToolUse` on `AskUserQuestion` | `status: input_required`, e.g. "Asks: Which database should the cache use?" |
 | `PreToolUse` on `ExitPlanMode` | `status: input_required`, "Plan ready for your review" |
 | `PostToolUse` on `AskUserQuestion` / `ExitPlanMode` | `status: working` (answered) |
-| `Stop` | `status: idle` (the turn is over) |
+| `Stop` | `status: idle` (the turn is over), or `working` if the session's transcript shows a background command it started (a tool result with `backgroundTaskId`) with no `<task-notification>` for it yet: the session wakes when the command finishes. Subagents' turns always end idle |
 | `SessionEnd` | `session.ended` |
 | Any other hook | `unknown`, with just the hook and tool names |
 
@@ -398,6 +398,7 @@ claude-code:e0000002  search-indexer  [working]  Rebuilding the index schema (+1
 ### `agent-graph view`: live, in the browser
 
 Serves port 7777, and prints its link with this run's key, `http://127.0.0.1:7777/?key=…` (`--open` opens it). The layout:
+- **Session names** are Claude Code's own, and a rename shows within about a second. No hook fires on a rename, so the log only gets the new name at the session's next prompt or turn end. The viewer, which runs where the sessions do, checks each open Claude Code session's transcript once a second (reading its end, and only after it grows) and shows the latest name. That's for display only: nothing is written to the log, and shared links and the timeline catch up at the next turn.
 - **Sessions sidebar.** Each entry shows what's happening. Anything that needs you, is deadlocked or looks stuck is called out there, so trouble is visible without clicking.
 - **Tree.** Cards coloured by state, with task progress and what each node is waiting on.
 - **Detail panel.** Tasks, waits, agents it started, messages and timestamps for the selected node.

@@ -19,9 +19,11 @@
 //! can't set headers, carries it as `?key=`.
 
 mod http;
+mod names;
 pub mod open;
 pub mod tail;
 
+use std::collections::BTreeMap;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,6 +32,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use http::{Request, respond};
+use names::Names;
 use tail::Tail;
 
 use crate::event::Payload;
@@ -38,6 +41,8 @@ use crate::timeline::{self as api, ApiError, Environment, Timed};
 
 /// How often the events directory is checked for new lines.
 const POLL: Duration = Duration::from_millis(250);
+/// How often sessions' transcripts are checked for a new name (see `names`).
+const NAMES_POLL: Duration = Duration::from_secs(1);
 /// How often an idle event stream sends a keep-alive comment.
 const HEARTBEAT: Duration = Duration::from_secs(15);
 /// Most connections served at once (each open page holds one for its event
@@ -145,6 +150,7 @@ fn start_on(
         .port();
     let shared = Arc::new(Shared {
         tail: Mutex::new(Tail::new(events_dir)),
+        names: Mutex::new(Names::default()),
         version: Mutex::new(0),
         changed: Condvar::new(),
         stale_after,
@@ -158,13 +164,20 @@ fn start_on(
         .poll()
         .map_err(|e| format!("reading {}: {e}", events_dir.display()))?;
 
+    shared.poll_names();
+
     let watcher = Arc::clone(&shared);
     thread::spawn(move || {
+        let mut names_at = std::time::Instant::now();
         loop {
             thread::sleep(POLL);
             // A read error (e.g. the directory is briefly unavailable) is
             // retried on the next poll.
             let _ = watcher.poll();
+            if names_at.elapsed() >= NAMES_POLL {
+                watcher.poll_names();
+                names_at = std::time::Instant::now();
+            }
         }
     });
 
@@ -196,6 +209,8 @@ fn accept(listener: TcpListener, shared: Arc<Shared>) {
 
 struct Shared {
     tail: Mutex<Tail>,
+    /// Sessions' names, newer than the log's (see `names`).
+    names: Mutex<Names>,
     /// Bumped whenever the events change; streams wait on `changed`.
     version: Mutex<u64>,
     changed: Condvar,
@@ -213,10 +228,25 @@ impl Shared {
     fn poll(&self) -> std::io::Result<()> {
         let changed = self.tail.lock().expect("tail lock").poll()?;
         if changed {
-            *self.version.lock().expect("version lock") += 1;
-            self.changed.notify_all();
+            self.bump();
         }
         Ok(())
+    }
+
+    fn poll_names(&self) {
+        let events = self.events();
+        if self.names.lock().expect("names lock").poll(&events) {
+            self.bump();
+        }
+    }
+
+    fn bump(&self) {
+        *self.version.lock().expect("version lock") += 1;
+        self.changed.notify_all();
+    }
+
+    fn titles(&self) -> BTreeMap<String, String> {
+        self.names.lock().expect("names lock").titles.clone()
     }
 
     /// The events as they are now: a snapshot, worked on without the lock.
@@ -313,6 +343,7 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
                 _ => crate::image::Theme::Light,
             };
             let events = shared.events();
+            let titles = shared.titles();
             let (kind, disposition) = if svg {
                 ("image/svg+xml", "attachment; filename=\"agent-graph.svg\"")
             } else {
@@ -325,6 +356,7 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
                 theme,
                 svg,
                 shared.stale_after,
+                &titles,
             ) {
                 Ok(bytes) => respond(
                     stream,
@@ -372,13 +404,14 @@ fn graph_json(
     until: Option<&str>,
     root: Option<&str>,
 ) -> Result<String, ApiError> {
-    api::graph(
+    api::graph_with(
         &shared.events(),
         until,
         root,
         crate::clock::now(),
         shared.stale_after,
         Environment::Local,
+        &shared.titles(),
     )
 }
 
@@ -543,8 +576,10 @@ fn image(
     theme: crate::image::Theme,
     svg_only: bool,
     stale_after: Duration,
+    titles: &BTreeMap<String, String>,
 ) -> Result<Vec<u8>, ApiError> {
-    let (graph, _, now) = api::graph_at(events, until, crate::clock::now(), stale_after)?;
+    let (mut graph, _, now) = api::graph_at(events, until, crate::clock::now(), stale_after)?;
+    api::retitle(&mut graph, titles);
     if !graph.nodes.contains_key(root) {
         return Err(ApiError::NotFound(format!("no node {root} at that point")));
     }
@@ -608,6 +643,7 @@ mod tests {
         std::fs::write(dir.path().join("x.jsonl"), log).unwrap();
         let shared = Arc::new(Shared {
             tail: Mutex::new(Tail::new(dir.path())),
+            names: Mutex::new(Names::default()),
             version: Mutex::new(0),
             changed: Condvar::new(),
             stale_after: Duration::from_secs(600),

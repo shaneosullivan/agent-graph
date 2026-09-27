@@ -242,6 +242,7 @@ pub fn name(node: &Node) -> String {
         NodeKind::Session => node
             .title
             .clone()
+            .or_else(|| node.purpose.clone())
             .or_else(|| {
                 node.cwd
                     .as_deref()
@@ -258,10 +259,15 @@ pub fn name(node: &Node) -> String {
 }
 
 /// What a card calls its node: an agent's type and id; a session's title
-/// (`agent-graph run --name`); a session started by another, its agent and
-/// id (its folder is often its parent's); otherwise just "Session".
+/// (its agent's name for it, or `agent-graph run --name`), or else what
+/// started it for; a session started by another, its agent and id (its
+/// folder is often its parent's); otherwise just "Session".
 pub fn card_name(node: &Node) -> String {
-    match (node.kind, &node.title, &node.parent) {
+    match (
+        node.kind,
+        node.title.as_ref().or(node.purpose.as_ref()),
+        &node.parent,
+    ) {
         (NodeKind::Agent, _, _) => name(node),
         (NodeKind::Session, Some(title), _) => title.clone(),
         (NodeKind::Session, None, Some(_)) => {
