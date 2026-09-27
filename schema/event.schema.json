@@ -128,7 +128,8 @@
       "required": ["state"],
       "properties": {
         "state": { "$ref": "#/$defs/state" },
-        "summary": { "type": "string", "description": "A status line, or what the human is asked while input_required." }
+        "summary": { "type": "string", "description": "A status line, or what the human is asked while input_required." },
+        "title": { "type": "string", "description": "The session's name, as its agent shows it (it can change)." }
       }
     },
     "tasks.updated": {

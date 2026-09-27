@@ -61,7 +61,8 @@ impl Adapter for ClaudeCode {
                 Payload::SessionStarted(SessionStarted {
                     cwd: str_at(input, &["cwd"]).map(String::from),
                     source: str_at(input, &["source"]).map(String::from),
-                    title: None,
+                    // A resumed session already has its name.
+                    title: read_transcript(input, Some(TITLE_TAIL)).and_then(|t| title_in(&t)),
                     transcript_path: str_at(input, &["transcript_path"]).map(String::from),
                     ..Default::default()
                 }),
@@ -72,8 +73,12 @@ impl Adapter for ClaudeCode {
                     reason: str_at(input, &["reason"]).map(String::from),
                 }),
             )),
-            "UserPromptSubmit" => drafts.push(status(&session_node, State::Working, None)),
-            "Stop" => drafts.push(status(&node, State::Idle, None)),
+            "UserPromptSubmit" => drafts.push(titled(
+                &session_node,
+                State::Working,
+                read_transcript(input, Some(TITLE_TAIL)).as_deref(),
+            )),
+            "Stop" => drafts.push(turn_over(input, &node, agent_id)),
             "SubagentStart" => {
                 let agent = agent_id.ok_or("SubagentStart has no agent_id")?;
                 drafts.push(
@@ -109,7 +114,7 @@ impl Adapter for ClaudeCode {
                 | "elicitation_url_dialog" => {
                     drafts.push(status(&node, State::InputRequired, label(&["message"])));
                 }
-                "idle_prompt" => drafts.push(status(&node, State::Idle, None)),
+                "idle_prompt" => drafts.push(turn_over(input, &node, agent_id)),
                 _ => {}
             },
             "PreToolUse" => match tool_name(input) {
@@ -325,7 +330,118 @@ fn post_tool_use(
 }
 
 fn status(node: &str, state: State, summary: Option<String>) -> Draft {
-    Draft::new(node, Payload::Status(Status { state, summary }))
+    Draft::new(
+        node,
+        Payload::Status(Status {
+            state,
+            summary,
+            title: None,
+        }),
+    )
+}
+
+/// A session's status, with its name from its transcript if it has one.
+fn titled(session: &str, state: State, transcript: Option<&str>) -> Draft {
+    Draft::new(
+        session,
+        Payload::Status(Status {
+            state,
+            summary: None,
+            title: transcript.and_then(title_in),
+        }),
+    )
+}
+
+/// A node's status when its turn ends: idle, unless it's the session and a
+/// background command it started is still running. The session wakes when
+/// that command finishes, so it's still at work. Subagents' commands aren't
+/// in the session's transcript; their turns end idle.
+fn turn_over(input: &Value, node: &str, agent: Option<&str>) -> Draft {
+    if agent.is_some() {
+        return status(node, State::Idle, None);
+    }
+    let transcript = read_transcript(input, None);
+    let running = transcript
+        .as_deref()
+        .is_some_and(|t| background_commands_running(t) > 0);
+    let state = if running { State::Working } else { State::Idle };
+    titled(node, state, transcript.as_deref())
+}
+
+/// How much of a transcript's end to read for the session's name. Claude
+/// Code writes the name again every turn, so the last one is near the end;
+/// transcripts themselves run to tens of megabytes.
+const TITLE_TAIL: u64 = 256 * 1024;
+
+/// The session's transcript, or its last `tail` bytes (from a line's start).
+fn read_transcript(input: &Value, tail: Option<u64>) -> Option<String> {
+    read_file(
+        std::path::Path::new(str_at(input, &["transcript_path"])?),
+        tail,
+    )
+}
+
+/// The session's name, from the end of its transcript at `path`.
+pub fn title_of(path: &std::path::Path) -> Option<String> {
+    title_in(&read_file(path, Some(TITLE_TAIL))?)
+}
+
+/// A file, or its last `tail` bytes (from a line's start).
+fn read_file(path: &std::path::Path, tail: Option<u64>) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = tail.map_or(0, |tail| len.saturating_sub(tail));
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Some(match text.split_once('\n') {
+        Some((_, rest)) if start > 0 => rest.to_string(),
+        _ => text,
+    })
+}
+
+/// The session's name, as Claude Code shows it: the latest `custom-title`
+/// (generated from the first prompt, or set with `/rename`).
+pub fn title_in(transcript: &str) -> Option<String> {
+    transcript
+        .lines()
+        .rev()
+        .filter(|line| line.contains("\"custom-title\""))
+        .find_map(|line| {
+            let entry = serde_json::from_str::<Value>(line).ok()?;
+            let title = str_at(&entry, &["customTitle"])?.trim();
+            (str_at(&entry, &["type"]) == Some("custom-title") && !title.is_empty())
+                .then(|| truncate_chars(title, LABEL_MAX))
+        })
+}
+
+/// How many background commands a transcript started and hasn't heard back
+/// about. A start is a tool result with a `backgroundTaskId`; a finish is a
+/// `<task-notification>` naming the task.
+pub fn background_commands_running(transcript: &str) -> usize {
+    let mut running = std::collections::BTreeSet::new();
+    let mut done = std::collections::BTreeSet::new();
+    for line in transcript.lines() {
+        if line.contains("\"backgroundTaskId\"") {
+            if let Some(id) = serde_json::from_str::<Value>(line)
+                .ok()
+                .as_ref()
+                .and_then(|entry| str_at(entry, &["toolUseResult", "backgroundTaskId"]))
+            {
+                running.insert(id.to_string());
+            }
+        }
+        let mut rest = line;
+        while let Some(start) = rest.find("<task-id>") {
+            rest = &rest[start + "<task-id>".len()..];
+            if let Some(end) = rest.find("</task-id>") {
+                done.insert(rest[..end].to_string());
+            }
+        }
+    }
+    running.difference(&done).count()
 }
 
 /// The agent a Bash call starts, if it starts one.

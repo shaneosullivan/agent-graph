@@ -171,7 +171,14 @@ impl Log {
 }
 
 fn status(node: &str, state: State, summary: Option<String>) -> Draft {
-    Draft::new(node, Payload::Status(Status { state, summary }))
+    Draft::new(
+        node,
+        Payload::Status(Status {
+            state,
+            summary,
+            title: None,
+        }),
+    )
 }
 
 /// How the node ends, beyond `session.ended`: nothing for a clean exit.

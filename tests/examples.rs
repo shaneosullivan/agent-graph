@@ -144,6 +144,7 @@ fn status(state: State, summary: Option<&str>) -> Payload {
     Payload::Status(Status {
         state,
         summary: summary.map(String::from),
+        title: None,
     })
 }
 fn working() -> Payload {

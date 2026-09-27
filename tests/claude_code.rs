@@ -324,3 +324,99 @@ fn questions_and_plan_approval_need_the_user() {
         Some("Plan ready for your review")
     );
 }
+
+#[test]
+fn a_turn_that_leaves_a_background_command_running_is_still_working() {
+    // Transcript lines as Claude Code writes them: the command's start, then
+    // the notification that wakes the session when it finishes.
+    let started = json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result",
+        "tool_use_id": "toolu_b", "content": "Command running in background with ID: bzk"}]},
+        "toolUseResult": {"stdout": "", "stderr": "", "interrupted": false, "backgroundTaskId": "bzk"}});
+    let finished = json!({"type": "user", "origin": {"kind": "task-notification"}, "message": {"role": "user",
+        "content": "<task-notification>\n<task-id>bzk</task-id>\n<status>completed</status>\n</task-notification>"}});
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("s.jsonl");
+    let stop = |agent: Option<&str>| {
+        let mut stop = json!({"session_id": "s", "hook_event_name": "Stop",
+            "transcript_path": transcript.to_str().unwrap()});
+        if let Some(agent) = agent {
+            stop["agent_id"] = json!(agent);
+        }
+        let g = reduce(translate(&[stop], Capture::default()));
+        g.nodes[&agent.map_or("claude-code:s".to_string(), |a| {
+            format!("claude-code:s/{a}")
+        })]
+            .state
+    };
+
+    std::fs::write(&transcript, format!("{started}\n")).unwrap();
+    assert_eq!(
+        adapter::claude_code::background_commands_running(
+            &std::fs::read_to_string(&transcript).unwrap()
+        ),
+        1
+    );
+    assert_eq!(stop(None), State::Working);
+    // A subagent's turn ends as usual; the command isn't its.
+    assert_eq!(stop(Some("a1")), State::Idle);
+
+    std::fs::write(&transcript, format!("{started}\n{finished}\n")).unwrap();
+    assert_eq!(stop(None), State::Idle);
+
+    // No transcript to read: the turn is over.
+    std::fs::remove_file(&transcript).unwrap();
+    assert_eq!(stop(None), State::Idle);
+}
+
+#[test]
+fn sessions_take_the_name_claude_code_gives_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("s.jsonl");
+    let named = |title: &str| {
+        json!({"type": "custom-title", "customTitle": title, "sessionId": "s"}).to_string() + "\n"
+    };
+    let hook = |name: &str| {
+        json!({"session_id": "s", "hook_event_name": name,
+            "transcript_path": transcript.to_str().unwrap()})
+    };
+
+    // Not named yet: the viewer falls back as before.
+    std::fs::write(&transcript, "").unwrap();
+    let g = reduce(translate(
+        &[hook("SessionStart"), hook("UserPromptSubmit")],
+        Capture::default(),
+    ));
+    assert_eq!(g.nodes["claude-code:s"].title, None);
+
+    // Named after the first prompt, then renamed: the latest name wins.
+    std::fs::write(
+        &transcript,
+        named("Fix the login bug") + &named("Login redirect loop"),
+    )
+    .unwrap();
+    let g = reduce(translate(
+        &[hook("SessionStart"), hook("Stop")],
+        Capture::default(),
+    ));
+    assert_eq!(
+        g.nodes["claude-code:s"].title.as_deref(),
+        Some("Login redirect loop")
+    );
+
+    // A resumed session starts with its name, and an untitled status keeps it.
+    let g = reduce(translate(
+        &[
+            hook("SessionStart"),
+            json!({"session_id": "s", "hook_event_name": "Stop"}),
+        ],
+        Capture::default(),
+    ));
+    assert_eq!(
+        g.nodes["claude-code:s"].title.as_deref(),
+        Some("Login redirect loop")
+    );
+    assert_eq!(
+        agent_graph::render::card_name(&g.nodes["claude-code:s"]),
+        "Login redirect loop"
+    );
+}

@@ -121,11 +121,12 @@ h1, h2, h3 { margin: 0; }
 .sessions { border-right: 1px solid var(--line); background: var(--panel-2); }
 .panel-head {
   position: sticky; top: 0; z-index: 1;
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 14px 16px 10px; background: var(--panel-2);
 }
-.panel-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-.toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.panel-head h2 { white-space: nowrap; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.toggles { display: flex; align-items: center; gap: 10px; }
+.toggle { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; color: var(--muted); cursor: pointer; }
 .session-list { list-style: none; margin: 0; padding: 0 8px 16px; }
 .session {
   width: 100%; text-align: left; cursor: pointer;
@@ -136,6 +137,20 @@ h1, h2, h3 { margin: 0; }
 .session:hover { background: var(--panel); border-color: var(--line); }
 .session.selected { background: var(--panel); border-color: var(--line-strong); box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); }
 .session.needs-you { box-shadow: inset 3px 0 0 var(--input); }
+.session.spotlight { animation: spotlight 1.6s ease-out; }
+
+/* How many sessions need you, and arrows to step through them: under the
+   panel's title, so it stays in view as the list scrolls. */
+.panel-head { flex-wrap: wrap; }
+.attention-nav {
+  flex-basis: 100%; display: flex; align-items: center; gap: 6px;
+  padding: 4px 4px 4px 10px; border-radius: 8px;
+  background: var(--input-soft); border: 1px solid color-mix(in srgb, var(--input) 35%, transparent);
+  color: var(--input); font-size: 12.5px; font-weight: 600;
+}
+.attention-nav[hidden] { display: none; }
+.attention-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attention-nav .icon-btn { width: 26px; height: 26px; background: var(--panel); color: var(--text); }
 .session .dot { grid-row: 1 / span 3; margin-top: 6px; }
 .s-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .s-when { color: var(--faint); font-size: 12px; white-space: nowrap; }
@@ -384,6 +399,10 @@ main { padding: 22px 28px 40px; }
 @keyframes flash {
   0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--completed) 45%, transparent); }
   100% { box-shadow: 0 0 0 4px transparent; }
+}
+@keyframes spotlight {
+  0% { box-shadow: inset 3px 0 0 var(--input), 0 0 0 3px color-mix(in srgb, var(--input) 50%, transparent); }
+  100% { box-shadow: inset 3px 0 0 var(--input), 0 0 0 3px transparent; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before { animation: none !important; transition: none !important; }

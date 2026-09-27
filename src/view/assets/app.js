@@ -24,6 +24,7 @@ const S = {
   pos: -1, // index into stops
   following: true, // stay on the newest stop as events arrive
   showAll: false,
+  showDone: savedShowDone(), // show finished sessions and agents
   connected: false,
   info: null,
   cache: new Map(), // event id -> graph at that stop, least recently shown first (a new map on each refresh)
@@ -34,6 +35,7 @@ const S = {
   skew: 0, // server clock minus ours; non-zero when AGENT_GRAPH_NOW pins it
   opened: null, // { id, busy?, error?, command? }: the last Open button press
   returnTo: null, // where to go back to if a node named in the address doesn't exist
+  attentionAt: null, // the session needing you that the counter's arrows last scrolled to
 };
 
 // ---------- helpers ----------
@@ -228,6 +230,8 @@ function nodeName(node) {
   if (!node) return 'Unknown';
   if (node.kind === 'session') {
     if (node.title) return node.title;
+    // Untitled (a headless run, say): what the session that started it said it was for.
+    if (node.purpose) return node.purpose;
     // One session started by another often shares its folder, so say which.
     if (node.parent) return `${PROVIDER_NAME[node.provider] || node.provider} session ${short(node.id)}`;
     return basename(node.cwd) || `Session ${short(node.id)}`;
@@ -464,9 +468,31 @@ function known(id) {
 function visibleRoots() {
   if (!S.live) return [];
   const cutoff = nowMs() - RECENT_MS;
-  return S.live.roots.filter(
-    (id) => S.showAll || id === S.root || new Date(S.live.sessions[id].last_event_at).getTime() >= cutoff,
-  );
+  return S.live.roots.filter((id) => {
+    if (id === S.root) return true;
+    const root = S.live.sessions[id];
+    if (!S.showDone && isDone(root) && !root.busy) return false;
+    return S.showAll || new Date(root.last_event_at).getTime() >= cutoff;
+  });
+}
+
+/** Finished, and nothing to see: completed or canceled. A failure stays in view. */
+function isDone(node) {
+  return node.state === 'completed' || node.state === 'canceled';
+}
+
+/** Whether the tree leaves `node` out: it's done, and so is everything under it. */
+function hidden(graph, node, keep) {
+  if (S.showDone || keep.has(node.id) || !isDone(node)) return false;
+  return node.children.every((id) => !graph.nodes[id] || hidden(graph, graph.nodes[id], keep));
+}
+
+function savedShowDone() {
+  try {
+    return localStorage.getItem('agentGraphShowDone') !== 'false';
+  } catch {
+    return true;
+  }
 }
 
 function setError(message) {
@@ -504,14 +530,83 @@ function renderMode() {
 
 function renderSessions() {
   redraw($('#session-list'), sessionItems());
+  renderAttention();
+}
+
+/** The listed sessions that need you, in the list's order. */
+function attentionIds() {
+  return visibleRoots().filter((id) => S.live.sessions[id] && S.live.sessions[id].needs_you);
+}
+
+/**
+ * The counter above the list: how many sessions need you, with arrows that
+ * step through them. Hidden when none do.
+ */
+function renderAttention() {
+  const box = $('#attention');
+  const ids = attentionIds();
+  box.hidden = !ids.length;
+  if (!ids.length) {
+    S.attentionAt = null;
+    redraw(box, []);
+    return;
+  }
+  const at = ids.indexOf(S.attentionAt);
+  const n = ids.length;
+  const label = at >= 0 ? `${at + 1} of ${n} need you` : n === 1 ? '1 session needs you' : `${n} sessions need you`;
+  const arrow = (dir, d, name) =>
+    h(
+      'button',
+      { class: 'icon-btn', 'aria-label': name, title: name, onclick: () => stepAttention(dir) },
+      svgIcon(d),
+    );
+  redraw(box, [
+    h('span', { class: 'attention-count', 'aria-live': 'polite' }, label),
+    arrow(-1, 'M3 10l5-5 5 5', 'Previous session that needs you'),
+    arrow(1, 'M3 6l5 5 5-5', 'Next session that needs you'),
+  ]);
+}
+
+/**
+ * Scrolls the list to the next (`dir` 1) or previous (-1) session that needs
+ * you, centering it, and wrapping around at either end.
+ */
+function stepAttention(dir) {
+  const ids = attentionIds();
+  if (!ids.length) return;
+  let at = ids.indexOf(S.attentionAt);
+  at = at < 0 ? (dir > 0 ? 0 : ids.length - 1) : (at + dir + ids.length) % ids.length;
+  S.attentionAt = ids[at];
+  renderSessions();
+  const item = [...document.querySelectorAll('#session-list .session')].find((e) => e.dataset.id === ids[at]);
+  if (!item) return;
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  item.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
+  // Highlighted each time it's stepped to, even if it was last time.
+  item.classList.remove('spotlight');
+  void item.offsetWidth;
+  item.classList.add('spotlight');
+}
+
+/** A 16×16 stroked icon; SVG needs its own namespace, which `h` doesn't give. */
+function svgIcon(d) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', d);
+  svg.append(path);
+  return svg;
 }
 
 function sessionItems() {
   if (!S.live) return [];
   const roots = visibleRoots();
   if (!roots.length) {
-    const hidden = S.live.roots.length;
-    return [h('li', { class: 'empty-note' }, hidden ? `${plural(hidden, 'older session')} hidden.` : 'No sessions yet.')];
+    const count = S.live.roots.length;
+    const what = S.showDone ? 'older session' : 'older or completed session';
+    return [h('li', { class: 'empty-note' }, count ? `${plural(count, what)} hidden.` : 'No sessions yet.')];
   }
   return roots.map((id) => {
     // What's going on in the session's tree, worked out where the graph is.
@@ -528,7 +623,8 @@ function sessionItems() {
       h(
         'button',
         {
-          class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}`,
+          // `spotlight`: the one the attention counter stepped to (see `stepAttention`).
+          class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}${needsYou && id === S.attentionAt ? ' spotlight' : ''}`,
           'data-id': id,
           'aria-current': id === S.root ? 'true' : null,
           onclick: () => selectRoot(id),
@@ -603,8 +699,14 @@ function mainView() {
         h(
           'div',
           { class: 'empty' },
-          h('h2', null, 'Nothing in the last 24 hours'),
-          h('p', null, 'Tick “Older” in the sessions list to see earlier sessions.'),
+          h('h2', null, S.showDone ? 'Nothing in the last 24 hours' : 'Nothing running in the last 24 hours'),
+          h(
+            'p',
+            null,
+            S.showDone
+              ? 'Tick “Older” in the sessions list to see earlier sessions.'
+              : 'Tick “Completed” or “Older” in the sessions list to see more sessions.',
+          ),
         ),
       ],
     };
@@ -654,7 +756,13 @@ function mainView() {
     S.lastFlashed = last.id;
   }
 
-  return { kids: [head, h('div', { class: 'tree' }, branch(graph, root, ringed, flash))], graph, ringed, flash };
+  // What the reader is looking at stays, done or not.
+  const keep = new Set([S.root, S.selected, ringed].filter(Boolean));
+  const tree = h('div', { class: 'tree' }, branch(graph, root, ringed, flash, keep));
+  const left = Object.values(graph.nodes).filter((n) => n.id !== S.root && isDone(n) && hidden(graph, n, keep)).length;
+  const what = left === 1 ? 'completed agent or session' : 'completed agents and sessions';
+  const note = left ? h('p', { class: 'empty-note' }, `${left} ${what} hidden.`) : null;
+  return { kids: note ? [head, tree, note] : [head, tree], graph, ringed, flash };
 }
 
 /** A download link for a PNG of this session, at the step being viewed. */
@@ -698,15 +806,17 @@ async function saveImage(url, name) {
 }
 
 /** A card and its children's cards. `drawn` skips any node already drawn. */
-function branch(graph, node, ringed, flash, drawn = new Set()) {
+function branch(graph, node, ringed, flash, keep, drawn = new Set()) {
   drawn.add(node.id);
-  const kids = node.children.map((id) => graph.nodes[id]).filter((k) => k && !drawn.has(k.id));
+  const kids = node.children
+    .map((id) => graph.nodes[id])
+    .filter((k) => k && !drawn.has(k.id) && !hidden(graph, k, keep));
   kids.forEach((k) => drawn.add(k.id));
   return h(
     'div',
     { class: 'branch' },
     card(graph, node, ringed, flash),
-    kids.length ? h('div', { class: 'children' }, kids.map((k) => branch(graph, k, ringed, flash, drawn))) : null,
+    kids.length ? h('div', { class: 'children' }, kids.map((k) => branch(graph, k, ringed, flash, keep, drawn))) : null,
   );
 }
 
@@ -1102,6 +1212,18 @@ function wire() {
   $('#prev').addEventListener('click', () => goTo(S.pos - 1));
   $('#next').addEventListener('click', () => goTo(S.pos + 1));
   $('#live').addEventListener('click', goLive);
+  const showDone = $('#show-done');
+  showDone.checked = S.showDone;
+  showDone.addEventListener('change', (e) => {
+    S.showDone = e.target.checked;
+    try {
+      localStorage.setItem('agentGraphShowDone', String(S.showDone));
+    } catch {
+      // Not remembered, then; it still applies now.
+    }
+    renderSessions();
+    renderMain();
+  });
   $('#show-all').addEventListener('change', (e) => {
     S.showAll = e.target.checked;
     renderSessions();
