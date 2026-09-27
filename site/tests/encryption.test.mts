@@ -74,6 +74,28 @@ test("rejects a master key of the wrong size", () => {
   );
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /must be 32 bytes/);
+  // It says what it got, so a value that never arrived can be told apart.
+  assert.match(bad.stderr, /The value here is 9 characters, and decodes to 6 bytes\. Its fingerprint is [0-9a-f]{12}/);
+  assert.doesNotMatch(bad.stderr, /too-short/, "never the value itself");
+});
+
+test("a key with the variable's name pasted in says what's in it", () => {
+  const key = Buffer.alloc(32, 3).toString("base64url");
+  const bad = spawnSync(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "--no-warnings",
+      "--input-type=module",
+      "-e",
+      `const { encryptChunk } = await import(${JSON.stringify(new URL("../lib/encryption.ts", import.meta.url).href)});
+       encryptChunk("x", "0", "text");`,
+    ],
+    { env: { ...process.env, AGENT_GRAPH_ENCRYPTION_KEY: `AGENT_GRAPH_ENCRYPTION_KEY=${key}`, VERCEL_ENV: "production" }, encoding: "utf8" },
+  );
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /\(Vercel environment: production\) is 70 characters, 1 of them not letters, digits, - or _ \(=\), and decodes to 19 bytes/);
+  assert.doesNotMatch(bad.stderr, new RegExp(key), "never the value itself");
 });
 
 /** Runs `expr` against lib/encryption.ts under another master key; returns its JSON. */
