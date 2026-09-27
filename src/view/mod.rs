@@ -18,6 +18,7 @@
 //! so any other local web server would receive it.) The event stream, which
 //! can't set headers, carries it as `?key=`.
 
+mod desktop;
 mod http;
 mod names;
 pub mod open;
@@ -31,6 +32,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
+use desktop::Desktop;
 use http::{Request, respond};
 use names::Names;
 use tail::Tail;
@@ -69,7 +71,7 @@ pub struct Options {
 pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
     let listeners = bind(opts.port)?;
     let port = listeners[0].local_addr().map_err(|e| e.to_string())?.port();
-    let key = start_on(events_dir, listeners, opts.stale_after, open::in_terminal)?;
+    let key = start_on(events_dir, listeners, opts.stale_after, open::launch)?;
     let url = link(port, &key);
     println!("Agent Graph viewer: {url}");
     println!("Reading events from {}", events_dir.display());
@@ -110,8 +112,7 @@ pub fn link(port: u16, key: &str) -> String {
     format!("http://127.0.0.1:{port}/?key={key}")
 }
 
-/// Runs a command that reopens a session: `open::in_terminal`, or a stand-in
-/// in tests.
+/// Reopens a session: `open::launch`, or a stand-in in tests.
 pub type Launch = fn(&Resume) -> Result<(), String>;
 
 /// Loads the events, then serves `listener` and watches for new events on
@@ -121,7 +122,7 @@ pub fn start(
     listener: TcpListener,
     stale_after: Duration,
 ) -> Result<String, String> {
-    start_with(events_dir, listener, stale_after, open::in_terminal)
+    start_with(events_dir, listener, stale_after, open::launch)
 }
 
 /// `start`, opening sessions with `launch`.
@@ -151,6 +152,7 @@ fn start_on(
     let shared = Arc::new(Shared {
         tail: Mutex::new(Tail::new(events_dir)),
         names: Mutex::new(Names::default()),
+        desktop: Mutex::new(Desktop::new(desktop::sessions_dir())),
         version: Mutex::new(0),
         changed: Condvar::new(),
         stale_after,
@@ -211,6 +213,8 @@ struct Shared {
     tail: Mutex<Tail>,
     /// Sessions' names, newer than the log's (see `names`).
     names: Mutex<Names>,
+    /// The Claude desktop app's sessions, which open there (see `desktop`).
+    desktop: Mutex<Desktop>,
     /// Bumped whenever the events change; streams wait on `changed`.
     version: Mutex<u64>,
     changed: Condvar,
@@ -233,9 +237,13 @@ impl Shared {
         Ok(())
     }
 
+    /// Re-reads what the agents' own records say: sessions' names, and
+    /// which the Claude desktop app has.
     fn poll_names(&self) {
         let events = self.events();
-        if self.names.lock().expect("names lock").poll(&events) {
+        let renamed = self.names.lock().expect("names lock").poll(&events);
+        let desktop = self.desktop.lock().expect("desktop lock").poll();
+        if renamed || desktop {
             self.bump();
         }
     }
@@ -247,6 +255,13 @@ impl Shared {
 
     fn titles(&self) -> BTreeMap<String, String> {
         self.names.lock().expect("names lock").titles.clone()
+    }
+
+    fn local(&self) -> api::Local {
+        api::Local {
+            titles: self.titles(),
+            desktop: self.desktop.lock().expect("desktop lock").sessions.clone(),
+        }
     }
 
     /// The events as they are now: a snapshot, worked on without the lock.
@@ -411,14 +426,16 @@ fn graph_json(
         crate::clock::now(),
         shared.stale_after,
         Environment::Local,
-        &shared.titles(),
+        &shared.local(),
     )
 }
 
-/// `POST /api/open?node=<id>`: reopens a session in its agent, in a new
-/// terminal window. Only the node id comes from the page; the command is
-/// worked out from the log. Replies `{"ok": true, "command": …}`, or
-/// `{"error": …, "command": …}` with the command to run yourself.
+/// `POST /api/open?node=<id>`: reopens a session: in the Claude desktop app
+/// if the app has it, else in its agent, in a new terminal window. Only the
+/// node id comes from the page; the command is worked out from the log, and
+/// the app's id for the session from its records. Replies `{"ok": true,
+/// "command": …}`, or `{"error": …, "command": …}` with the command to run
+/// yourself (in a terminal).
 fn open_session(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Result<()> {
     let reply = |stream: &mut TcpStream, status: u16, body: serde_json::Value| {
         respond(
@@ -431,16 +448,40 @@ fn open_session(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::
     };
     let id = req.param("node").unwrap_or_default();
     let events = shared.events();
-    let found = api::graph_at(&events, None, crate::clock::now(), shared.stale_after)
+    let graph = api::graph_at(&events, None, crate::clock::now(), shared.stale_after)
         .ok()
-        .and_then(|(graph, _, _)| graph.nodes.get(id).and_then(resume::resume));
+        .map(|(graph, _, _)| graph);
+    let node = graph.as_ref().and_then(|g| g.nodes.get(id));
+    let found = node.and_then(resume::resume);
     let transcript = transcript_of(&events, id);
-    let Some(r) = found else {
-        let error = "That can't be opened: only sessions whose agent can resume them can.";
-        return reply(stream, 404, serde_json::json!({ "error": error }));
+    let command = found.as_ref().map(open::command_line);
+    // The app shows a session it has without its folder, which an older
+    // log may not have.
+    let desktop = node
+        .is_some()
+        .then(|| {
+            shared
+                .desktop
+                .lock()
+                .expect("desktop lock")
+                .sessions
+                .get(id)
+                .cloned()
+        })
+        .flatten();
+    let r = match (found, desktop) {
+        (Some(r), desktop) => Resume { desktop, ..r },
+        (None, Some(desktop)) => resume::in_desktop_app(desktop),
+        (None, None) => {
+            let error = "That can't be opened: only sessions whose agent can resume them can.";
+            return reply(stream, 404, serde_json::json!({ "error": error }));
+        }
     };
-    let command = open::command_line(&r);
-    let problem = if !Path::new(&r.cwd).is_dir() {
+    // The app keeps its own sessions; a terminal needs the folder and the
+    // conversation to be here.
+    let problem = if r.desktop.is_some() {
+        None
+    } else if !Path::new(&r.cwd).is_dir() {
         Some(format!("Its folder, {}, isn't on this computer.", r.cwd))
     } else {
         transcript
@@ -463,7 +504,14 @@ fn open_session(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::
         Err(e) => reply(
             stream,
             500,
-            serde_json::json!({ "error": format!("Couldn't open a terminal: {e}."), "command": command }),
+            serde_json::json!({
+                "error": if r.desktop.is_some() {
+                    format!("Couldn't open it in the Claude app: {e}.")
+                } else {
+                    format!("Couldn't open a terminal: {e}.")
+                },
+                "command": command,
+            }),
         ),
     }
 }
@@ -646,6 +694,7 @@ mod tests {
         let shared = Arc::new(Shared {
             tail: Mutex::new(Tail::new(dir.path())),
             names: Mutex::new(Names::default()),
+            desktop: Mutex::new(Desktop::new(None)),
             version: Mutex::new(0),
             changed: Condvar::new(),
             stale_after: Duration::from_secs(600),

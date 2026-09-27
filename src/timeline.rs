@@ -72,6 +72,19 @@ pub struct Open {
     pub app: &'static str,
     /// It's still running, so this opens a copy of its conversation.
     pub copy: bool,
+    /// It opens in the Claude desktop app, which has it, as it is.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub desktop: bool,
+}
+
+/// What the local viewer knows beyond the log, from the agents' own records.
+#[derive(Default)]
+pub struct Local {
+    /// Session id → its name, newer than the log's.
+    pub titles: BTreeMap<String, String>,
+    /// Session id → the Claude desktop app's id for it, for those the app
+    /// has (see `resume::Resume::desktop`).
+    pub desktop: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -227,11 +240,19 @@ pub fn graph(
     stale_after: Duration,
     env: Environment,
 ) -> Result<String, ApiError> {
-    graph_with(events, until, root, now, stale_after, env, &BTreeMap::new())
+    graph_with(
+        events,
+        until,
+        root,
+        now,
+        stale_after,
+        env,
+        &Local::default(),
+    )
 }
 
-/// `graph`, with sessions named by `titles` (session id → name) where it
-/// has them: names newer than the log's, read from the agents' own records.
+/// `graph`, with what `local` knows: sessions' names newer than the log's,
+/// and which open in the Claude desktop app.
 pub fn graph_with(
     events: &[Timed],
     until: Option<&str>,
@@ -239,13 +260,13 @@ pub fn graph_with(
     now: SystemTime,
     stale_after: Duration,
     env: Environment,
-    titles: &BTreeMap<String, String>,
+    local: &Local,
 ) -> Result<String, ApiError> {
     let (mut graph, count, _) = graph_at(events, until, now, stale_after)?;
     // Names read since the log's are for now; a step back has the name the
     // session had then.
     if until.is_none() {
-        retitle(&mut graph, titles);
+        retitle(&mut graph, &local.titles);
     }
     let sessions = graph
         .roots
@@ -269,14 +290,23 @@ pub fn graph_with(
         Environment::Local => nodes
             .values()
             .filter_map(|n| {
-                let r = resume::resume(n)?;
-                Some((
-                    n.id.as_str(),
+                // The app shows the session itself, running or not, and
+                // needs nothing else of it.
+                let open = if local.desktop.contains_key(&n.id) {
+                    Open {
+                        app: "the Claude app",
+                        copy: false,
+                        desktop: true,
+                    }
+                } else {
+                    let r = resume::resume(n)?;
                     Open {
                         app: r.app,
                         copy: r.copy,
-                    },
-                ))
+                        desktop: false,
+                    }
+                };
+                Some((n.id.as_str(), open))
             })
             .collect(),
         Environment::Site => BTreeMap::new(),
@@ -885,6 +915,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(json["open"][SESSION]["copy"], true);
+
+        // The Claude desktop app has it: it opens there, as it is.
+        let local = Local {
+            desktop: BTreeMap::from([(SESSION.to_string(), "local_1".to_string())]),
+            ..Local::default()
+        };
+        let json: Value = serde_json::from_str(
+            &graph_with(
+                running,
+                None,
+                Some(SESSION),
+                SystemTime::now(),
+                STALE,
+                LOCAL,
+                &local,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json["open"][SESSION],
+            serde_json::json!({ "app": "the Claude app", "copy": false, "desktop": true })
+        );
     }
 
     #[test]
@@ -945,7 +998,10 @@ mod tests {
         );
         assert_eq!(json["stops"][3]["category"], "lifecycle");
 
-        let titles = BTreeMap::from([("x:a".to_string(), "Third".to_string())]);
+        let local = Local {
+            titles: BTreeMap::from([("x:a".to_string(), "Third".to_string())]),
+            ..Local::default()
+        };
         let at = |until: Option<&str>| -> Value {
             serde_json::from_str(
                 &graph_with(
@@ -955,7 +1011,7 @@ mod tests {
                     SystemTime::now(),
                     STALE,
                     LOCAL,
-                    &titles,
+                    &local,
                 )
                 .unwrap(),
             )

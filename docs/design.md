@@ -406,7 +406,8 @@ Serves port 7777, and prints its link with this run's key, `http://127.0.0.1:777
   - Drag, click, or use ←/→ to step. The graph re-renders as it was at that moment, and the node that step changed is ringed.
   - The last stop is "live". New events extend the timeline without moving you if you're looking at the past.
 - **Save image** downloads a PNG of the session as shown, at the step being viewed.
-- **Resume in Claude Code**, in a session's details, reopens it in a new terminal window.
+- **Open in the Claude app**, in a session's details, shows the session in the Claude desktop app's Code tab, when the app has it (on macOS and Windows). The app keeps a record of each of its sessions (`claude-code-sessions/<account>/<org>/local_<id>.json`, under `~/Library/Application Support/Claude` or `%APPDATA%\Claude`), with its own id for it and Claude Code's (`cliSessionId`). The viewer checks them once a second, re-reading only those that changed, and opens `claude://code/continue?session=<the app's id>`. That's the session itself, not a copy, and needs nothing else of it, not even its folder. An archived session isn't offered, since the link can't show it.
+- **Resume in Claude Code**, for a session the app doesn't have (one run in a terminal, say), reopens it in a new terminal window.
   - It runs `claude --resume <id>` in the session's folder, which is where Claude Code files it. When the agent exits, the window is left with a shell in that folder.
   - A session that hasn't ended is probably still open in another terminal, and two processes on one conversation would both write to it. So for those the button says **Open a copy** and adds `--fork-session`, which branches the conversation instead.
   - The window: macOS opens a one-off `.command` script (in Terminal, or whatever the user has chosen for those), which deletes itself. Windows uses `start` to run `cmd /K`. Linux uses `$TERMINAL`, or the first common terminal it finds. If none works, the page shows the error and the command to run by hand.
@@ -542,7 +543,7 @@ Viewers can step through the log exactly as they can locally, over its recent hi
   - `timeline.rs`: the graph at any moment, and timeline stops. Shared by the local viewer and the site.
   - `resume.rs`: the command that reopens a session in its agent.
   - `render.rs` (text), `live.rs` (`tail`), `image.rs` (`snapshot`), `remote.rs` (`watch-remote`).
-  - `view/`: the local web server (`open.rs` opens terminal windows), plus the page's HTML/CSS/JS embedded in the binary.
+  - `view/`: the local web server (`open.rs` opens sessions in the Claude app or a terminal window, `desktop.rs` finds the app's sessions), plus the page's HTML/CSS/JS embedded in the binary.
   - `install.rs`, `slash.rs` (the `/agent-graph` command), `cli.rs`.
   - `help.rs`: the help text, generated at compile time (below).
   - Everything except the core (`event`, `reducer`, `timeline` and friends) sits behind the default `cli` feature, so the core also builds for WebAssembly (`wasm/`).
