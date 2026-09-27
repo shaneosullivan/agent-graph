@@ -21,6 +21,10 @@ pub struct Resume {
     /// Resuming it there too would put two processes on one conversation, so
     /// the command opens a copy of it instead.
     pub copy: bool,
+    /// The Claude desktop app's own id for the session, when the app has it:
+    /// it opens there, as it is, rather than in a terminal. Only the viewer,
+    /// which can look at the app's records, sets it.
+    pub desktop: Option<String>,
 }
 
 /// How to reopen `node`, if it's a session whose agent can do that.
@@ -43,9 +47,23 @@ pub fn resume(node: &Node) -> Option<Resume> {
                 args,
                 cwd,
                 copy,
+                desktop: None,
             })
         }
         _ => None,
+    }
+}
+
+/// Opening a Claude Code session the Claude desktop app has, by the app's
+/// `id` for it: the app needs nothing else, not even its folder.
+pub fn in_desktop_app(id: String) -> Resume {
+    Resume {
+        app: "Claude Code",
+        program: "claude",
+        args: Vec::new(),
+        cwd: String::new(),
+        copy: false,
+        desktop: Some(id),
     }
 }
 

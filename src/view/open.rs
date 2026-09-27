@@ -1,5 +1,6 @@
-//! Opens a session in its agent, in a new terminal window, for the viewer's
-//! Open button. The command comes from `resume::resume`, which only uses ids
+//! Opens a session for the viewer's Open button: in the Claude desktop app
+//! if the app has it (see `desktop`), else in its agent, in a new terminal
+//! window. The command comes from `resume::resume`, which only uses ids
 //! that are plain letters, digits, `-` and `_`. The folder can hold anything,
 //! so it never reaches a shell's parser unquoted: it's passed as the working
 //! directory, as a separate argument, or quoted.
@@ -24,6 +25,47 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::resume::Resume;
+
+/// Opens `r`: in the Claude desktop app if it has the session, else in a
+/// new terminal window.
+pub fn launch(r: &Resume) -> Result<(), String> {
+    match &r.desktop {
+        Some(id) => in_desktop_app(id),
+        None => in_terminal(r),
+    }
+}
+
+/// The link that shows the app's session `id` in its Code tab.
+pub fn desktop_link(id: &str) -> Option<String> {
+    super::desktop::is_app_id(id).then(|| format!("claude://code/continue?session={id}"))
+}
+
+/// Shows the app's session `id`, by opening its link.
+fn in_desktop_app(id: &str) -> Result<(), String> {
+    let link = desktop_link(id).ok_or("that isn't the Claude app's id for a session")?;
+    let mut command = if cfg!(windows) {
+        // The link is letters, digits and `:/?=_-` only (`desktop_link`).
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", ""]).arg(&link);
+        c
+    } else {
+        let mut c = Command::new("open");
+        c.arg(&link);
+        c
+    };
+    let out = command
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("opening the Claude app: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the Claude app didn't open: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
 
 /// Runs `r` in a new terminal window.
 pub fn in_terminal(r: &Resume) -> Result<(), String> {
@@ -261,7 +303,18 @@ mod tests {
             args: vec!["--resume".into(), "abc-123".into()],
             cwd: cwd.into(),
             copy: false,
+            desktop: None,
         }
+    }
+
+    #[test]
+    fn the_desktop_link_takes_only_the_apps_ids() {
+        assert_eq!(
+            desktop_link("local_776bf0af-e7ae").as_deref(),
+            Some("claude://code/continue?session=local_776bf0af-e7ae")
+        );
+        assert_eq!(desktop_link("local_a&calc"), None);
+        assert_eq!(desktop_link("e3db28e0-8fe7"), None);
     }
 
     #[test]

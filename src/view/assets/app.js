@@ -1070,12 +1070,14 @@ function renderOpen(id) {
     {
       class: 'btn',
       disabled: Boolean(done && done.busy),
-      title: offer.copy
-        ? 'It hasn’t ended, so it’s probably open somewhere already. This opens a copy of its conversation in a new terminal window.'
-        : 'Resume it in a new terminal window.',
+      title: offer.desktop
+        ? 'Show it in the Claude desktop app’s Code tab.'
+        : offer.copy
+          ? 'It hasn’t ended, so it’s probably open somewhere already. This opens a copy of its conversation in a new terminal window.'
+          : 'Resume it in a new terminal window.',
       onclick: () => openSession(id),
     },
-    offer.copy ? `Open a copy in ${offer.app}` : `Resume in ${offer.app}`,
+    offer.desktop ? `Open in ${offer.app}` : offer.copy ? `Open a copy in ${offer.app}` : `Resume in ${offer.app}`,
   );
   let note = null;
   if (done && done.error) {
@@ -1096,7 +1098,8 @@ function renderOpen(id) {
         : null,
     );
   } else if (done && !done.busy) {
-    note = h('div', { class: 'open-note' }, h('span', { class: 'open-ok' }, 'Opened in a new terminal window.'));
+    const where = offer.desktop ? 'Opened in the Claude app.' : 'Opened in a new terminal window.';
+    note = h('div', { class: 'open-note' }, h('span', { class: 'open-ok' }, where));
   }
   return h('div', { class: 'open-box' }, button, note);
 }
