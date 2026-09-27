@@ -142,6 +142,8 @@ enum Command {
         save_default_password: bool,
         #[arg(long, help = help::watch_remote::opt::SESSION)]
         session: Option<String>,
+        #[arg(long, help = help::watch_remote::opt::NEW)]
+        new: bool,
     },
     #[command(
         display_order = 4,
@@ -313,6 +315,7 @@ pub fn run() -> ExitCode {
             password,
             save_default_password,
             session,
+            new,
         } => paths::data_dir()
             .ok_or_else(|| "can't find your home directory".to_string())
             .and_then(|root| {
@@ -323,6 +326,7 @@ pub fn run() -> ExitCode {
                         password,
                         save_default_password,
                         session,
+                        new,
                     },
                 )
             }),

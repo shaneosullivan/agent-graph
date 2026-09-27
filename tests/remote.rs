@@ -124,19 +124,33 @@ fn shares_the_log_then_appends_only_new_lines_with_the_key() {
 
     child.kill().unwrap();
     child.wait().unwrap();
-    // The key was only ever in memory.
-    let saved: Vec<_> = walk(home.path());
-    assert!(saved.iter().all(|text| !text.contains("the-key")));
+    // The key's kept only with the share, for the next run, where only its
+    // owner can read it.
+    let with_key: Vec<_> = walk(home.path())
+        .into_iter()
+        .filter(|(_, text)| text.contains("the-key"))
+        .map(|(path, _)| path)
+        .collect();
+    assert_eq!(with_key.len(), 1, "{with_key:?}");
+    assert!(with_key[0].starts_with(home.path().join("shares")));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&with_key[0]), 0o600);
+        assert_eq!(mode(&home.path().join("shares")), 0o700);
+    }
 }
 
-fn walk(dir: &std::path::Path) -> Vec<String> {
+fn walk(dir: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
         if path.is_dir() {
             out.extend(walk(&path));
         } else {
-            out.push(std::fs::read_to_string(&path).unwrap_or_default());
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            out.push((path, text));
         }
     }
     out
@@ -773,5 +787,189 @@ fn a_redirect_is_not_followed() {
     assert!(
         followed.recv_timeout(Duration::from_millis(300)).is_err(),
         "followed the redirect"
+    );
+}
+
+/// `watch-remote` in `home`, against the site on `port`, with `args`; and
+/// the link it prints first, once it does (a run carrying on prints it once
+/// the site has taken its first chunk).
+fn share(home: &std::path::Path, port: u16, args: &[&str]) -> (Stopped, mpsc::Receiver<String>) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .arg("watch-remote")
+        .args(args)
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .env("AGENT_GRAPH_HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut link = String::new();
+        let _ = BufReader::new(stdout).read_line(&mut link);
+        let _ = tx.send(link.trim().to_string());
+    });
+    (Stopped(child), rx)
+}
+
+/// The link a run printed. (It's printed once its share is saved.)
+fn link_of(printed: &mpsc::Receiver<String>) -> String {
+    printed.recv_timeout(Duration::from_secs(10)).unwrap()
+}
+
+/// The next request that isn't a trim (answered 204), answering it `status`.
+fn next_request(
+    requests: &mpsc::Receiver<Request>,
+    replies: &mpsc::Sender<u16>,
+    status: u16,
+) -> Request {
+    loop {
+        let r = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+        if r.path == "/api/logs" {
+            return r;
+        }
+        if r.path.contains("/trim") {
+            replies.send(204).unwrap();
+            continue;
+        }
+        replies.send(status).unwrap();
+        return r;
+    }
+}
+
+/// A second run carries on with the share the first made: the same link,
+/// no new log, and not the log again, but one keyframe of it, which the site
+/// starts again at, appended where the first left off, and what's before it
+/// trimmed.
+#[test]
+fn a_second_run_carries_on_with_the_last_share() {
+    let (port, requests, replies) = scripted_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let file = events.join("x-s.jsonl");
+    let first = line(1) + &line(2);
+    std::fs::write(&file, &first).unwrap();
+
+    let (running, printed) = share(home.path(), port, &["--password="]);
+    let create = next_request(&requests, &replies, 204);
+    assert_eq!(create.path, "/api/logs");
+    assert_eq!(create.body, first);
+    let link = link_of(&printed);
+    drop(running);
+
+    agent_graph::store::append(&file, line(3).as_bytes()).unwrap();
+    let (_running, printed) = share(home.path(), port, &["--password="]);
+    let resumed = next_request(&requests, &replies, 204);
+    assert_eq!(
+        resumed.path,
+        format!("/api/logs/abc123def456/append?offset={}", first.len()),
+        "where the last run left off, not a new log"
+    );
+    assert_eq!(resumed.headers["authorization"], "Bearer the-key");
+    assert!(
+        resumed.body.contains(r#""type":"keyframe""#),
+        "{}",
+        resumed.body
+    );
+    assert!(
+        resumed.body.contains(r#""restart":true"#),
+        "readers start again there"
+    );
+    assert!(!resumed.body.contains(&line(1)), "not the log again");
+    assert_eq!(link_of(&printed), link, "the same link");
+    let trim = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(
+        trim.path,
+        format!("/api/logs/abc123def456/trim?before={}", first.len()),
+        "what's before it deleted"
+    );
+    replies.send(204).unwrap();
+
+    // New lines follow it.
+    agent_graph::store::append(&file, line(4).as_bytes()).unwrap();
+    let next = next_request(&requests, &replies, 204);
+    assert_eq!(
+        next.path,
+        format!(
+            "/api/logs/abc123def456/append?offset={}",
+            first.len() + resumed.body.len()
+        )
+    );
+    assert_eq!(next.body, line(4));
+}
+
+/// A new share, not the last one: with --new; with another password (the
+/// site keeps a log's for good); or when the last is gone.
+#[test]
+fn a_new_share_when_asked_for_or_when_the_last_cant_go_on() {
+    let (port, requests, replies) = scripted_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    std::fs::write(events.join("x-s.jsonl"), line(1)).unwrap();
+
+    // Each run is stopped once it has printed its link, by when its share
+    // is saved.
+    let (running, printed) = share(home.path(), port, &["--password="]);
+    assert_eq!(next_request(&requests, &replies, 204).path, "/api/logs");
+    link_of(&printed);
+    drop(running);
+
+    let (running, printed) = share(home.path(), port, &["--password=", "--new"]);
+    assert_eq!(
+        next_request(&requests, &replies, 204).path,
+        "/api/logs",
+        "--new"
+    );
+    link_of(&printed);
+    drop(running);
+
+    let (running, printed) = share(home.path(), port, &["--password=another"]);
+    let r = next_request(&requests, &replies, 204);
+    assert_eq!(r.path, "/api/logs", "another password");
+    assert!(r.headers.contains_key("x-agent-graph-password"));
+    link_of(&printed);
+    drop(running);
+
+    // The last share (with that password) has been deleted by the site.
+    let (_running, _printed) = share(home.path(), port, &["--password=another"]);
+    let tried = next_request(&requests, &replies, 410);
+    assert!(tried.path.contains("/append"), "{}", tried.path);
+    assert_eq!(
+        next_request(&requests, &replies, 204).path,
+        "/api/logs",
+        "gone"
+    );
+}
+
+/// While one run shares, another prints its link, and leaves it be.
+#[test]
+fn a_share_being_shared_now_is_left_to_its_run() {
+    let (port, requests, replies) = scripted_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    std::fs::write(events.join("x-s.jsonl"), line(1)).unwrap();
+
+    let (_running, printed) = share(home.path(), port, &["--password="]);
+    assert_eq!(next_request(&requests, &replies, 204).path, "/api/logs");
+    let link = link_of(&printed);
+
+    let second = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", "--password=", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .env("AGENT_GRAPH_HOME", home.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(second.status.success());
+    assert_eq!(String::from_utf8_lossy(&second.stdout).trim(), link);
+    assert!(
+        requests.recv_timeout(Duration::from_millis(500)).is_err(),
+        "nothing sent"
     );
 }

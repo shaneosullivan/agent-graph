@@ -17,6 +17,13 @@
 //! Bodies are raw JSON Lines, never wrapped in JSON, and are cut only at line
 //! boundaries.
 //!
+//! A share is kept for next time (see `SavedShare`): the next run on this
+//! computer, for the same site and the same sessions, carries on with it
+//! rather than making another, so its link stays the same and what's already
+//! there isn't sent again. It starts with one keyframe of the log as it is
+//! now, which readers start again at, and the site is asked to delete
+//! what's before it.
+//!
 //! The site keeps only a log's last two keyframes' worth (see `keyframe`):
 //! what's shared starts at the log's last keyframe but one, a keyframe
 //! follows every `keyframe::EVERY` events, each starting a chunk, and once
@@ -55,6 +62,8 @@ pub struct Options {
     pub save_default_password: bool,
     /// Share one session instead of everything.
     pub session: Option<String>,
+    /// Start a new share, even if there's one to carry on with.
+    pub new: bool,
 }
 
 pub fn run(root: &Path, opts: Options) -> Result<(), String> {
@@ -102,19 +111,42 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         }
         None => (None, format!("every session in {}", root.display())),
     };
-    let mut source = Lines::new(&events, only);
-    let mut stream = Stream::start(
-        source
-            .poll()
-            .map_err(|e| format!("reading {}: {e}", events.display()))?,
-        keyframe::EVERY,
-    );
+    let share_path = share_path(root, &base, only.as_deref());
+    let saved = if opts.new {
+        None
+    } else {
+        SavedShare::load(&share_path, &base, only.as_deref())
+    };
+    // Shared by another run now: its link will do.
+    if let Some(running) = saved.as_ref().filter(|s| s.sharing_now()) {
+        println!("{}", running.link);
+        eprintln!(
+            "Already sharing {what}, from another watch-remote. Stop that one first to start this one."
+        );
+        return Ok(());
+    }
+    let saved = saved.filter(|s| s.password == password_check(&s.id, password.as_deref()));
 
+    let mut source = Lines::new(&events, only.clone());
+    let raw = source
+        .poll()
+        .map_err(|e| format!("reading {}: {e}", events.display()))?;
     let client = Client::new(&base);
-    let first = stream.next_len(MAX_CHUNK);
-    let log = client
-        .create(&stream.pending[..first], password.as_deref())
-        .map_err(|e| e.message())?;
+    let (log, mut stream, mut sent, trim, carried_on) =
+        start_share(&client, raw, saved, password.as_deref())?;
+    let mut share = SavedShare {
+        site: base.clone(),
+        target: only.clone(),
+        id: log.id.clone(),
+        link: log.url.clone(),
+        write_token: log.write_token.clone(),
+        offset: sent,
+        password: password_check(&log.id, password.as_deref()),
+        sharer: crate::process::lineage(std::process::id())
+            .first()
+            .map(|p| p.id()),
+    };
+    share.save(&share_path);
     // The link first, so it can be shared straight away.
     println!("{}", log.url);
     io::stdout().flush().ok();
@@ -123,16 +155,22 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     } else {
         "Anyone with the link can view it"
     };
-    eprintln!("Sharing {what}, live. {who}. Press Ctrl+C to stop.");
+    let how = if carried_on {
+        "Carrying on with the last share of"
+    } else {
+        "Sharing"
+    };
+    eprintln!("{how} {what}, live. {who}. Press Ctrl+C to stop.");
 
-    stream.sent(first, 0);
-    let mut sent = first as u64;
     let mut backoff = Duration::ZERO;
     let mut reading_failed = false;
     // The length of a chunk that failed: it's retried with exactly the same
     // bytes, whatever has arrived since, as the site may have stored it.
     let mut retrying: Option<usize> = None;
     let mut trims = Trims::default();
+    if let Some(before) = trim {
+        trims.ask(before, &client, &log)?;
+    }
     loop {
         while !stream.pending.is_empty() {
             let n = retrying.unwrap_or_else(|| stream.next_len(MAX_CHUNK));
@@ -145,6 +183,8 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                         trims.ask(before, &client, &log)?;
                     }
                     sent += n as u64;
+                    share.offset = sent;
+                    share.save(&share_path);
                     if !backoff.is_zero() {
                         eprintln!("Reconnected; caught up.");
                         backoff = Duration::ZERO;
@@ -182,6 +222,148 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
             }
         }
     }
+}
+
+/// Carries on with the `saved` share, if it can, else makes a new one. The
+/// log, what's still to send, how much the site has, where the site can
+/// delete before (if it can), and whether it carried on.
+fn start_share(
+    client: &Client,
+    raw: Vec<u8>,
+    saved: Option<SavedShare>,
+    password: Option<&str>,
+) -> Result<(Created, Stream, u64, Option<u64>, bool), String> {
+    if let Some(saved) = saved {
+        let log = saved.log();
+        let mut stream = Stream::resume(raw.clone(), keyframe::EVERY);
+        if stream.pending.is_empty() {
+            return Ok((log, stream, saved.offset, None, true));
+        }
+        let n = stream.next_len(MAX_CHUNK);
+        match client.append(&log, saved.offset, &stream.pending[..n]) {
+            Ok(()) => {
+                let trim = stream.sent(n, saved.offset);
+                return Ok((log, stream, saved.offset + n as u64, trim, true));
+            }
+            Err(SendError::Retry(e)) => return Err(format!("couldn't reach the site: {e}")),
+            // Gone, or not where it was left (a run stopped between sending
+            // and saving how far it got): a new one, then.
+            Err(SendError::Fatal(e) | SendError::Expired(e)) => {
+                eprintln!("Couldn't carry on with the last share ({e}); starting a new one.");
+            }
+        }
+    }
+    let mut stream = Stream::start(raw, keyframe::EVERY);
+    let first = stream.next_len(MAX_CHUNK);
+    let log = client
+        .create(&stream.pending[..first], password)
+        .map_err(|e| e.message())?;
+    stream.sent(first, 0);
+    Ok((log, stream, first as u64, None, false))
+}
+
+// ---------- the saved share ----------
+
+/// A share, kept for the next run to carry on with: in the data folder,
+/// under `shares/`, one per site and what's shared, readable only by the
+/// user (the write token is in it).
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct SavedShare {
+    site: String,
+    /// The session shared, or none for everything.
+    target: Option<String>,
+    id: String,
+    link: String,
+    write_token: String,
+    /// How much the site has: where the next chunk goes.
+    offset: u64,
+    /// A check of the password it was made with (see `password_check`): the
+    /// site keeps a log's password for good, so another means a new log.
+    password: Option<u64>,
+    /// The run sharing it (`<pid>@<start>`), while it does.
+    sharer: Option<String>,
+}
+
+fn share_path(root: &Path, site: &str, target: Option<&str>) -> PathBuf {
+    root.join("shares").join(format!(
+        "{}.json",
+        crate::paths::file_key(site, target.unwrap_or("all"))
+    ))
+}
+
+/// A check that a password is the one a log was made with, without keeping
+/// it. (Not a password hash: the file it's in is readable only by the user,
+/// who can read their saved password anyway.)
+fn password_check(id: &str, password: Option<&str>) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let password = password?;
+    let mut hasher = std::hash::DefaultHasher::new();
+    (id, password).hash(&mut hasher);
+    Some(hasher.finish())
+}
+
+impl SavedShare {
+    /// The share saved at `path` for `site` and `target`, if there's one.
+    fn load(path: &Path, site: &str, target: Option<&str>) -> Option<SavedShare> {
+        let text = fs::read_to_string(path).ok()?;
+        let saved: SavedShare = serde_json::from_str(&text).ok()?;
+        (saved.site == site && saved.target.as_deref() == target).then_some(saved)
+    }
+
+    /// Whether another run is sharing it now.
+    fn sharing_now(&self) -> bool {
+        let me = crate::process::lineage(std::process::id())
+            .first()
+            .map(|p| p.id());
+        self.sharer
+            .as_deref()
+            .is_some_and(|s| Some(s) != me.as_deref() && crate::process::alive(s) == Some(true))
+    }
+
+    fn log(&self) -> Created {
+        Created {
+            id: self.id.clone(),
+            url: self.link.clone(),
+            write_token: self.write_token.clone(),
+        }
+    }
+
+    /// Saves it; if it can't be, the next run makes a new share, so that's
+    /// only said.
+    fn save(&self, path: &Path) {
+        let text = serde_json::to_string_pretty(self).expect("serializable");
+        if let Err(e) = write_private(path, text.as_bytes()) {
+            eprintln!(
+                "Couldn't save this share for next time ({}: {e}); the next run will start a new one.",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Writes `path` whole (a reader never sees half of it), readable only by
+/// the user.
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        crate::store::ensure_dir(dir)?;
+    }
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    let _ = fs::remove_file(&tmp);
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let written = opts
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(bytes))
+        .and_then(|()| fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
 }
 
 // ---------- keyframes ----------
@@ -329,6 +511,18 @@ impl Stream {
             recut: false,
             last_keyframe: None,
         }
+    }
+
+    /// Carrying on with a share the site has from a last run: one keyframe
+    /// of the log so far, which the site starts again at, then new lines as
+    /// they come.
+    fn resume(raw: Vec<u8>, every: usize) -> Stream {
+        let mut stream = Stream::start(raw.clone(), every);
+        stream.pending.clear();
+        stream.breaks.clear();
+        stream.recut(Some(raw));
+        stream.since = 0;
+        stream
     }
 
     /// A keyframe to send, starting a chunk. If the site should start there
