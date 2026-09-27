@@ -33,6 +33,6 @@ npm-package = "agent-graph"
 # Sign the macOS binaries with a Developer ID (secrets: CODESIGN_*), for
 # the notarize job to submit to Apple
 macos-sign = true
-# Steps run before each build (sets hardened-runtime signing, which
-# notarization requires)
+# Steps run before each build: hardened-runtime signing, which notarization
+# requires, and cargo-xwin's clang mode for Windows on ARM
 github-build-setup = "../build-setup.yml"

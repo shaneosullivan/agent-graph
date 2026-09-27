@@ -130,8 +130,10 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
-      - name: "Sign with the hardened runtime"
-        run: "echo \"CODESIGN_OPTIONS=runtime\" >> \"$GITHUB_ENV\""
+      - name: "Set up signing and cross-compiling"
+        run: |
+          echo "CODESIGN_OPTIONS=runtime" >> "$GITHUB_ENV"
+          echo "XWIN_CROSS_COMPILER=clang" >> "$GITHUB_ENV"
         shell: "bash"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}

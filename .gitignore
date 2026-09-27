@@ -3,3 +3,6 @@
 # Local tooling
 /.claude/
 /.last_modified_timestamp
+
+# Secrets: the Firebase service account key
+/config/
