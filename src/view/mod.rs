@@ -22,6 +22,7 @@ mod desktop;
 mod http;
 mod names;
 pub mod open;
+mod running;
 pub mod tail;
 
 use std::collections::BTreeMap;
@@ -69,9 +70,25 @@ pub struct Options {
 }
 
 pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
-    let listeners = bind(opts.port)?;
+    let listeners = match bind(opts.port) {
+        Ok(listeners) => listeners,
+        // The viewer's already running there: its link will do.
+        Err(e) => {
+            let key = running::find(events_dir, opts.port).ok_or(e)?;
+            let url = link(opts.port, &key);
+            println!("Agent Graph viewer (already running): {url}");
+            if opts.open {
+                open_browser(&url);
+            }
+            return Ok(());
+        }
+    };
     let port = listeners[0].local_addr().map_err(|e| e.to_string())?.port();
     let key = start_on(events_dir, listeners, opts.stale_after, open::launch)?;
+    // So another `view` on this port can point here (see `running`).
+    if let Err(e) = running::record(events_dir, port, &key) {
+        eprintln!("Note: couldn't record this viewer's link for others to find: {e}");
+    }
     let url = link(port, &key);
     println!("Agent Graph viewer: {url}");
     println!("Reading events from {}", events_dir.display());
