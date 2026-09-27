@@ -242,7 +242,11 @@ pub fn graph_with(
     titles: &BTreeMap<String, String>,
 ) -> Result<String, ApiError> {
     let (mut graph, count, _) = graph_at(events, until, now, stale_after)?;
-    retitle(&mut graph, titles);
+    // Names read since the log's are for now; a step back has the name the
+    // session had then.
+    if until.is_none() {
+        retitle(&mut graph, titles);
+    }
     let sessions = graph
         .roots
         .iter()
@@ -373,22 +377,60 @@ pub fn timeline(
 }
 
 /// Every event in the tree under `root`, as `now` (all of `events`,
-/// reduced) has it, labelled.
+/// reduced) has it, labelled. One that gives a session a new name says so.
 fn stops(events: &[Timed], now: &Graph, root: &str) -> Vec<Stop> {
     let members = subtree(now, root);
-    // A log that starts from a keyframe starts there.
+    // A log that starts from a keyframe starts there, with the names it has.
     let (base, rest) = split_base(events);
+    let mut titles: BTreeMap<String, String> = base
+        .map(|e| {
+            let opts = reducer::Options {
+                now: SystemTime::UNIX_EPOCH,
+                stale_after: Duration::ZERO,
+            };
+            reducer::reduce_from(Some(e), Vec::new(), &opts)
+                .nodes
+                .into_values()
+                .filter_map(|n| Some((n.id, n.title?)))
+                .collect()
+        })
+        .unwrap_or_default();
     let base = base.map(|e| Stop {
         node: root.to_string(),
         ..stop(e, now)
     });
-    base.into_iter()
-        .chain(
-            rest.iter()
-                .filter(|t| members.contains(t.event.node.as_str()))
-                .map(|t| stop(&t.event, now)),
-        )
-        .collect()
+    let rest = rest
+        .iter()
+        .filter(|t| members.contains(t.event.node.as_str()))
+        .map(|t| {
+            let e = &t.event;
+            let mut stop = stop(e, now);
+            if let Some(title) = new_title(e, &titles) {
+                // A session's first name comes with its start; only a
+                // later one is news.
+                let was = titles.insert(e.node.clone(), title.clone());
+                if was.is_some() || e.kind != "session.started" {
+                    let verb = if was.is_some() { "renamed" } else { "named" };
+                    stop.category = "lifecycle";
+                    stop.label = format!("{}; {verb} “{title}”", stop.label);
+                }
+            }
+            stop
+        });
+    base.into_iter().chain(rest).collect()
+}
+
+/// The name `e` gives its session, if it's not the one it had.
+fn new_title(e: &Envelope, titles: &BTreeMap<String, String>) -> Option<String> {
+    let title = match e.kind.as_str() {
+        "status" | "session.started" => match e.payload() {
+            Payload::Status(d) => d.title,
+            Payload::SessionStarted(d) => d.title,
+            _ => None,
+        },
+        _ => None,
+    }?;
+    (titles.get(&e.node) != Some(&title)).then_some(title)
 }
 
 fn position(events: &[Timed], id: &str) -> Result<usize, ApiError> {
@@ -439,8 +481,8 @@ fn stop(e: &Envelope, graph: &Graph) -> Stop {
 /// A name for a node referred to from somewhere else: sessions by folder.
 fn other_name(graph: &Graph, id: &str) -> String {
     match graph.nodes.get(id) {
-        Some(node) if node.kind == NodeKind::Session => match &node.title {
-            Some(title) => title.clone(),
+        Some(node) if node.kind == NodeKind::Session => match crate::render::session_title(node) {
+            Some(title) => title,
             None => node
                 .cwd
                 .as_deref()
@@ -871,6 +913,61 @@ mod tests {
             .collect();
         sort(&mut events);
         events
+    }
+
+    /// A session's name is in its log when it changes, and a step back
+    /// shows the name it had then, not one read since.
+    #[test]
+    fn a_rename_is_in_the_log_and_a_step_back_has_the_name_of_then() {
+        let events = events_of(&[
+            ("x:a", "session.started", r#"{"cwd":"/w/app"}"#),
+            ("x:a", "status", r#"{"state":"working","title":"First"}"#),
+            ("x:a", "status", r#"{"state":"idle","title":"First"}"#),
+            ("x:a", "status", r#"{"state":"working","title":"Second"}"#),
+        ]);
+        let json: Value =
+            serde_json::from_str(&timeline(&events, "x:a", SystemTime::now(), STALE).unwrap())
+                .unwrap();
+        let labels: Vec<&str> = json["stops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Session started",
+                "Session is working; named “First”",
+                "Session finished its turn",
+                "Session is working; renamed “Second”",
+            ]
+        );
+        assert_eq!(json["stops"][3]["category"], "lifecycle");
+
+        let titles = BTreeMap::from([("x:a".to_string(), "Third".to_string())]);
+        let at = |until: Option<&str>| -> Value {
+            serde_json::from_str(
+                &graph_with(
+                    &events,
+                    until,
+                    Some("x:a"),
+                    SystemTime::now(),
+                    STALE,
+                    LOCAL,
+                    &titles,
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            at(None)["nodes"]["x:a"]["title"],
+            "Third",
+            "now: the latest read"
+        );
+        let second = events[2].event.id.clone();
+        assert_eq!(at(Some(&second))["nodes"]["x:a"]["title"], "First", "then");
     }
 
     /// R23: a graph carries the tree it was asked for, what names the nodes

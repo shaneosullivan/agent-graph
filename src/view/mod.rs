@@ -579,7 +579,9 @@ fn image(
     titles: &BTreeMap<String, String>,
 ) -> Result<Vec<u8>, ApiError> {
     let (mut graph, _, now) = api::graph_at(events, until, crate::clock::now(), stale_after)?;
-    api::retitle(&mut graph, titles);
+    if until.is_none() {
+        api::retitle(&mut graph, titles);
+    }
     if !graph.nodes.contains_key(root) {
         return Err(ApiError::NotFound(format!("no node {root} at that point")));
     }
