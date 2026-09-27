@@ -134,5 +134,4 @@ Scoop's shims and npm's global folder don't change between versions, so they nee
 
 ## Before the first release
 
-- **No license yet.** There's no `LICENSE` file or `license` in `Cargo.toml`, so the formula and the npm package have none, and nobody may, strictly, use the code. Add one before publishing.
 - **The Windows ARM build is cross-compiled** (cargo-xwin on Linux), the build most likely to need fixing on the first run. If it can't be made to work, dist can build it natively on `windows-11-arm` instead (`github-custom-runners` in the config).

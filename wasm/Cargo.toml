@@ -3,6 +3,7 @@ name = "agent-graph-wasm"
 version = "0.1.0"
 edition = "2024"
 description = "Agent Graph's reducer and timeline for the browser, as WebAssembly"
+license = "MIT"
 publish = false
 
 # Built for the site, not released as a program.
