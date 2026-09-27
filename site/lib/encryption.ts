@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 
 /**
  * Encrypts log chunks before they're stored, so Firestore only ever holds
@@ -32,13 +32,44 @@ const KEY_BYTES = 32;
 
 let master: Buffer | undefined;
 
+/**
+ * What a key that's the wrong size actually is, to tell a bad value from one
+ * that never arrived, without showing it: its length, what isn't base64url
+ * in it, what it decodes to, and a fingerprint to compare with the intended
+ * key's (the same command on it, with the value in KEY). A fingerprint of a
+ * random 32-byte key tells nothing about it.
+ */
+function describeKey(value: string, decoded: Buffer): string {
+  const others = [...value].filter((c) => !/[A-Za-z0-9_-]/.test(c));
+  const fingerprint = createHash("sha256").update(value).digest("hex").slice(0, 12);
+  const where = process.env.VERCEL_ENV ? ` (Vercel environment: ${process.env.VERCEL_ENV})` : "";
+  return (
+    `The value here${where} is ${value.length} characters` +
+    (others.length ? `, ${others.length} of them not letters, digits, - or _ (${describeChars(others)})` : "") +
+    `, and decodes to ${decoded.length} bytes. Its fingerprint is ${fingerprint}. To compare it with the key you ` +
+    `meant to set, run: KEY='<that key>' node -e "console.log(require('crypto').createHash('sha256').update(process.env.KEY).digest('hex').slice(0, 12))". ` +
+    `Generate a key with: node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`
+  );
+}
+
+/** Characters that aren't base64url, named (never the key's own). */
+function describeChars(chars: string[]): string {
+  const names: Record<string, string> = { " ": "space", "\n": "newline", "\r": "carriage return", "\t": "tab", '"': "double quote", "'": "single quote", "=": "=", "+": "+", "/": "/" };
+  const counts = new Map<string, number>();
+  for (const c of chars) {
+    const name = names[c] ?? `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return [...counts].map(([name, n]) => (n > 1 ? `${n} × ${name}` : name)).join(", ");
+}
+
 function masterKey(): Buffer {
   if (master) return master;
   const value = process.env.AGENT_GRAPH_ENCRYPTION_KEY;
   if (value) {
     const key = Buffer.from(value, "base64url");
     if (key.length !== KEY_BYTES) {
-      throw new Error("AGENT_GRAPH_ENCRYPTION_KEY must be 32 bytes, base64url-encoded");
+      throw new Error(`AGENT_GRAPH_ENCRYPTION_KEY must be 32 bytes, base64url-encoded. ${describeKey(value, key)}`);
     }
     master = key;
   } else if (process.env.NODE_ENV === "production") {
