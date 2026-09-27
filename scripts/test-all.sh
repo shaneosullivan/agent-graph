@@ -10,6 +10,9 @@ step() {
   "$@"
 }
 
+# The toolchain's wasm linker, on a Mac, if it can't find its library.
+step bash scripts/fix-rust-lld.sh
+
 # Rust.
 step cargo fmt --all --check
 step cargo clippy --workspace --all-targets -- -D warnings

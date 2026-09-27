@@ -9,7 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "sync-viewer": "node scripts/sync-viewer.mjs",
-    "build-wasm": "node scripts/sync-viewer.mjs --wasm",
+    "build-wasm": "bash ../scripts/fix-rust-lld.sh && node scripts/sync-viewer.mjs --wasm",
     "copy-help": "node scripts/copy-help.mjs",
     "predev": "node scripts/copy-help.mjs && node scripts/sync-viewer.mjs --if-present",
     "prebuild": "node scripts/copy-help.mjs && node scripts/sync-viewer.mjs --if-present",
