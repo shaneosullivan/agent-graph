@@ -1,26 +1,28 @@
 #!/usr/bin/env bash
 # Builds release binaries (the `dist` profile, as a release does) for macOS,
 # Linux and Windows on this Mac, to test before releasing
-# (docs/local-builds.md). By default, for ARM on each: the Mac's own, and
-# what Docker and a Windows on ARM virtual machine run natively here.
+# (docs/local-builds.md). Every target a release ships: ARM and x86_64
+# for each.
 #
-#   scripts/build-local.sh           # ARM: macOS, Linux, Windows
-#   scripts/build-local.sh --x86     # and x86_64 Linux and Windows too
+#   scripts/build-local.sh
 #
-# The binaries are copied to target/dist/mac, linux and windows, one file
-# in each (and with --x86, an agent-graph-x86_64 beside it). Needs an Apple
-# Silicon Mac, with:
+# The binaries are copied to target/dist/mac, linux and windows: the ARM
+# build as agent-graph, and the x86_64 one beside it as agent-graph-x86_64.
+# Needs an Apple Silicon Mac, with:
 #   Linux:   brew install zig && cargo install cargo-zigbuild
 #   Windows: brew install llvm && cargo install cargo-xwin
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-targets=(aarch64-apple-darwin aarch64-unknown-linux-musl aarch64-pc-windows-msvc)
+targets=(
+  aarch64-apple-darwin x86_64-apple-darwin
+  aarch64-unknown-linux-musl x86_64-unknown-linux-musl
+  aarch64-pc-windows-msvc x86_64-pc-windows-msvc
+)
 for arg in "$@"; do
   case "$arg" in
-    --x86) targets+=(x86_64-unknown-linux-musl x86_64-pc-windows-msvc) ;;
     -h | --help)
-      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -109,8 +111,8 @@ for target in "${targets[@]}"; do
   "${build[@]}" --profile dist --target "$target"
 done
 
-# Where each build is copied: one file per folder, named for its OS, and
-# the x86_64 builds (--x86) beside the ARM ones, named for their arch.
+# Where each build is copied: one folder per OS, the ARM build named for
+# it, and the x86_64 build beside it, named for its arch.
 # (target/dist is also cargo's folder for the dist profile's build scripts,
 # so only these three folders are replaced.)
 out=target/dist
@@ -135,9 +137,17 @@ for target in "${targets[@]}"; do
   printf '%s\n    %s\n' "$bin" "$(file -b "$bin")"
 done
 
-# Runs what this Mac can: its own build, and Linux's in Docker if it's up.
+# Runs what this Mac can: its own builds (the Intel one with Rosetta, if
+# it's installed), and Linux's in Docker if it's up.
 printf '\n==> Smoke test: running each binary this Mac can\n'
+printf '%s: ' "$(dest aarch64-apple-darwin)"
 "$(dest aarch64-apple-darwin)" --version
+if arch -x86_64 /usr/bin/true 2>/dev/null; then
+  printf '%s (Rosetta): ' "$(dest x86_64-apple-darwin)"
+  arch -x86_64 "$(dest x86_64-apple-darwin)" --version
+else
+  echo "(Rosetta isn't installed, so the Intel Mac binary was built but not tested: softwareupdate --install-rosetta.)"
+fi
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   for target in "${targets[@]}"; do
     case "$target" in
@@ -151,4 +161,4 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 else
   echo "(Docker isn't running, so the Linux binaries were built but not tested. Start Docker and run this again to test them.)"
 fi
-echo "The Windows binaries can't run on a Mac, so they weren't tested: copy $out/windows/agent-graph.exe to a Windows on ARM virtual machine to try it."
+echo "The Windows binaries can't run on a Mac, so they weren't tested: copy $out/windows/agent-graph.exe to a Windows on ARM virtual machine (or agent-graph-x86_64.exe to an x86_64 one) to try it."

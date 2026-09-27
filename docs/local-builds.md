@@ -10,17 +10,15 @@ On an Apple Silicon Mac, one script builds for macOS, Linux and Windows:
 scripts/build-local.sh
 ```
 
-It builds with the `dist` profile, as a release does, for ARM on each: the Mac's own, and what Docker and a Windows on ARM virtual machine run natively here. `--x86` adds x86_64 Linux and Windows. Each build is copied to a folder of its own, so they're easy to find:
+It builds with the `dist` profile, as a release does, for every target a release ships: ARM and x86_64 for each. The builds are copied to a folder per platform, so they're easy to find:
 
-| Platform | Binary |
-|---|---|
-| macOS (Apple Silicon) | `target/dist/mac/agent-graph` |
-| Linux (ARM, statically linked) | `target/dist/linux/agent-graph` |
-| Windows (ARM) | `target/dist/windows/agent-graph.exe` |
+| Platform | ARM | x86_64 |
+|---|---|---|
+| macOS | `target/dist/mac/agent-graph` | `target/dist/mac/agent-graph-x86_64` |
+| Linux (statically linked) | `target/dist/linux/agent-graph` | `target/dist/linux/agent-graph-x86_64` |
+| Windows | `target/dist/windows/agent-graph.exe` | `target/dist/windows/agent-graph-x86_64.exe` |
 
-With `--x86`, the x86_64 builds go beside them: `target/dist/linux/agent-graph-x86_64` and `target/dist/windows/agent-graph-x86_64.exe`.
-
-Then it runs what it can: the Mac build, and the Linux builds in Docker if Docker is running.
+Then it runs what it can: the Mac builds (the Intel one with Rosetta, if it's installed), and the Linux builds in Docker if Docker is running.
 
 The first time, install what it cross-compiles with (it says if any is missing, and adds the Rust targets itself):
 
