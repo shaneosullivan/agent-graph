@@ -2,15 +2,13 @@ import "./site.css";
 
 import Link from "next/link";
 
-import { Brand } from "./brand";
+import { SiteHeader } from "./site-header";
 
 export default function NotFound() {
   return (
     <div className="site">
       <div className="page">
-        <header className="top">
-          <Brand />
-        </header>
+        <SiteHeader />
         <div className="card narrow">
           <div className="card-body">
             <h1>There&rsquo;s nothing here</h1>

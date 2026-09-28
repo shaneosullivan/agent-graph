@@ -666,3 +666,88 @@ body {
     padding-top: 0;
   }
 }
+
+/* The header's Log in / Account link. */
+.site .top nav {
+  align-items: center;
+}
+.site .top nav .account-link {
+  display: inline-block;
+  min-width: 56px;
+  text-align: right;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Logging in, and the account page. */
+.site .auth-choice {
+  display: grid;
+  gap: 12px;
+}
+.site .button.secondary {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+}
+.site .button.google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.site .button.google svg {
+  width: 18px;
+  height: 18px;
+}
+.site .or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0;
+}
+.site .or::before,
+.site .or::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+.site .link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.site .auth-switch {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.site .notice {
+  color: var(--good);
+}
+.site .computers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.site .computers li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.site .computers .when {
+  color: var(--muted);
+  font-size: 13px;
+}

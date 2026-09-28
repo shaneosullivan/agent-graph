@@ -112,7 +112,7 @@ function logKey(id: string): Buffer {
 // Keys for other purposes, derived from the master key like the logs' own.
 const subKeys = new Map<string, Buffer>();
 
-function subKey(purpose: "storage-id" | "meta"): Buffer {
+function subKey(purpose: "storage-id" | "meta" | "account-log"): Buffer {
   let key = subKeys.get(purpose);
   if (!key) {
     key = Buffer.from(hkdfSync("sha256", masterKey(), "agent-graph", purpose, KEY_BYTES));
@@ -126,11 +126,44 @@ export function storageId(id: string): string {
   return createHmac("sha256", subKey("storage-id")).update(id).digest("base64url");
 }
 
-/** The MAC of log `id`'s metadata, which is stored with it. */
-export function metaTag(id: string, meta: { source: string; pw?: string }): string {
-  return createHmac("sha256", subKey("meta"))
-    .update(JSON.stringify(["meta/1", id, meta.source, meta.pw || null]))
-    .digest("base64url");
+/**
+ * The MAC of log `id`'s metadata, which is stored with it. A log with an
+ * owner (an account's live share) has it in the MAC too, so it can't be
+ * taken off, or changed.
+ */
+export function metaTag(id: string, meta: { source: string; pw?: string; owner?: string }): string {
+  const fields = meta.owner
+    ? ["meta/2", id, meta.source, meta.pw || null, meta.owner]
+    : ["meta/1", id, meta.source, meta.pw || null];
+  return createHmac("sha256", subKey("meta")).update(JSON.stringify(fields)).digest("base64url");
+}
+
+/**
+ * Log `id`, sealed for account `uid`'s record of its latest share
+ * (lib/accounts.ts): the database mustn't hold a log's id in the clear, and
+ * this one can't be moved to another account's record.
+ */
+export function sealLogId(uid: string, id: string): Buffer {
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", subKey("account-log"), iv);
+  cipher.setAAD(Buffer.from(`agent-graph:account:${uid}`));
+  const body = Buffer.concat([cipher.update(id, "utf8"), cipher.final()]);
+  return Buffer.concat([Buffer.of(VERSION), iv, body, cipher.getAuthTag()]);
+}
+
+/** The log id `sealLogId` sealed for `uid`, or null if it isn't one. */
+export function openLogId(uid: string, sealed: Uint8Array): string | null {
+  const data = Buffer.from(sealed);
+  if (data.length < 1 + IV_BYTES + TAG_BYTES || data[0] !== VERSION) return null;
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", subKey("account-log"), data.subarray(1, 1 + IV_BYTES));
+    decipher.setAAD(Buffer.from(`agent-graph:account:${uid}`));
+    decipher.setAuthTag(data.subarray(data.length - TAG_BYTES));
+    const body = data.subarray(1 + IV_BYTES, data.length - TAG_BYTES);
+    return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+  } catch {
+    return null;
+  }
 }
 
 /** What a chunk is bound to: its log and its place in it. */

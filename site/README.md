@@ -26,6 +26,15 @@ npm run build-wasm
 
 (`npm run dev` and `npm run build` re-copy the viewer files automatically when `../src` is present; only the WebAssembly needs this step. It records what it was built from in `agent_graph.wasm.sources` (the crate's files the build compiled, the crates it used with their versions and features, and the build profile), and CI fails if any of that has changed since: `node scripts/sync-viewer.mjs --check-wasm`. Paths on the build machine are left out of the binary.)
 
+## Accounts
+
+A live share (`agent-graph watch-remote`) belongs to an account, and only its owner can see it, at `/watch`. Pasted and uploaded logs stay anonymous, viewable by anyone with the link (and the password, if there is one).
+
+- **Logging in** (`app/login`) is Firebase Authentication in the browser: Google, or an email and password (with account creation and password reset). The browser talks to Firebase directly, so signing in costs the site nothing but one request, and Firebase limits password guesses itself. The sign-in is traded for the site's own session cookie (`__session`, HttpOnly, two weeks: `lib/auth.ts`), which the server checks; the browser's Firebase sign-in is then dropped. A second cookie, holding nothing, tells the header to show Account rather than Log in.
+- **The CLI** logs in through the browser too, as an OAuth client on the same computer would, with PKCE (`lib/accounts.ts`, `src/account.rs`): it opens `/login?cli=<port>&state=…&challenge=…`, and once logged in (and asked to connect it) the page sends the browser to `http://127.0.0.1:<port>/callback` with a one-time code, which the CLI trades, with its secret, for a token of its own. It sends the token to make a share (`Authorization: Bearer`), which is then its account's.
+- **What's stored:** `users/{uid}` is made when an account first logs in to the site, and holds its email, when it was made (`createdAt`), last logged in (`lastLoginAt`: in a browser, or the CLI on a computer) and last shared live (`lastWatchAt`), and that latest share's id, sealed (the database never holds a log's id in the clear); `cli-tokens/{sha256}` each computer's login, and `cli-codes/{sha256}` codes not yet traded, by their SHA-256, never as they are. A share's owner is in its metadata, and bound into its tag.
+- **Pages:** `/login`, `/account` (who's logged in, the latest share, the computers logged in, each with a way to log it out) and `/watch` (the latest share, in the viewer; logged out, it goes to `/login?next=/watch`).
+
 ## The API
 
 All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundaries.
@@ -81,7 +90,7 @@ Firestore's security rules (`firestore.rules`) deny all direct access; only the 
 
 ## Develop
 
-Requires Node 22, plus the Firebase CLI and Java for the Firestore emulator.
+Requires Node 22, plus the Firebase CLI and Java for the emulators (Firestore, and Authentication for accounts).
 
 ```bash
 npm install
@@ -93,7 +102,7 @@ This also sets up the repository's pre-commit hook (`../.githooks/pre-commit`), 
 cp .env.example .env.local
 ```
 
-In `.env.local`, uncomment the two emulator lines and set `AGENT_GRAPH_SECRET` and `AGENT_GRAPH_ENCRYPTION_KEY` (both generated as shown in the file). Then start the emulator:
+In `.env.local`, uncomment the emulator lines and set `AGENT_GRAPH_SECRET` and `AGENT_GRAPH_ENCRYPTION_KEY` (both generated as shown in the file). Then start the emulators (logging in then works with any email and password, and the emulator stands in for Google):
 
 ```bash
 npm run emulators
@@ -135,9 +144,10 @@ npm run test:ci
    ```bash
    firebase deploy --only firestore:rules --project <project-id>
    ```
-2. **Service account:** in Firebase, go to Project settings → Service accounts and generate a new private key.
-3. **Vercel:** import the repository and set **Root Directory** to `site`.
-4. **Environment variables:** set these in Vercel.
+2. **Service account:** in Firebase, go to Project settings → Service accounts and generate a new private key. It needs the **Firebase Authentication Admin** role as well as Firestore's (the site makes and checks session cookies with it).
+3. **Accounts:** in Firebase Authentication, enable the **Email/Password** and **Google** sign-in providers, and add `agentgraph.chofter.com` to **Settings → Authorized domains**. Add a web app (Project settings → Your apps) for its settings, below.
+4. **Vercel:** import the repository and set **Root Directory** to `site`.
+5. **Environment variables:** set these in Vercel.
    - `AGENT_GRAPH_SECRET`: 32+ random bytes. Generate one with:
      ```bash
      node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
@@ -147,9 +157,10 @@ npm run test:ci
    - `FIREBASE_SERVICE_ACCOUNT`: the service account's JSON key, on one line.
    - `NEXT_PUBLIC_SITE_URL`: `https://agentgraph.chofter.com`
    - `CRON_SECRET`: 32+ random bytes, generated the same way. Vercel Cron sends it to `/api/cron/cleanup` (see `vercel.json`), the daily deletion of logs with no event for a week, which does nothing without it.
-5. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
-6. **Optional:** add a Firestore TTL policy on the `unlock-attempts` collection's `expireAt` field, so counts of password guesses and scrypt runs are cleared away once their window is over.
-7. **Logs from before storage ids.** Logs created before logs were stored under an HMAC of their id can't be found by the new site until they're copied. Run the migration with the production environment: the same `AGENT_GRAPH_ENCRYPTION_KEY`, and `FIREBASE_SERVICE_ACCOUNT`. It refuses to run without the key, prints the project, and checks that the key decrypts the logs before writing anything.
+   - `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`: the web app's settings, from step 3. They're public by design (they identify the project; what's secret stays on the server), and built into the pages: redeploy after changing them.
+6. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
+7. **Optional:** add Firestore TTL policies on the `expireAt` field of the `unlock-attempts` collection, so counts of password guesses and scrypt runs are cleared away once their window is over, and of `cli-codes`, for logins the CLI never finished (an expired code is refused either way).
+8. **Logs from before storage ids.** Logs created before logs were stored under an HMAC of their id can't be found by the new site until they're copied. Run the migration with the production environment: the same `AGENT_GRAPH_ENCRYPTION_KEY`, and `FIREBASE_SERVICE_ACCOUNT`. It refuses to run without the key, prints the project, and checks that the key decrypts the logs before writing anything.
    1. Before deploying, copy the logs. The old site doesn't see the copies.
       ```bash
       npm run migrate:storage-ids

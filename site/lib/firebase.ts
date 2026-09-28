@@ -1,4 +1,12 @@
-import { type AppOptions, applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
+import {
+  type App,
+  type AppOptions,
+  applicationDefault,
+  cert,
+  getApps,
+  initializeApp,
+} from "firebase-admin/app";
+import { type Auth, getAuth } from "firebase-admin/auth";
 import { type Firestore, getFirestore } from "firebase-admin/firestore";
 
 /**
@@ -13,15 +21,24 @@ import { type Firestore, getFirestore } from "firebase-admin/firestore";
 const shared = globalThis as { agentGraphFirestore?: Firestore };
 
 export function firestore(): Firestore {
-  if (!shared.agentGraphFirestore) {
-    const app = getApps()[0] ?? initializeApp(options());
-    shared.agentGraphFirestore = getFirestore(app);
-  }
+  if (!shared.agentGraphFirestore) shared.agentGraphFirestore = getFirestore(app());
   return shared.agentGraphFirestore;
 }
 
+/**
+ * Firebase Authentication, for accounts (lib/auth.ts). With
+ * FIREBASE_AUTH_EMULATOR_HOST set, it talks to the local emulator.
+ */
+export function auth(): Auth {
+  return getAuth(app());
+}
+
+function app(): App {
+  return getApps()[0] ?? initializeApp(options());
+}
+
 function options(): AppOptions {
-  if (process.env.FIRESTORE_EMULATOR_HOST) {
+  if (process.env.FIRESTORE_EMULATOR_HOST || process.env.FIREBASE_AUTH_EMULATOR_HOST) {
     return { projectId: process.env.FIREBASE_PROJECT_ID || "demo-agent-graph" };
   }
   const key = process.env.FIREBASE_SERVICE_ACCOUNT;

@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 
+import { currentUser } from "@/lib/auth";
 import { ID_PATTERN, viewCookieName } from "@/lib/config";
 import { safeEqual, viewToken } from "@/lib/crypto";
 import { storageId } from "@/lib/encryption";
@@ -17,7 +18,8 @@ export const dynamic = "force-dynamic";
  *     (a trimmed log's first chunk isn't at 0; see `trimLog`)
  *   X-Last-Chunk: the key to pass as `after` next time (absent if none)
  *   X-More: 1 if there are more chunks to fetch right away
- * Password-protected logs need the cookie set by /unlock.
+ * Password-protected logs need the cookie set by /unlock; an account's live
+ * share, its owner's session (lib/auth.ts).
  */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const { id } = await params;
@@ -27,6 +29,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
   const meta = await getMeta(id);
   if (!meta) return new Response("Unknown log.", { status: 404 });
+  if (meta.owner && (await currentUser())?.uid !== meta.owner) {
+    return new Response("Log in to the account whose share this is.", { status: 401 });
+  }
   if (meta.pw) {
     const cookie = (await cookies()).get(viewCookieName(id))?.value;
     if (!safeEqual(cookie, viewToken(id, meta.pw))) {

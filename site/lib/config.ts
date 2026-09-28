@@ -172,3 +172,15 @@ export function addressBlock(address: string): string {
 export function isHttps(req: Request): boolean {
   return req.headers.get("x-forwarded-proto") === "https" || new URL(req.url).protocol === "https:";
 }
+
+/**
+ * Where to go once logged in: `next` if it's a path on this site, else
+ * `fallback`. (Never another site: an address that sends people elsewhere
+ * after logging in is a phishing tool.)
+ */
+export function safeNext(next: string | null | undefined, fallback = "/account"): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return fallback;
+  // No control characters (a tab or newline can hide a scheme).
+  if (/[\u0000-\u001f\u007f]/.test(next)) return fallback;
+  return next;
+}

@@ -61,7 +61,7 @@ function trim(id, before, key) {
 
 test("create, append with the key, and read back in order", async () => {
   const first = line(1) + line(2);
-  const log = await create(first, { "X-Agent-Graph-Source": "watch" });
+  const log = await create(first, { "X-Agent-Graph-Source": "upload" });
   assert.match(log.id, /^[A-Za-z0-9]{12}$/);
   assert.equal(log.url, `${BASE}/l/${log.id}`);
 
@@ -116,7 +116,7 @@ test("a chunk is never replaced with different bytes", async () => {
 test("a read stops at a byte budget, and paging gets the rest", async () => {
   const big = (n) => line(n).replace('"working"', `"working","summary":"${"x".repeat(400_000)}"`);
   const parts = Array.from({ length: 8 }, (_, i) => big(i + 1));
-  const log = await create(parts[0], { "X-Agent-Graph-Source": "watch" });
+  const log = await create(parts[0], { "X-Agent-Graph-Source": "upload" });
   let offset = Buffer.byteLength(parts[0]);
   for (const part of parts.slice(1)) {
     assert.equal((await append(log.id, offset, part, log.writeToken)).status, 204);

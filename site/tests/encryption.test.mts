@@ -6,7 +6,8 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 process.env.AGENT_GRAPH_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64url");
-const { decryptChunk, encryptChunk, metaTag, storageId } = await import("../lib/encryption.ts");
+const { decryptChunk, encryptChunk, metaTag, openLogId, sealLogId, storageId } =
+  await import("../lib/encryption.ts");
 
 const LOG = "AbCdEf123456";
 const CHUNK = "000000000000000";
@@ -174,4 +175,24 @@ test("a metadata tag covers the id, the source and the password", () => {
 test("storage ids and tags are keyed apart", () => {
   const meta = { source: "watch" };
   assert.notEqual(storageId(JSON.stringify(["meta/1", LOG, "watch", null])), metaTag(LOG, meta));
+});
+
+test("an owner is in a log's metadata tag, and a log without one keeps its tag", () => {
+  const plain = metaTag(LOG, { source: "watch" });
+  const owned = metaTag(LOG, { source: "watch", owner: "uid-1" });
+  assert.notEqual(owned, plain, "taking the owner off changes it");
+  assert.notEqual(owned, metaTag(LOG, { source: "watch", owner: "uid-2" }), "so does changing it");
+  // Logs made before owners keep the tags they were stored with.
+  assert.equal(plain, metaTag(LOG, { source: "watch", owner: undefined }));
+});
+
+test("an account's latest share is sealed for that account only", () => {
+  const sealed = sealLogId("uid-1", LOG);
+  assert.ok(!Buffer.from(sealed).includes(Buffer.from(LOG)), "not in the clear");
+  assert.equal(openLogId("uid-1", sealed), LOG);
+  assert.equal(openLogId("uid-2", sealed), null, "moved to another account's record");
+  const altered = Buffer.from(sealed);
+  altered[altered.length - 1] ^= 1;
+  assert.equal(openLogId("uid-1", altered), null, "altered");
+  assert.equal(openLogId("uid-1", Buffer.alloc(3)), null, "not one");
 });

@@ -7,6 +7,7 @@ import {
   type Source,
   siteUrl,
 } from "@/lib/config";
+import { accountOfRequest, setWatchLog } from "@/lib/accounts";
 import { hashPassword, newId, PasswordTooLong, passwordFromHeader, writeToken } from "@/lib/crypto";
 import { IdTaken, createLog, takeScryptRun } from "@/lib/store";
 import { tooMany } from "@/lib/unlock";
@@ -22,6 +23,10 @@ export const dynamic = "force-dynamic";
  *   X-Agent-Graph-Source: watch | paste | upload
  *   X-Agent-Graph-Password: base64url(UTF-8 password), optional (at most
  *   MAX_PASSWORD_BYTES)
+ *   Authorization: Bearer <CLI token>: an account's live share
+ *   (`agent-graph watch-remote`, logged in: lib/accounts.ts), which only
+ *   that account can view, at /watch. A live share (source `watch`) must
+ *   have one; it can't have a password as well.
  * Reply (201): { id, url, writeToken }. Send further chunks to
  * /api/logs/{id}/append with the write token. 429 (with Retry-After) if the
  * address has run scrypt too often lately (lib/config.ts).
@@ -35,6 +40,23 @@ export async function POST(req: Request): Promise<Response> {
 
   const header = req.headers.get("x-agent-graph-source") as Source | null;
   const source: Source = header && SOURCES.includes(header) ? header : "paste";
+
+  const account = req.headers.has("authorization") ? await accountOfRequest(req) : null;
+  if (req.headers.has("authorization") && !account) {
+    return new Response("That login has ended. Log in again: agent-graph watch-remote asks you to.", {
+      status: 401,
+    });
+  }
+  if (source === "watch" && !account) {
+    return new Response("Sharing live needs you to be logged in. Update agent-graph, and run it again.", {
+      status: 401,
+    });
+  }
+  if (account && req.headers.has("x-agent-graph-password")) {
+    return new Response("A share of your own is private to your account: it can't have a password.", {
+      status: 400,
+    });
+  }
 
   let password: string | null;
   try {
@@ -55,13 +77,15 @@ export async function POST(req: Request): Promise<Response> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const id = newId();
     try {
-      await createLog(id, { source, pw }, text);
+      await createLog(id, { source, pw, ...(account ? { owner: account.uid } : {}) }, text);
     } catch (err) {
       if (err instanceof IdTaken) continue;
       throw err;
     }
+    if (account) await setWatchLog(account.uid, id);
+    const url = account ? `${siteUrl(req)}/watch` : `${siteUrl(req)}/l/${id}`;
     return Response.json(
-      { id, url: `${siteUrl(req)}/l/${id}`, writeToken: writeToken(id) },
+      { id, url, writeToken: writeToken(id) },
       { status: 201, headers: { "Cache-Control": "no-store" } },
     );
   }

@@ -5,8 +5,8 @@ import { Fragment } from "react";
 import cliHelp from "@/lib/cli-help.json";
 import { type Help, Inline } from "@/lib/help-render";
 
-import { Brand } from "./brand";
 import { Install } from "./install";
+import { SiteHeader } from "./site-header";
 import { Uploader } from "./uploader";
 
 const watchRemote = (cliHelp as unknown as Help).commands.find((c) => c.name === "watch-remote")!;
@@ -15,14 +15,13 @@ export default function Home() {
   return (
     <div className="site">
       <div className="page">
-        <header className="top">
-          <Brand />
-          <nav>
-            <a href="#install">Install</a>
-            <a href="#live">Share live</a>
-            <a href="/docs">Docs</a>
-          </nav>
-        </header>
+        <SiteHeader
+          links={[
+            { href: "#install", label: "Install" },
+            { href: "#live", label: "Share live" },
+            { href: "/docs", label: "Docs" },
+          ]}
+        />
 
         <section className="hero">
           <h1>See what your AI coding agents are doing, and share it.</h1>
@@ -40,8 +39,9 @@ export default function Home() {
         <section className="section" id="live">
           <h2>Share live from your machine</h2>
           <p>
-            With the <code>agent-graph</code> command installed, this prints a link straight away and keeps
-            the page up to date as your agents work:
+            With the <code>agent-graph</code> command installed, this shares to your account (logging you in
+            the first time) and keeps it up to date as your agents work. Only you can see it, at{" "}
+            <a href="/watch">/watch</a>:
           </p>
           <code className="command">agent-graph watch-remote</code>
           {/* The same text as `agent-graph watch-remote --help`. */}
@@ -99,8 +99,9 @@ export default function Home() {
         </section>
 
         <footer className="foot">
-          Shared logs are stored so that anyone with the link can view them, unless you set a password. By
-          default Agent Graph records task names and agent descriptions, not prompts or tool output.
+          A pasted or uploaded log can be viewed by anyone with its link, unless you set a password; a live
+          share is only yours. By default Agent Graph records task names and agent descriptions, not prompts
+          or tool output.
         </footer>
       </div>
     </div>

@@ -5,7 +5,7 @@ import "../../site.css";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { Brand } from "../../brand";
+import { SiteHeader } from "../../site-header";
 
 export function Unlock({ id }: { id: string }) {
   const router = useRouter();
@@ -33,9 +33,7 @@ export function Unlock({ id }: { id: string }) {
   return (
     <div className="site">
       <div className="page">
-        <header className="top">
-          <Brand />
-        </header>
+        <SiteHeader />
         <form className="card narrow" onSubmit={submit}>
           <div className="card-body">
             <h1>This log is password protected</h1>

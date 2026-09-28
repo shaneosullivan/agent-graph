@@ -21,7 +21,7 @@ import { firestore } from "./firebase";
 /**
  * How logs are kept in Firestore:
  *
- *   logs/{sid}                 { source, pw?, createdAt, mac, stored }
+ *   logs/{sid}                 { source, pw?, owner?, createdAt, mac, stored }
  *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, n: <its length>, t: <when written> }
  *   unlock-attempts/{bucket}   { n, since, at, expireAt }  (password guesses, and scrypt runs)
  *
@@ -56,6 +56,8 @@ export type Meta = {
   source: Source;
   /** scrypt hash of the viewer password, if there is one. */
   pw?: string;
+  /** The account whose live share it is, if it's one: only they can view it. */
+  owner?: string;
   createdAt: Timestamp;
 };
 
@@ -76,10 +78,12 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   const log = logDoc(id);
   const batch = firestore().batch();
   // `create` fails if the id is already taken, rather than overwriting it.
-  // (Firestore rejects undefined fields, so `pw` is only set when present.)
+  // (Firestore rejects undefined fields, so `pw` and `owner` are only set
+  // when present.)
   batch.create(log, {
     source: meta.source,
     ...(meta.pw ? { pw: meta.pw } : {}),
+    ...(meta.owner ? { owner: meta.owner } : {}),
     createdAt: Timestamp.now(),
     mac: metaTag(id, meta),
     stored: Buffer.byteLength(text),
@@ -276,9 +280,9 @@ export async function getMeta(id: string, now = Date.now()): Promise<Meta | null
   let meta: Meta | null = null;
   // (One being deleted is gone.)
   if (snap.exists && !snap.get("deleting")) {
-    const { source, pw, createdAt, mac } = snap.data() as Meta & { mac?: unknown };
-    if (typeof mac === "string" && safeEqual(mac, metaTag(id, { source, pw }))) {
-      meta = { source, ...(pw ? { pw } : {}), createdAt };
+    const { source, pw, owner, createdAt, mac } = snap.data() as Meta & { mac?: unknown };
+    if (typeof mac === "string" && safeEqual(mac, metaTag(id, { source, pw, owner }))) {
+      meta = { source, ...(pw ? { pw } : {}), ...(owner ? { owner } : {}), createdAt };
     } else {
       // Named by where it's stored: the log's id is what lets people read it.
       console.error(`The metadata of logs/${storageId(id)} doesn't match its tag; treated as missing.`);

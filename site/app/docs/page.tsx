@@ -5,7 +5,7 @@ import type { Metadata } from "next";
 import cliHelp from "@/lib/cli-help.json";
 import { Blocks, Examples, type Help, Inline, Options } from "@/lib/help-render";
 
-import { Brand } from "../brand";
+import { SiteHeader } from "../site-header";
 
 // The same text `agent-graph --help` prints: lib/cli-help.json is copied from
 // docs/cli-help.json (which build.rs compiles into the binary) by `npm run dev`
@@ -21,13 +21,12 @@ export default function Docs() {
   return (
     <div className="site">
       <div className="page docs">
-        <header className="top">
-          <Brand />
-          <nav>
-            <a href="/">Share a log</a>
-            <a href="/docs">Docs</a>
-          </nav>
-        </header>
+        <SiteHeader
+          links={[
+            { href: "/", label: "Share a log" },
+            { href: "/docs", label: "Docs" },
+          ]}
+        />
 
         <div className="docs-layout">
           <aside className="docs-nav" aria-label="Commands">
