@@ -11,11 +11,22 @@
 <body>
 <div class="app">
   <header class="topbar">
+    <button id="back" class="back-btn" type="button" hidden>
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
+      Sessions
+    </button>
     <div class="brand">
       <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M9 9v14M9 16h14" stroke="currentColor" stroke-width="2.5" fill="none"/><circle cx="9" cy="8" r="4.5" class="b1"/><circle cx="24" cy="16" r="4.5" class="b2"/><circle cx="9" cy="24" r="4.5" class="b3"/></svg>
       <span>Agent Graph</span>
     </div>
-    <div id="mode" class="mode" role="status" aria-live="polite"></div>
+    <div class="topbar-end">
+      <div id="page-toggles" class="toggles" hidden>
+        <label class="toggle done-toggle" title="Include finished agents and the sessions they started">
+          <input type="checkbox" id="show-done-page" checked> Completed
+        </label>
+      </div>
+      <div id="mode" class="mode" role="status" aria-live="polite"></div>
+    </div>
   </header>
 
   <div class="layout">
@@ -23,12 +34,16 @@
       <div class="panel-head">
         <h2 id="sessions-title">Sessions</h2>
         <div class="toggles">
-          <label class="toggle" title="Include finished sessions, agents and the sessions they started">
+          <label class="toggle done-toggle" title="Include finished sessions, agents and the sessions they started">
             <input type="checkbox" id="show-done" checked> Completed
           </label>
           <label class="toggle" title="Include sessions with no activity in the last 24 hours">
             <input type="checkbox" id="show-all"> Older
           </label>
+          <details id="app-filter" class="app-filter" hidden>
+            <summary class="toggle" title="Show sessions from these apps">Apps: <span id="app-filter-label">All</span></summary>
+            <div class="app-menu" role="group" aria-label="Apps to show"></div>
+          </details>
         </div>
         <div id="attention" class="attention-nav" hidden></div>
       </div>

@@ -6,3 +6,7 @@
 
 # Secrets: the Firebase service account key
 /config/
+
+# What a viewer or share run on the example logs records beside them
+/examples/logs/view-*.json
+/examples/logs/shares/

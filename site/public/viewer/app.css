@@ -125,7 +125,7 @@ h1, h2, h3 { margin: 0; }
   padding: 14px 16px 10px; background: var(--panel-2);
 }
 .panel-head h2 { white-space: nowrap; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-.toggles { display: flex; align-items: center; gap: 10px; }
+.toggles { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .toggle { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; color: var(--muted); cursor: pointer; }
 .session-list { list-style: none; margin: 0; padding: 0 8px 16px; }
 .session {
@@ -153,6 +153,31 @@ h1, h2, h3 { margin: 0; }
 .attention-nav .icon-btn { width: 26px; height: 26px; background: var(--panel); color: var(--text); }
 .session .dot { grid-row: 1 / span 3; margin-top: 6px; }
 .s-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The app a session ran in, before its name. */
+.app-icon { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; border-radius: 3px; flex: none; }
+
+/* The Apps dropdown: a checkbox per app, over the list. */
+.app-filter { position: relative; }
+.app-filter[hidden] { display: none; }
+.app-filter > summary { list-style: none; user-select: none; }
+.app-filter > summary::-webkit-details-marker { display: none; }
+.app-filter > summary::after { content: "▾"; font-size: 10px; }
+.app-filter[open] > summary { color: var(--text); }
+.app-menu {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 5;
+  min-width: 190px; max-width: calc(100vw - 32px); padding: 6px; display: grid; gap: 1px;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+}
+/* Directly below the button: from its left edge, or, without room for that
+   (it's at the end of a row), to its right edge (see `placeAppMenu`). */
+.app-menu.from-end { left: auto; right: 0; }
+.app-menu label { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; font-size: 13px; color: var(--text); cursor: pointer; white-space: nowrap; }
+.app-menu label:hover { background: var(--panel-2); }
+.app-menu .app-icon { margin-right: 0; }
+.app-menu .count { margin-left: auto; padding-left: 12px; color: var(--faint); font-size: 12px; }
+.app-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 .s-when { color: var(--faint); font-size: 12px; white-space: nowrap; }
 .s-sub, .s-meta { grid-column: 2 / span 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 .s-sub { color: var(--muted); }
@@ -417,11 +442,50 @@ main { padding: 22px 28px 40px; }
   .detail { max-height: 40vh; }
 }
 @media (max-width: 720px) {
-  .app { height: auto; min-height: 100%; overflow: visible; grid-template-rows: auto auto auto; }
-  .layout { display: block; }
+  /* Content shorter than the window (a session's page, say) leaves the top
+     bar and timeline their own height; the middle takes the rest. */
+  .app { height: auto; min-height: 100%; overflow: visible; grid-template-rows: auto 1fr auto; }
+  /* Stacked; the details, last, fill what's left above the timeline. */
+  .layout { display: flex; flex-direction: column; }
+  .layout > .detail { flex: 1 0 auto; max-height: none; }
   .layout > * { overflow: visible; }
   .sessions { border-right: none; border-bottom: 1px solid var(--line); }
   main { padding: 16px; }
   .timeline { grid-template-areas: "steppers live" "track track" "caption caption"; grid-template-columns: auto 1fr; position: sticky; bottom: 0; }
   .legend { display: none; }
+
+  /* A session chosen in the list opens as a page of its own, with a way back. */
+  body.paged .sessions, body.paged .brand { display: none; }
+  body.paged .topbar { position: sticky; top: 0; z-index: 10; }
+
+  /* Going between the list and a session's page (see `transition`): the
+     page fades, the new one rising a little, while the session's name
+     moves between the list and the heading. */
+  ::view-transition-old(root) { animation: 160ms ease-out both page-out; }
+  ::view-transition-new(root) { animation: 280ms 60ms cubic-bezier(0.2, 0.8, 0.2, 1) both page-in; }
+  ::view-transition-group(session-name) { animation-duration: 340ms; animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1); }
+  /* "Completed" moves between the list's head and the top bar. Only one of
+     the two is ever shown, so they can share a name. */
+  .done-toggle { view-transition-name: completed-toggle; }
+  /* The status pill ("Live", "Reconnecting…") stays solid, gliding to where
+     it is on the other page, rather than fading with it. */
+  #mode { view-transition-name: mode-pill; }
+  ::view-transition-group(completed-toggle), ::view-transition-group(mode-pill) {
+    animation-duration: 340ms; animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  /* The name's two sizes, scaled between, rather than squashed. */
+  ::view-transition-old(session-name), ::view-transition-new(session-name) { height: 100%; width: auto; object-fit: contain; }
 }
+@keyframes page-out { to { opacity: 0; } }
+@keyframes page-in { from { opacity: 0; transform: translateY(10px); } }
+.back-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: -6px; padding: 6px 10px 6px 4px;
+  background: none; border: none; border-radius: 8px;
+  color: var(--accent); font: inherit; font-weight: 600; cursor: pointer;
+}
+.back-btn[hidden] { display: none; }
+.topbar-end { display: flex; align-items: center; gap: 12px; }
+#page-toggles[hidden] { display: none; }
+.back-btn:hover { background: var(--accent-soft); }
+.back-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }

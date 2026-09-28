@@ -25,6 +25,7 @@ const S = {
   following: true, // stay on the newest stop as events arrive
   showAll: false,
   showDone: savedShowDone(), // show finished sessions and agents
+  hiddenApps: savedHiddenApps(), // apps whose sessions the list leaves out (see `renderAppFilter`)
   connected: false,
   info: null,
   cache: new Map(), // event id -> graph at that stop, least recently shown first (a new map on each refresh)
@@ -225,6 +226,51 @@ const short = (id) => localId(id).slice(0, 8);
 const basename = (p) => (p ? p.split(/[\\/]/).filter(Boolean).pop() : null);
 
 const PROVIDER_NAME = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor' };
+/** The app a session ran in, as the list names it. */
+const appName = (provider) => PROVIDER_NAME[provider] || (provider === 'run' ? 'agent-graph run' : provider);
+
+/** A 16×16 SVG, as an image the page's policy lets it show. */
+const svgImage = (body) =>
+  `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${body}</svg>`)}`;
+
+/**
+ * A small mark for each app, in its colours, to tell sessions apart at a
+ * glance. Simple drawings, not the apps' own logos.
+ */
+const APP_ICON = {
+  // A spark, in Claude's orange.
+  'claude-code': svgImage(
+    '<rect width="16" height="16" rx="4" fill="#D97757"/><path d="M8 3.2v9.6M3.2 8h9.6M4.6 4.6l6.8 6.8M11.4 4.6l-6.8 6.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>',
+  ),
+  // A prompt.
+  codex: svgImage(
+    '<rect width="16" height="16" rx="4" fill="#111"/><path d="M4 5.5 6.5 8 4 10.5" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 11h4" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>',
+  ),
+  // A four-pointed star, blue to violet.
+  gemini: svgImage(
+    '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4285F4"/><stop offset="1" stop-color="#9B72CB"/></linearGradient></defs><path d="M8 1c.6 3.6 3.4 6.4 7 7-3.6.6-6.4 3.4-7 7-.6-3.6-3.4-6.4-7-7 3.6-.6 6.4-3.4 7-7z" fill="url(#g)"/>',
+  ),
+  // A cube.
+  cursor: svgImage(
+    '<rect width="16" height="16" rx="4" fill="#1b1b1b"/><path d="M8 3l4.5 2.6v4.8L8 13l-4.5-2.6V5.6z" fill="none" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/><path d="M3.5 5.6 8 8.2l4.5-2.6M8 8.2V13" fill="none" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>',
+  ),
+  // A command run with `agent-graph run`: a play button.
+  run: svgImage('<rect width="16" height="16" rx="4" fill="#6b7280"/><path d="M6.2 4.6v6.8L11.6 8z" fill="#fff"/>'),
+};
+
+/** Another app's mark: the first letter of its name. */
+const letterIcon = (provider) =>
+  svgImage(
+    `<rect width="16" height="16" rx="4" fill="#6b7280"/><text x="8" y="11.6" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" font-weight="700" fill="#fff">${
+      (appName(provider)[0] || '?').toUpperCase().replace(/[^A-Z0-9]/, '?')
+    }</text>`,
+  );
+
+/** The icon of the app a session ran in, named for screen readers and on hover. */
+function appIcon(provider) {
+  const name = appName(provider);
+  return h('img', { class: 'app-icon', src: APP_ICON[provider] || letterIcon(provider), alt: name, title: name, width: 16, height: 16 });
+}
 
 function nodeName(node) {
   if (!node) return 'Unknown';
@@ -322,7 +368,7 @@ async function refresh() {
   if (live.root !== S.root && back) {
     // The address named a node that doesn't exist: back to the one it was on
     // (if that has gone too, the refresh that follows says so).
-    history.replaceState(null, '', `#${encodeURIComponent(back)}`);
+    history.replaceState(history.state, '', `#${encodeURIComponent(back)}`);
     switchTo(back);
     return;
   }
@@ -333,6 +379,18 @@ async function refresh() {
     forgetLoads();
     const tree = live.root;
     S.root = tree && (tree === asked || visibleRoots().includes(tree)) ? tree : null;
+    // The list hides that one (it's another app's, say): the newest it shows.
+    const listed = !S.root && tree ? visibleRoots()[0] : null;
+    if (listed) {
+      S.root = S.selected = listed;
+      S.following = true;
+      S.shown = S.live;
+      S.stops = [];
+      S.pos = -1;
+      scheduleRefresh();
+      renderAll();
+      return;
+    }
     S.selected = S.root;
     S.following = true;
     S.shown = S.live;
@@ -427,7 +485,85 @@ function goLive() {
 
 /** Shows the tree under `id`, if the live graph has it (it may have gone since the list was drawn). */
 function selectRoot(id) {
-  if (known(id)) switchTo(id);
+  if (!known(id)) return;
+  const open = () => {
+    switchTo(id);
+    openPage();
+  };
+  // Opening a session's page: its name moves from the list to the heading.
+  if (NARROW.matches && !paged()) {
+    const item = [...document.querySelectorAll('.session')].find((b) => b.dataset.id === id);
+    transition(open, item && item.querySelector('.s-name'), headingName);
+  } else open();
+}
+
+const headingName = () => document.querySelector('#view .h-name');
+const listedName = () => document.querySelector('.session.selected .s-name');
+
+/**
+ * Runs `update` as a view transition (where the browser has them, and motion
+ * isn't reduced): the page fades from before to after, and the session's
+ * name moves from `from` (an element now) to where `to()` (after) is.
+ */
+function transition(update, from, to) {
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!document.startViewTransition || still || !from) {
+    update();
+    return;
+  }
+  from.style.viewTransitionName = 'session-name';
+  const t = document.startViewTransition(() => {
+    from.style.viewTransitionName = '';
+    update();
+    const target = to();
+    if (target) target.style.viewTransitionName = 'session-name';
+  });
+  // Cut short (another tap, or the page hidden) isn't a failure: the change
+  // is made either way. Its name is freed once it's done.
+  const done = () => {
+    const target = to();
+    if (target) target.style.viewTransitionName = '';
+  };
+  t.updateCallbackDone.catch(() => {});
+  t.ready.catch(() => {});
+  t.finished.then(done, done);
+}
+
+/**
+ * A phone-sized window, where the columns stack: a session chosen in the
+ * list opens as a page of its own (otherwise its tree and details would be
+ * below the whole list, out of sight).
+ */
+const NARROW = matchMedia('(max-width: 720px)');
+
+/**
+ * Whether the shown session is open as a page of its own. It's a history
+ * entry (see `openPage`), so the browser's Back closes it, as the page's
+ * own back button does.
+ */
+function paged() {
+  return NARROW.matches && Boolean(history.state && history.state.agentGraphPage);
+}
+
+/** Opens the shown session as a page of its own, on a narrow screen. */
+function openPage() {
+  if (!NARROW.matches) return;
+  if (!paged()) history.pushState({ agentGraphPage: true }, '', location.href);
+  renderPage();
+  window.scrollTo(0, 0);
+}
+
+/** Back to the list: the history entry before the page's, if it made one. */
+function closePage() {
+  if (history.state && history.state.agentGraphPage) history.back();
+  else renderPage();
+}
+
+function renderPage() {
+  const on = paged();
+  document.body.classList.toggle('paged', on);
+  $('#back').hidden = !on;
+  $('#page-toggles').hidden = !on;
 }
 
 /** Shows the tree under `id`: live, until its timeline comes. */
@@ -441,7 +577,8 @@ function switchTo(id) {
   S.shown = S.live;
   S.stops = [];
   S.pos = -1;
-  history.replaceState(null, '', `#${encodeURIComponent(id)}`);
+  // (Keeping the entry's state: whether it's a session's page.)
+  history.replaceState(history.state, '', `#${encodeURIComponent(id)}`);
   scheduleRefresh();
   renderAll();
 }
@@ -449,6 +586,8 @@ function switchTo(id) {
 function selectNode(id) {
   S.selected = id;
   renderView();
+  // Stacked, its details are below the tree: brought into view.
+  if (NARROW.matches) $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /**
@@ -472,9 +611,11 @@ function known(id) {
 function visibleRoots() {
   if (!S.live) return [];
   const cutoff = nowMs() - RECENT_MS;
+  const byApp = appFilterOn();
   return S.live.roots.filter((id) => {
     if (id === S.root) return true;
     const root = S.live.sessions[id];
+    if (byApp && S.hiddenApps.has(root.provider)) return false;
     if (!S.showDone && isDone(root) && !root.busy) return false;
     return S.showAll || new Date(root.last_event_at).getTime() >= cutoff;
   });
@@ -489,6 +630,119 @@ function isDone(node) {
 function hidden(graph, node, keep) {
   if (S.showDone || keep.has(node.id) || !isDone(node)) return false;
   return node.children.every((id) => !graph.nodes[id] || hidden(graph, graph.nodes[id], keep));
+}
+
+/** The apps the sessions ran in, most sessions first, with how many each. */
+function appsInUse() {
+  const counts = new Map();
+  for (const id of S.live ? S.live.roots : []) {
+    const root = S.live.sessions[id];
+    if (root) counts.set(root.provider, (counts.get(root.provider) || 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1] || appName(a[0]).localeCompare(appName(b[0])));
+}
+
+/**
+ * Whether the list leaves out the apps unticked in the filter. Only while
+ * there's more than one app, and so a filter to change it: sessions never
+ * vanish for a choice made when there was.
+ */
+function appFilterOn() {
+  return S.hiddenApps.size > 0 && appsInUse().length > 1;
+}
+
+function savedHiddenApps() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('agentGraphHiddenApps') || '[]');
+    return new Set(Array.isArray(saved) ? saved.filter((a) => typeof a === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveHiddenApps() {
+  try {
+    localStorage.setItem('agentGraphHiddenApps', JSON.stringify([...S.hiddenApps]));
+  } catch {
+    // Not remembered, then; it still applies now.
+  }
+}
+
+/**
+ * The Apps dropdown above the list: a checkbox for each app the sessions
+ * ran in, and one for all of them. Shown only when there's more than one.
+ * Built again only when the apps change, so it stays open, and keeps focus,
+ * as events arrive.
+ */
+function renderAppFilter() {
+  const box = $('#app-filter');
+  const apps = appsInUse();
+  box.hidden = apps.length < 2;
+  if (box.hidden) {
+    box.open = false;
+    return;
+  }
+  const menu = box.querySelector('.app-menu');
+  const key = apps.map(([app]) => app).join('\n');
+  if (box.dataset.apps !== key) {
+    box.dataset.apps = key;
+    const all = h('input', { type: 'checkbox', 'data-app': '' });
+    all.addEventListener('change', () => {
+      S.hiddenApps = all.checked ? new Set() : new Set(appsInUse().map(([app]) => app));
+      appsChanged();
+    });
+    menu.replaceChildren(
+      h('label', null, all, h('span', null, 'All apps')),
+      h('hr'),
+      ...apps.map(([app]) => {
+        const tick = h('input', { type: 'checkbox', 'data-app': app });
+        tick.addEventListener('change', () => {
+          if (tick.checked) S.hiddenApps.delete(app);
+          else S.hiddenApps.add(app);
+          appsChanged();
+        });
+        return h('label', null, tick, appIcon(app), h('span', null, appName(app)), h('span', { class: 'count' }, ''));
+      }),
+    );
+  }
+  const shown = apps.filter(([app]) => !S.hiddenApps.has(app));
+  for (const tick of menu.querySelectorAll('input[data-app]')) {
+    const app = tick.dataset.app;
+    if (app) {
+      tick.checked = !S.hiddenApps.has(app);
+      const count = apps.find(([a]) => a === app);
+      tick.parentElement.querySelector('.count').textContent = count ? String(count[1]) : '';
+    } else {
+      tick.checked = shown.length === apps.length;
+      tick.indeterminate = shown.length > 0 && shown.length < apps.length;
+    }
+  }
+  $('#app-filter-label').textContent =
+    shown.length === apps.length
+      ? 'All'
+      : shown.length === 0
+        ? 'None'
+        : shown.length <= 2
+          ? shown.map(([app]) => appName(app)).join(', ')
+          : `${shown.length} of ${apps.length}`;
+}
+
+/**
+ * Hangs the Apps menu directly below its button: from the button's left
+ * edge, or, if that would run off the window (the button's at the end of a
+ * row), to its right edge.
+ */
+function placeAppMenu(box) {
+  const menu = box.querySelector('.app-menu');
+  menu.classList.remove('from-end');
+  const button = box.querySelector('summary').getBoundingClientRect();
+  const room = document.documentElement.clientWidth - button.left - 8;
+  menu.classList.toggle('from-end', menu.getBoundingClientRect().width > room);
+}
+
+function appsChanged() {
+  saveHiddenApps();
+  renderSessions();
 }
 
 function savedShowDone() {
@@ -509,6 +763,7 @@ function setError(message) {
 // ---------- rendering ----------
 
 function renderAll() {
+  renderPage();
   renderMode();
   renderSessions();
   renderView();
@@ -533,6 +788,7 @@ function renderMode() {
 }
 
 function renderSessions() {
+  renderAppFilter();
   redraw($('#session-list'), sessionItems());
   renderAttention();
 }
@@ -609,6 +865,7 @@ function sessionItems() {
   const roots = visibleRoots();
   if (!roots.length) {
     const count = S.live.roots.length;
+    if (count && appFilterOn()) return [h('li', { class: 'empty-note' }, 'No sessions to show from the apps chosen.')];
     const what = S.showDone ? 'older session' : 'older or completed session';
     return [h('li', { class: 'empty-note' }, count ? `${plural(count, what)} hidden.` : 'No sessions yet.')];
   }
@@ -634,7 +891,7 @@ function sessionItems() {
           onclick: () => selectRoot(id),
         },
         h('span', { class: `dot ${dotState}` }),
-        h('span', { class: 's-title', title: root.cwd || id }, nodeName(root)),
+        h('span', { class: 's-title', title: root.cwd || id }, appIcon(root.provider), h('span', { class: 's-name' }, nodeName(root))),
         h('span', { class: 's-when' }, ago(root.last_event_at)),
         needsYou
           ? h('span', { class: 's-sub attention' }, `Needs you: ${needsYou.attention || nodeName(needsYou)}`)
@@ -730,7 +987,7 @@ function mainView() {
       'div',
       { class: 'title-row' },
       // Named as it was at the step being viewed: sessions get renamed.
-      h('h1', null, nodeName(root || liveRoot), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
+      h('h1', null, h('span', { class: 'h-name' }, nodeName(root || liveRoot)), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
       root ? saveImageLink(stop) : null,
     ),
     h(
@@ -1220,17 +1477,36 @@ function wire() {
   $('#prev').addEventListener('click', () => goTo(S.pos - 1));
   $('#next').addEventListener('click', () => goTo(S.pos + 1));
   $('#live').addEventListener('click', goLive);
-  const showDone = $('#show-done');
-  showDone.checked = S.showDone;
-  showDone.addEventListener('change', (e) => {
-    S.showDone = e.target.checked;
-    try {
-      localStorage.setItem('agentGraphShowDone', String(S.showDone));
-    } catch {
-      // Not remembered, then; it still applies now.
+  // "Completed", in the list's head and, on a session's page (where the
+  // list isn't shown), in the top bar: one setting, two boxes kept alike.
+  const showDone = [$('#show-done'), $('#show-done-page')];
+  for (const box of showDone) {
+    box.checked = S.showDone;
+    box.addEventListener('change', (e) => {
+      S.showDone = e.target.checked;
+      for (const other of showDone) other.checked = S.showDone;
+      try {
+        localStorage.setItem('agentGraphShowDone', String(S.showDone));
+      } catch {
+        // Not remembered, then; it still applies now.
+      }
+      renderSessions();
+      renderMain();
+    });
+  }
+  // The Apps dropdown closes on a click outside it, or Escape.
+  const appFilter = $('#app-filter');
+  appFilter.addEventListener('toggle', () => {
+    if (appFilter.open) placeAppMenu(appFilter);
+  });
+  document.addEventListener('click', (e) => {
+    if (appFilter.open && !appFilter.contains(e.target)) appFilter.open = false;
+  });
+  appFilter.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && appFilter.open) {
+      appFilter.open = false;
+      appFilter.querySelector('summary').focus();
     }
-    renderSessions();
-    renderMain();
   });
   $('#show-all').addEventListener('change', (e) => {
     S.showAll = e.target.checked;
@@ -1248,6 +1524,26 @@ function wire() {
     else return;
     e.preventDefault();
   });
+
+  // A session's page: the back button, and the browser's Back, go to the
+  // list, where the session is brought into view.
+  $('#back').addEventListener('click', closePage);
+  window.addEventListener('popstate', () => {
+    const was = document.body.classList.contains('paged');
+    const update = () => {
+      renderPage();
+      if (paged()) window.scrollTo(0, 0);
+      else {
+        const item = document.querySelector('.session.selected');
+        if (item) item.scrollIntoView({ block: 'center' });
+      }
+    };
+    // The name moves back to the list (or, going forward, to the heading).
+    if (was && !paged()) transition(update, headingName(), listedName);
+    else if (!was && paged()) transition(update, listedName(), headingName);
+    else update();
+  });
+  NARROW.addEventListener('change', renderPage);
 
   // Another node named in the address: its tree, whether or not this graph
   // has it (if it doesn't exist, the refresh shows the newest session).
