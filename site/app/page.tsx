@@ -28,8 +28,8 @@ export default function Home() {
           <h1>See what your AI coding agents are doing, and share it.</h1>
           <p>
             Paste or upload an Agent Graph log to get a link. It opens a viewer you can step through: which
-            session started which agents, who&rsquo;s waiting on whom, what looks stuck, and what needs you.
-            A log is deleted once it has had no new events for a week.
+            session started which agents, who&rsquo;s waiting on whom, what looks stuck, and what needs you. A
+            log is deleted once it has had no new events for a week.
           </p>
         </section>
 
@@ -46,16 +46,18 @@ export default function Home() {
           <code className="command">agent-graph watch-remote</code>
           {/* The same text as `agent-graph watch-remote --help`. */}
           <dl className="options">
-            {watchRemote.options.map((option) => (
-              <Fragment key={option.id}>
-                <dt>
-                  <code>{option.flag}</code>
-                </dt>
-                <dd>
-                  <Inline text={option.text} />
-                </dd>
-              </Fragment>
-            ))}
+            {watchRemote.options.map((option) =>
+              option.flag !== "--url" ? (
+                <Fragment key={option.id}>
+                  <dt>
+                    <code>{option.flag}</code>
+                  </dt>
+                  <dd>
+                    <Inline text={option.text} />
+                  </dd>
+                </Fragment>
+              ) : null,
+            )}
           </dl>
           <p>
             <a href="/docs#watch-remote">More about sharing</a>, and every other command, in the docs.
