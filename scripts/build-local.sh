@@ -91,14 +91,14 @@ for target in "${targets[@]}"; do
         need cargo-zigbuild "cargo install cargo-zigbuild"
       fi
       ;;
-    # Windows builds its own with Visual Studio's tools, but ring's C
-    # for Windows on ARM needs clang.
+    # Windows builds its own with Visual Studio's tools, but ring's C for
+    # Windows on ARM needs clang, archived with llvm-lib, since cl.exe/lib.exe
+    # for that target only come with the ARM64 build tools, not every install.
     *-windows-*)
       need clang "$llvm_hint"
+      need llvm-lib "$llvm_hint"
       if [ "$host" != Windows-x86_64 ]; then
         need cargo-xwin "cargo install cargo-xwin"
-        # And cargo-xwin archives it with llvm-lib.
-        need llvm-lib "$llvm_hint"
       fi
       ;;
   esac
@@ -144,6 +144,14 @@ for target in "${targets[@]}"; do
     *-windows-*)
       if [ "$host" = Windows-x86_64 ]; then
         build=(cargo build)
+        # ring's build script picks clang for Windows on ARM once it has a
+        # compiler to inspect, but cc-rs's own default probe for that target
+        # looks for cl.exe (and lib.exe, to archive it) first, and fails
+        # before ring gets a say, so point it at clang and llvm-lib directly.
+        if [ "$target" = aarch64-pc-windows-msvc ]; then
+          export CC_aarch64_pc_windows_msvc=clang
+          export AR_aarch64_pc_windows_msvc=llvm-lib
+        fi
       else
         # ring compiles its C with clang, not clang-cl, for Windows on ARM,
         # so cargo-xwin must pass flags clang takes.
