@@ -65,8 +65,7 @@ export function Install() {
       </div>
       <ol className="card-body install-steps">
         <li>
-          Install <code>agent-graph</code>:
-          <code className="command">{way.install}</code>
+          Install <code>agent-graph</code>:<code className="command">{way.install}</code>
           {way.or && (
             <>
               <span className="install-or">{way.or.note}</span>

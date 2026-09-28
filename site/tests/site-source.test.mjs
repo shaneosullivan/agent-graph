@@ -42,8 +42,14 @@ function workerClass(fetch, started) {
 }
 
 const line = (n, node, type, data = {}) =>
-  JSON.stringify({ v: 1, id: `01K${String(n).padStart(23, "0")}`, ts: `2026-09-25T10:00:0${n}.000Z`, type, node, data }) +
-  "\n";
+  JSON.stringify({
+    v: 1,
+    id: `01K${String(n).padStart(23, "0")}`,
+    ts: `2026-09-25T10:00:0${n}.000Z`,
+    type,
+    node,
+    data,
+  }) + "\n";
 const key = (offset) => String(offset).padStart(15, "0");
 
 /**
@@ -215,7 +221,11 @@ test("a read's bytes are counted, a byte-order mark and all", async (t) => {
   const changed = new Promise((resolve) => src.subscribe(resolve, () => {}));
   await changed;
   await until(() => afters.length >= 3);
-  assert.deepEqual(Object.keys((await src.graph()).sessions).sort(), ["x:a", "x:b"], "all of it, from the start");
+  assert.deepEqual(
+    Object.keys((await src.graph()).sessions).sort(),
+    ["x:a", "x:b"],
+    "all of it, from the start",
+  );
 });
 
 test("reads that follow on are kept", async (t) => {

@@ -15,7 +15,8 @@ const { summarize } = await import("../lib/upload.ts");
 type TrimExports = import("../lib/trim-core.ts").TrimExports;
 
 const bytes = readFileSync(new URL("../public/viewer/agent_graph.wasm", import.meta.url));
-const load = async () => (await WebAssembly.instantiate(bytes, {})).instance.exports as unknown as TrimExports;
+const load = async () =>
+  (await WebAssembly.instantiate(bytes, {})).instance.exports as unknown as TrimExports;
 const wasm = await load();
 
 const line = (n: number) =>
@@ -63,7 +64,11 @@ test("the worker says how far along it is, then what to share", async () => {
   assert.deepEqual([done.done.events, done.done.of], [1500, 2500]);
   assert.ok(posted.slice(0, -1).every((m) => "progress" in m));
   const failed: object[] = [];
-  await handle("x", (m) => failed.push(m), async () => Promise.reject(new Error("no WebAssembly")));
+  await handle(
+    "x",
+    (m) => failed.push(m),
+    async () => Promise.reject(new Error("no WebAssembly")),
+  );
   assert.deepEqual(failed, [{ error: "no WebAssembly" }]);
 });
 
@@ -79,5 +84,9 @@ test("a keyframe in a pasted log isn't counted as an event or a session", () => 
   assert.equal(summary.sessions, 15, "sessions 10 to 24, not the keyframe's");
   // Nor a line the site wouldn't read as an event.
   assert.equal(summarize('{"id":"x","type":"status","node":"x:s"}\n').events, 0);
-  assert.equal(summarize('{"v":"1","id":"x","ts":"t","type":"status","node":"x:s"}\n').events, 0, "v not a number");
+  assert.equal(
+    summarize('{"v":"1","id":"x","ts":"t","type":"status","node":"x:s"}\n').events,
+    0,
+    "v not a number",
+  );
 });

@@ -26,7 +26,10 @@ const defaults: UnlockDeps = { getMeta, takeUnlockAttempt, giveBackUnlockAttempt
 export function tooMany(what: string, wait: number): Response {
   const minutes = Math.ceil(wait / 60);
   const when = wait < 60 ? "a few seconds" : `${minutes} minute${minutes === 1 ? "" : "s"}`;
-  return new Response(`${what}. Try again in ${when}.`, { status: 429, headers: { "Retry-After": String(wait) } });
+  return new Response(`${what}. Try again in ${when}.`, {
+    status: 429,
+    headers: { "Retry-After": String(wait) },
+  });
 }
 
 /**
@@ -63,7 +66,8 @@ export async function unlock(req: Request, id: string, deps: UnlockDeps = defaul
 
   const attempt = await deps.takeUnlockAttempt(id, clientAddress(req));
   if ("wait" in attempt) return tooMany("Too many tries", attempt.wait);
-  if (!(await deps.verifyPassword(password, meta.pw))) return new Response("Wrong password.", { status: 401 });
+  if (!(await deps.verifyPassword(password, meta.pw)))
+    return new Response("Wrong password.", { status: 401 });
   await deps.giveBackUnlockAttempt(attempt.reservation);
 
   const cookie = [

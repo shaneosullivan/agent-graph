@@ -43,7 +43,9 @@ function hashOf(files) {
   const hash = createHash("sha256");
   for (const f of files) {
     hash.update(`${f}\n`);
-    hash.update(existsSync(join(crate, f)) ? readFileSync(join(crate, f), "utf8").replace(/\r\n/g, "\n") : "(gone)");
+    hash.update(
+      existsSync(join(crate, f)) ? readFileSync(join(crate, f), "utf8").replace(/\r\n/g, "\n") : "(gone)",
+    );
   }
   return hash.digest("hex");
 }
@@ -53,7 +55,18 @@ const wasmArgs = ["-p", "agent-graph-wasm", "--target", "wasm32-unknown-unknown"
 /** The crates the build uses, as "name version features" (the crates here without their paths). */
 function crates() {
   // Without colour: CI turns it on, and it wraps the "(*)" marks.
-  const args = ["tree", ...wasmArgs, "-e", "normal", "--prefix", "none", "--format", "{p} {f}", "--color", "never"];
+  const args = [
+    "tree",
+    ...wasmArgs,
+    "-e",
+    "normal",
+    "--prefix",
+    "none",
+    "--format",
+    "{p} {f}",
+    "--color",
+    "never",
+  ];
   const tree = spawnSync("cargo", args, { cwd: crate, encoding: "utf8" });
   if (tree.status !== 0) {
     console.error(tree.error ? `Can't run cargo (${tree.error.message}); is Rust installed?` : tree.stderr);
@@ -62,7 +75,12 @@ function crates() {
   const lines = tree.stdout
     .split("\n")
     // eslint-disable-next-line no-control-regex
-    .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").replace(/ \([^)]*\)/g, "").trim());
+    .map((l) =>
+      l
+        .replace(/\x1b\[[0-9;]*m/g, "")
+        .replace(/ \([^)]*\)/g, "")
+        .trim(),
+    );
   return [...new Set(lines.filter(Boolean))].sort();
 }
 
@@ -93,7 +111,9 @@ if (args.has("--check-wasm")) {
           ? "its build profile has changed"
           : null;
   if (problem) {
-    console.error(`public/viewer/agent_graph.wasm is out of date: ${problem}. In site/, run \`npm run build-wasm\`, and commit it.`);
+    console.error(
+      `public/viewer/agent_graph.wasm is out of date: ${problem}. In site/, run \`npm run build-wasm\`, and commit it.`,
+    );
     // What differs, to see why.
     const now = { crates: crates(), profiles: profiles() };
     for (const key of ["crates", "profiles"]) {
@@ -143,7 +163,10 @@ if (args.has("--wasm")) {
   // What it was built from: the crate's files the build compiled (its
   // dep-info), and the crates it used, at their versions.
   const depInfo = readFileSync(join(target, "agent_graph_wasm.d"), "utf8");
-  const inputs = depInfo.slice(depInfo.indexOf(": ") + 2).trim().split(/(?<!\\) /);
+  const inputs = depInfo
+    .slice(depInfo.indexOf(": ") + 2)
+    .trim()
+    .split(/(?<!\\) /);
   const files = inputs
     .map((f) => relative(crate, f.replace(/\\ /g, " ")).split(sep).join("/"))
     .filter((f) => !f.startsWith(".."))

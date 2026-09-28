@@ -61,7 +61,8 @@ async function* pages(log) {
  */
 function newMeta(id, data) {
   const { source, pw, createdAt } = data;
-  if (typeof source !== "string" || !createdAt) throw new Error("its metadata has no source or creation time");
+  if (typeof source !== "string" || !createdAt)
+    throw new Error("its metadata has no source or creation time");
   return { source, ...(pw ? { pw } : {}), createdAt, mac: metaTag(id, { source, pw }), oldCopy: true };
 }
 
@@ -145,7 +146,8 @@ async function removeOld(id, old, meta) {
   if (meta.exists) {
     const copied = await target.get();
     const expected = newMeta(id, meta.data());
-    if (!copied.exists || copied.get("mac") !== expected.mac) throw new Error("its metadata hasn't been copied");
+    if (!copied.exists || copied.get("mac") !== expected.mac)
+      throw new Error("its metadata hasn't been copied");
   }
   await inPages(async (page) => {
     for await (const chunks of pages(old)) {
@@ -154,7 +156,10 @@ async function removeOld(id, old, meta) {
         // Compared as text: a chunk the new site stored itself (a retry) has
         // other ciphertext for the same text.
         const copy = copies[i];
-        if (!copy.exists || decryptChunk(id, chunk.id, copy.get("e")) !== decryptChunk(id, chunk.id, chunk.get("e"))) {
+        if (
+          !copy.exists ||
+          decryptChunk(id, chunk.id, copy.get("e")) !== decryptChunk(id, chunk.id, chunk.get("e"))
+        ) {
           throw new Error(`chunk ${chunk.id} hasn't been copied`);
         }
       });
@@ -224,7 +229,9 @@ for (const { doc, meta } of order) {
       // own copy's chunks (stored by the new site), must.
       const empty = (await doc.collection("chunks").limit(1).get()).empty;
       if (empty && !keyChecked && !(await copyDecrypts(doc.id))) {
-        throw new Error("nothing could check the key, so it's kept (if the log is empty, delete it yourself)");
+        throw new Error(
+          "nothing could check the key, so it's kept (if the log is empty, delete it yourself)",
+        );
       }
       await removeOld(doc.id, doc, meta);
     } else {

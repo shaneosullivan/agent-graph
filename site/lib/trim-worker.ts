@@ -33,6 +33,10 @@ const scope = globalThis as unknown as {
   postMessage?: (message: TrimMessage) => void;
   onmessage?: (e: { data: { text: string } }) => void;
 };
-if (typeof scope.window === "undefined" && typeof scope.postMessage === "function" && "importScripts" in scope) {
+if (
+  typeof scope.window === "undefined" &&
+  typeof scope.postMessage === "function" &&
+  "importScripts" in scope
+) {
   scope.onmessage = (e) => void handle(e.data.text, (m) => scope.postMessage!(m));
 }

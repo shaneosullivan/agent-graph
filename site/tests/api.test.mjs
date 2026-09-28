@@ -125,7 +125,10 @@ test("a read stops at a byte budget, and paging gets the rest", async () => {
 
   const first = await content(log.id);
   assert.equal(first.status, 200);
-  assert.ok(Buffer.byteLength(first.text) <= 2.5 * 1024 * 1024, `${Buffer.byteLength(first.text)} bytes in one read`);
+  assert.ok(
+    Buffer.byteLength(first.text) <= 2.5 * 1024 * 1024,
+    `${Buffer.byteLength(first.text)} bytes in one read`,
+  );
   assert.ok(first.more, "says there's more");
 
   let text = first.text;
@@ -144,7 +147,10 @@ test("a read stops at a byte budget, and paging gets the rest", async () => {
     assert.equal((await append(crafted.id, i, parts[i], crafted.writeToken)).status, 204);
   }
   const read = await content(crafted.id);
-  assert.ok(Buffer.byteLength(read.text) <= 2.5 * 1024 * 1024, `${Buffer.byteLength(read.text)} bytes in one read`);
+  assert.ok(
+    Buffer.byteLength(read.text) <= 2.5 * 1024 * 1024,
+    `${Buffer.byteLength(read.text)} bytes in one read`,
+  );
   assert.ok(read.more);
 });
 
@@ -232,7 +238,11 @@ test("unlocking is limited per address, across logs", async () => {
     for (let i = 0; i < 5; i++) assert.equal((await unlock(log.id, "nope", guesser)).status, 401);
   }
   assert.equal((await unlock(logs[6].id, "pässwörd", guesser)).status, 429, "a log it hasn't tried yet");
-  assert.equal((await unlock(logs[6].id, "pässwörd", anAddress())).status, 204, "other addresses aren't affected");
+  assert.equal(
+    (await unlock(logs[6].id, "pässwörd", anAddress())).status,
+    204,
+    "other addresses aren't affected",
+  );
 });
 
 // R19: only wrong guesses count: a log shared with many people, or many
@@ -257,7 +267,8 @@ test("checking passwords at a log is limited per address", { timeout: 120_000 },
   const withPassword = { "X-Agent-Graph-Password": b64url("pässwörd") };
   const log = await create(line(1), { ...withPassword, "X-Real-IP": address });
   const other = await create(line(1), { ...withPassword, "X-Real-IP": address });
-  for (let i = 0; i < 200; i++) assert.equal((await unlock(log.id, "pässwörd", address)).status, 204, `unlock ${i}`);
+  for (let i = 0; i < 200; i++)
+    assert.equal((await unlock(log.id, "pässwörd", address)).status, 204, `unlock ${i}`);
   const refused = await unlock(log.id, "pässwörd", address);
   assert.equal(refused.status, 429);
   assert.ok(Number(refused.headers.get("retry-after")) > 60, "until the window ends");
@@ -314,7 +325,8 @@ test("overlapping chunks count towards the size limit", { timeout: 120_000 }, as
   const log = await create(line(1));
   const big = `${"x".repeat(512 * 1024 - 1)}\n`;
   // 127 of them and the first line fit in 64 MiB; one more doesn't.
-  for (let i = 1; i <= 127; i++) assert.equal((await append(log.id, i, big, log.writeToken)).status, 204, `chunk ${i}`);
+  for (let i = 1; i <= 127; i++)
+    assert.equal((await append(log.id, i, big, log.writeToken)).status, 204, `chunk ${i}`);
   const full = await append(log.id, 128, big, log.writeToken);
   assert.equal(full.status, 413);
   assert.match(await full.text(), /full/);
@@ -339,8 +351,7 @@ test("a chunk is stored as it was sent, a byte-order mark and all", async () => 
 // The daily cron that deletes logs with no event for a week (lib/cleanup.ts)
 // runs only for Vercel Cron, which sends the secret.
 test("the cleanup cron needs its secret", async () => {
-  const run = (auth) =>
-    fetch(`${BASE}/api/cron/cleanup`, { headers: auth ? { Authorization: auth } : {} });
+  const run = (auth) => fetch(`${BASE}/api/cron/cleanup`, { headers: auth ? { Authorization: auth } : {} });
   assert.equal((await run()).status, 401);
   assert.equal((await run("Bearer nope")).status, 401);
   const secret = process.env.CRON_SECRET;

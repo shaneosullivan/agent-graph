@@ -29,7 +29,14 @@ function call(request) {
 }
 
 const line = (n, node, type, data = {}) =>
-  JSON.stringify({ v: 1, id: `01K${String(n).padStart(23, "0")}`, ts: `2026-09-25T10:00:0${n}.000Z`, type, node, data });
+  JSON.stringify({
+    v: 1,
+    id: `01K${String(n).padStart(23, "0")}`,
+    ts: `2026-09-25T10:00:0${n}.000Z`,
+    type,
+    node,
+    data,
+  });
 
 const [ptr, len] = put(
   [

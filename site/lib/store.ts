@@ -102,7 +102,11 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
  * the log's `stored`; and when it was written.
  */
 function chunkData(id: string, key: string, text: string, counted = true) {
-  return { e: encryptChunk(id, key, text), ...(counted ? { n: Buffer.byteLength(text) } : {}), t: Timestamp.now() };
+  return {
+    e: encryptChunk(id, key, text),
+    ...(counted ? { n: Buffer.byteLength(text) } : {}),
+    t: Timestamp.now(),
+  };
 }
 
 export class ChunkTaken extends Error {}
@@ -192,7 +196,9 @@ function holds(id: string, key: string, stored: Uint8Array, text: string): boole
     return decryptChunk(id, key, stored) === text;
   } catch {
     // Named by where it's stored: the log's id is what lets people read it.
-    console.error(`Chunk logs/${storageId(id)}/chunks/${key} couldn't be decrypted; refused the append there.`);
+    console.error(
+      `Chunk logs/${storageId(id)}/chunks/${key} couldn't be decrypted; refused the append there.`,
+    );
     return false;
   }
 }
@@ -341,7 +347,9 @@ type Bucket = { ref: FirebaseFirestore.DocumentReference; limit: number; kept?: 
 
 /** The bucket counting `address`'s scrypt runs, whatever they're for. */
 function scryptBucket(address: string): Bucket {
-  const ref = firestore().collection("unlock-attempts").doc(`scrypt-${addressKey(address)}`);
+  const ref = firestore()
+    .collection("unlock-attempts")
+    .doc(`scrypt-${addressKey(address)}`);
   return { ref, limit: SCRYPT_RUNS_PER_ADDRESS, kept: true };
 }
 
@@ -449,7 +457,9 @@ export async function takeUnlockAttempt(
   const buckets = unlockBuckets(id, address);
   const taken = await take(buckets);
   if ("wait" in taken) return taken;
-  return { reservation: buckets.flatMap(({ ref, kept }, i) => (kept ? [] : [{ ref, since: taken.since[i] }])) };
+  return {
+    reservation: buckets.flatMap(({ ref, kept }, i) => (kept ? [] : [{ ref, since: taken.since[i] }])),
+  };
 }
 
 /**
@@ -458,7 +468,9 @@ export async function takeUnlockAttempt(
  * seconds until it may run another are returned. Not limited without an
  * address.
  */
-export async function takeScryptRun(address: string | null): Promise<{ wait: number } | Record<string, never>> {
+export async function takeScryptRun(
+  address: string | null,
+): Promise<{ wait: number } | Record<string, never>> {
   if (!address) return {};
   const taken = await take([scryptBucket(address)]);
   return "wait" in taken ? taken : {};

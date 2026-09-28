@@ -33,7 +33,10 @@ test("detects any change to the stored bytes", () => {
     assert.throws(() => decryptChunk(LOG, CHUNK, tampered), `byte ${i}`);
   }
   assert.throws(() => decryptChunk(LOG, CHUNK, stored.subarray(0, 20)), "truncated");
-  assert.throws(() => decryptChunk(LOG, CHUNK, Buffer.concat([Buffer.of(9), stored.subarray(1)])), "unknown version");
+  assert.throws(
+    () => decryptChunk(LOG, CHUNK, Buffer.concat([Buffer.of(9), stored.subarray(1)])),
+    "unknown version",
+  );
 });
 
 test("a chunk can't be moved to another place or another log", () => {
@@ -75,7 +78,10 @@ test("rejects a master key of the wrong size", () => {
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /must be 32 bytes/);
   // It says what it got, so a value that never arrived can be told apart.
-  assert.match(bad.stderr, /The value here is 9 characters, and decodes to 6 bytes\. Its fingerprint is [0-9a-f]{12}/);
+  assert.match(
+    bad.stderr,
+    /The value here is 9 characters, and decodes to 6 bytes\. Its fingerprint is [0-9a-f]{12}/,
+  );
   assert.doesNotMatch(bad.stderr, /too-short/, "never the value itself");
 });
 
@@ -91,10 +97,20 @@ test("a key with the variable's name pasted in says what's in it", () => {
       `const { encryptChunk } = await import(${JSON.stringify(new URL("../lib/encryption.ts", import.meta.url).href)});
        encryptChunk("x", "0", "text");`,
     ],
-    { env: { ...process.env, AGENT_GRAPH_ENCRYPTION_KEY: `AGENT_GRAPH_ENCRYPTION_KEY=${key}`, VERCEL_ENV: "production" }, encoding: "utf8" },
+    {
+      env: {
+        ...process.env,
+        AGENT_GRAPH_ENCRYPTION_KEY: `AGENT_GRAPH_ENCRYPTION_KEY=${key}`,
+        VERCEL_ENV: "production",
+      },
+      encoding: "utf8",
+    },
   );
   assert.notEqual(bad.status, 0);
-  assert.match(bad.stderr, /\(Vercel environment: production\) is 70 characters, 1 of them not letters, digits, - or _ \(=\), and decodes to 19 bytes/);
+  assert.match(
+    bad.stderr,
+    /\(Vercel environment: production\) is 70 characters, 1 of them not letters, digits, - or _ \(=\), and decodes to 19 bytes/,
+  );
   assert.doesNotMatch(bad.stderr, new RegExp(key), "never the value itself");
 });
 
@@ -110,7 +126,10 @@ function underAnotherKey(expr: string): unknown {
       `const { metaTag, storageId } = await import(${JSON.stringify(new URL("../lib/encryption.ts", import.meta.url).href)});
        console.log(JSON.stringify(${expr}));`,
     ],
-    { env: { ...process.env, AGENT_GRAPH_ENCRYPTION_KEY: Buffer.alloc(32, 2).toString("base64url") }, encoding: "utf8" },
+    {
+      env: { ...process.env, AGENT_GRAPH_ENCRYPTION_KEY: Buffer.alloc(32, 2).toString("base64url") },
+      encoding: "utf8",
+    },
   );
   assert.equal(other.status, 0, other.stderr);
   return JSON.parse(other.stdout);
@@ -138,8 +157,16 @@ test("a metadata tag covers the id, the source and the password", () => {
   assert.notEqual(metaTag(LOG, { ...meta, source: "paste" }), tag, "another source");
   assert.notEqual(metaTag(LOG, { ...meta, pw: "s1$salt$other" }), tag, "another password");
   assert.notEqual(metaTag(LOG, { source: "watch" }), tag, "no password");
-  assert.equal(metaTag(LOG, { source: "watch", pw: "" }), metaTag(LOG, { source: "watch" }), "an empty password is none");
-  assert.notEqual(underAnotherKey(`metaTag(${JSON.stringify(LOG)}, ${JSON.stringify(meta)})`), tag, "another master key");
+  assert.equal(
+    metaTag(LOG, { source: "watch", pw: "" }),
+    metaTag(LOG, { source: "watch" }),
+    "an empty password is none",
+  );
+  assert.notEqual(
+    underAnotherKey(`metaTag(${JSON.stringify(LOG)}, ${JSON.stringify(meta)})`),
+    tag,
+    "another master key",
+  );
 });
 
 // R18: the storage id and the tags use keys of their own, so neither can

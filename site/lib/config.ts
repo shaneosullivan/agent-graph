@@ -8,7 +8,9 @@ export const MAX_CHUNK_BYTES = 512 * 1024;
 
 /** A log not in use is deleted (lib/cleanup.ts); its sharer stops, and says so. */
 export function gone(): Response {
-  return new Response("This log has expired: it had no new events for a week, so it was deleted.", { status: 410 });
+  return new Response("This log has expired: it had no new events for a week, so it was deleted.", {
+    status: 410,
+  });
 }
 
 /**
@@ -153,7 +155,9 @@ export function addressBlock(address: string): string {
   const front = parse(head);
   const back = tail === undefined ? [] : parse(tail);
   const groups =
-    tail === undefined ? front : [...front, ...Array(Math.max(0, 8 - front.length - back.length)).fill(0), ...back];
+    tail === undefined
+      ? front
+      : [...front, ...Array(Math.max(0, 8 - front.length - back.length)).fill(0), ...back];
   // IPv4 mapped into IPv6, however it's written: the IPv4 address.
   if (groups.length === 8 && groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
     return [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join(".");

@@ -191,7 +191,10 @@ test("a body is read only as far as its limit", async () => {
   // A byte-order mark is kept (req.text() drops one).
   const bom = new Request("https://site.test/", { method: "POST", body: "\uFEFFx" });
   assert.equal(await bodyText(bom, 10), "\uFEFFx");
-  assert.equal(await bodyText(new Request("https://site.test/", { method: "POST", body: "1234" }), 4), "1234");
+  assert.equal(
+    await bodyText(new Request("https://site.test/", { method: "POST", body: "1234" }), 4),
+    "1234",
+  );
   assert.equal(await bodyText(new Request("https://site.test/", { method: "POST", body: "12345" }), 4), null);
   assert.equal(await bodyText(new Request("https://site.test/", { method: "POST" }), 4), "");
 });

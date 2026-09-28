@@ -1,4 +1,12 @@
-import { bodyText, clientAddress, MAX_CHUNK_BYTES, MAX_PASSWORD_BYTES, SOURCES, type Source, siteUrl } from "@/lib/config";
+import {
+  bodyText,
+  clientAddress,
+  MAX_CHUNK_BYTES,
+  MAX_PASSWORD_BYTES,
+  SOURCES,
+  type Source,
+  siteUrl,
+} from "@/lib/config";
 import { hashPassword, newId, PasswordTooLong, passwordFromHeader, writeToken } from "@/lib/crypto";
 import { IdTaken, createLog, takeScryptRun } from "@/lib/store";
 import { tooMany } from "@/lib/unlock";

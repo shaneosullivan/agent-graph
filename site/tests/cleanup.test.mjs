@@ -12,7 +12,10 @@ const skip = !process.env.FIRESTORE_EMULATOR_HOST && "needs the Firestore emulat
 const DAY = 24 * 60 * 60 * 1000;
 
 const newId = () =>
-  Array.from(randomBytes(12), (b) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[b % 62]).join("");
+  Array.from(
+    randomBytes(12),
+    (b) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"[b % 62],
+  ).join("");
 
 async function setup() {
   const store = await import("../lib/store.ts");
@@ -35,7 +38,8 @@ async function setup() {
         }),
       ),
     );
-    if (createdDaysAgo) await doc(id).update({ createdAt: Timestamp.fromMillis(Date.now() - createdDaysAgo * DAY) });
+    if (createdDaysAgo)
+      await doc(id).update({ createdAt: Timestamp.fromMillis(Date.now() - createdDaysAgo * DAY) });
     return id;
   }
   const exists = async (id) => (await doc(id).get()).exists;
@@ -43,40 +47,48 @@ async function setup() {
   return { store, cleanup, state, log, exists, chunkCount, Timestamp };
 }
 
-test("logs with no event for a week are deleted, with their chunks, and the rest kept", { skip, timeout: 60_000 }, async () => {
-  const { cleanup, state, log, exists, chunkCount, store, Timestamp } = await setup();
-  // Times have been recorded for a month.
-  await state.set({ since: Timestamp.fromMillis(Date.now() - 30 * DAY) });
-  const idle = await log([9, 8]);
-  const active = await log([20, 6]); // the newest chunk counts
-  const recorded = await log([null, 1]); // an older chunk from before times were recorded
-  const old = await log([null, null], 30);
-  const young = await log([null], 2); // before times: counts from when it was made
+test(
+  "logs with no event for a week are deleted, with their chunks, and the rest kept",
+  { skip, timeout: 60_000 },
+  async () => {
+    const { cleanup, state, log, exists, chunkCount, store, Timestamp } = await setup();
+    // Times have been recorded for a month.
+    await state.set({ since: Timestamp.fromMillis(Date.now() - 30 * DAY) });
+    const idle = await log([9, 8]);
+    const active = await log([20, 6]); // the newest chunk counts
+    const recorded = await log([null, 1]); // an older chunk from before times were recorded
+    const old = await log([null, null], 30);
+    const young = await log([null], 2); // before times: counts from when it was made
 
-  const result = await cleanup.deleteIdleLogs({ budgetMs: 30_000 });
-  assert.equal(result.done, true);
-  assert.ok(result.deleted >= 2 && result.checked >= 5, JSON.stringify(result));
-  for (const id of [idle, old]) {
-    assert.equal(await exists(id), false);
-    assert.equal(await chunkCount(id), 0, "and its chunks");
-    assert.equal(await store.getMeta(id), null, "the site doesn't know it");
-  }
-  for (const id of [active, recorded, young]) assert.equal(await exists(id), true);
-});
+    const result = await cleanup.deleteIdleLogs({ budgetMs: 30_000 });
+    assert.equal(result.done, true);
+    assert.ok(result.deleted >= 2 && result.checked >= 5, JSON.stringify(result));
+    for (const id of [idle, old]) {
+      assert.equal(await exists(id), false);
+      assert.equal(await chunkCount(id), 0, "and its chunks");
+      assert.equal(await store.getMeta(id), null, "the site doesn't know it");
+    }
+    for (const id of [active, recorded, young]) assert.equal(await exists(id), true);
+  },
+);
 
-test("before times were recorded, a log counts as active from the cron's first run", { skip, timeout: 60_000 }, async () => {
-  const { cleanup, state, log, exists } = await setup();
-  await state.delete();
-  const old = await log([null], 30);
-  await cleanup.deleteIdleLogs({ budgetMs: 30_000 });
-  assert.equal(await exists(old), true, "kept for now");
-  const since = (await state.get()).get("since").toMillis();
-  assert.ok(Math.abs(since - Date.now()) < 60_000, "since the first run");
-  // A week on (and a day), it goes.
-  await cleanup.deleteIdleLogs({ budgetMs: 30_000, now: Date.now() + 8 * DAY });
-  assert.equal(await exists(old), false);
-  assert.equal((await state.get()).get("since").toMillis(), since, "the first run's, still");
-});
+test(
+  "before times were recorded, a log counts as active from the cron's first run",
+  { skip, timeout: 60_000 },
+  async () => {
+    const { cleanup, state, log, exists } = await setup();
+    await state.delete();
+    const old = await log([null], 30);
+    await cleanup.deleteIdleLogs({ budgetMs: 30_000 });
+    assert.equal(await exists(old), true, "kept for now");
+    const since = (await state.get()).get("since").toMillis();
+    assert.ok(Math.abs(since - Date.now()) < 60_000, "since the first run");
+    // A week on (and a day), it goes.
+    await cleanup.deleteIdleLogs({ budgetMs: 30_000, now: Date.now() + 8 * DAY });
+    assert.equal(await exists(old), false);
+    assert.equal((await state.get()).get("since").toMillis(), since, "the first run's, still");
+  },
+);
 
 test("a run out of time carries on where it stopped", { skip, timeout: 120_000 }, async () => {
   const { cleanup, state, log, exists, Timestamp } = await setup();
@@ -108,7 +120,9 @@ test("a deleted log can't be added to or trimmed", { skip, timeout: 60_000 }, as
   await state.set({ since: Timestamp.fromMillis(Date.now() - 30 * DAY) });
   const id = await log([9]);
   // Guesses at its password were counted.
-  const guesses = firestore().collection("unlock-attempts").doc(`log-${storageId(id)}`);
+  const guesses = firestore()
+    .collection("unlock-attempts")
+    .doc(`log-${storageId(id)}`);
   await guesses.set({ n: 1 });
   assert.ok(await store.getMeta(id), "known, and cached");
   await cleanup.deleteIdleLogs({ budgetMs: 30_000 });
@@ -175,7 +189,10 @@ test("logs from before storage ids are deleted the same way", { skip, timeout: 6
   const old = firestore().collection("logs").doc(id);
   const added = firestore().collection("logs").doc(storageId(id)).collection("chunks");
   await old.set({ source: "watch", createdAt: Timestamp.fromMillis(Date.now() - 30 * DAY) });
-  await old.collection("chunks").doc(store.chunkKey(0)).set({ e: encryptChunk(id, store.chunkKey(0), "0\n") });
+  await old
+    .collection("chunks")
+    .doc(store.chunkKey(0))
+    .set({ e: encryptChunk(id, store.chunkKey(0), "0\n") });
   try {
     // Written to today: kept, and can be trimmed.
     await store.appendChunk(id, 2, "1\n");
@@ -212,7 +229,10 @@ test("a log the migration copied goes with its old copy", { skip, timeout: 60_00
   const old = firestore().collection("logs").doc(id);
   try {
     await old.set({ source: "watch", createdAt: Timestamp.fromMillis(Date.now() - 30 * DAY) });
-    await old.collection("chunks").doc(store.chunkKey(0)).set({ e: encryptChunk(id, store.chunkKey(0), "0\n") });
+    await old
+      .collection("chunks")
+      .doc(store.chunkKey(0))
+      .set({ e: encryptChunk(id, store.chunkKey(0), "0\n") });
     await firestore().collection("logs").doc(storageId(id)).update({ oldCopy: true });
     await store.appendChunk(id, 2, "1\n");
     await cleanup.deleteIdleLogs({ budgetMs: 30_000 });
@@ -233,47 +253,58 @@ test("a log the migration copied goes with its old copy", { skip, timeout: 60_00
 });
 
 // One from before storage ids that's being deleted is gone too.
-test("a log from before storage ids that's being deleted can't be added to", { skip, timeout: 60_000 }, async () => {
-  const { store, Timestamp } = await setup();
-  const { firestore } = await import("../lib/firebase.ts");
-  const id = newId();
-  const old = firestore().collection("logs").doc(id);
-  try {
-    await old.set({ source: "watch", createdAt: Timestamp.now(), deleting: true });
-    await assert.rejects(store.appendChunk(id, 2, "1\n"), store.LogGone);
-    await assert.rejects(store.trimLog(id, 2), store.LogGone);
-  } finally {
-    await firestore().recursiveDelete(old);
-  }
-});
+test(
+  "a log from before storage ids that's being deleted can't be added to",
+  { skip, timeout: 60_000 },
+  async () => {
+    const { store, Timestamp } = await setup();
+    const { firestore } = await import("../lib/firebase.ts");
+    const id = newId();
+    const old = firestore().collection("logs").doc(id);
+    try {
+      await old.set({ source: "watch", createdAt: Timestamp.now(), deleting: true });
+      await assert.rejects(store.appendChunk(id, 2, "1\n"), store.LogGone);
+      await assert.rejects(store.trimLog(id, 2), store.LogGone);
+    } finally {
+      await firestore().recursiveDelete(old);
+    }
+  },
+);
 
 // Deleting a log with its copy marks both first, so if it stops partway,
 // neither takes what's sent until the next run finishes it.
-test("a log and its copy stopped partway through deletion are both marked", { skip, timeout: 60_000 }, async () => {
-  const { cleanup, state, store, exists, Timestamp } = await setup();
-  const { firestore } = await import("../lib/firebase.ts");
-  const { encryptChunk, storageId } = await import("../lib/encryption.ts");
-  await state.set({ since: Timestamp.fromMillis(Date.now() - 30 * DAY) });
-  const id = newId();
-  await store.createLog(id, { source: "watch" }, "0\n");
-  await firestore().collection("logs").doc(storageId(id)).update({ oldCopy: true });
-  const old = firestore().collection("logs").doc(id);
-  const db = firestore();
-  const recursiveDelete = db.recursiveDelete;
-  try {
-    await old.set({ source: "watch", createdAt: Timestamp.fromMillis(Date.now() - 30 * DAY) });
-    await old.collection("chunks").doc(store.chunkKey(0)).set({ e: encryptChunk(id, store.chunkKey(0), "0\n") });
-    db.recursiveDelete = async () => {
-      throw new Error("stopped");
-    };
-    await assert.rejects(cleanup.deleteIfIdle(id, Date.now(), Date.now() + 8 * DAY), /stopped/);
-    db.recursiveDelete = recursiveDelete;
-    await assert.rejects(store.appendChunk(id, 2, "1\n"), store.LogGone);
-    await cleanup.deleteIdleLogs({ budgetMs: 30_000 });
-    assert.equal(await exists(id), false);
-    assert.equal((await old.get()).exists, false);
-  } finally {
-    db.recursiveDelete = recursiveDelete;
-    await firestore().recursiveDelete(old);
-  }
-});
+test(
+  "a log and its copy stopped partway through deletion are both marked",
+  { skip, timeout: 60_000 },
+  async () => {
+    const { cleanup, state, store, exists, Timestamp } = await setup();
+    const { firestore } = await import("../lib/firebase.ts");
+    const { encryptChunk, storageId } = await import("../lib/encryption.ts");
+    await state.set({ since: Timestamp.fromMillis(Date.now() - 30 * DAY) });
+    const id = newId();
+    await store.createLog(id, { source: "watch" }, "0\n");
+    await firestore().collection("logs").doc(storageId(id)).update({ oldCopy: true });
+    const old = firestore().collection("logs").doc(id);
+    const db = firestore();
+    const recursiveDelete = db.recursiveDelete;
+    try {
+      await old.set({ source: "watch", createdAt: Timestamp.fromMillis(Date.now() - 30 * DAY) });
+      await old
+        .collection("chunks")
+        .doc(store.chunkKey(0))
+        .set({ e: encryptChunk(id, store.chunkKey(0), "0\n") });
+      db.recursiveDelete = async () => {
+        throw new Error("stopped");
+      };
+      await assert.rejects(cleanup.deleteIfIdle(id, Date.now(), Date.now() + 8 * DAY), /stopped/);
+      db.recursiveDelete = recursiveDelete;
+      await assert.rejects(store.appendChunk(id, 2, "1\n"), store.LogGone);
+      await cleanup.deleteIdleLogs({ budgetMs: 30_000 });
+      assert.equal(await exists(id), false);
+      assert.equal((await old.get()).exists, false);
+    } finally {
+      db.recursiveDelete = recursiveDelete;
+      await firestore().recursiveDelete(old);
+    }
+  },
+);

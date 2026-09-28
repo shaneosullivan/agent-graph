@@ -346,11 +346,18 @@ test("R21: a refresh overtaken by a change of session shows nothing of the old o
   holds["x:a"].resolve();
   await settle();
   // (Array.from: the page's arrays are from its own realm.)
-  assert.deepEqual(Array.from(v.S.stops, (s) => s.id), [], "not x:a's timeline under x:b");
+  assert.deepEqual(
+    Array.from(v.S.stops, (s) => s.id),
+    [],
+    "not x:a's timeline under x:b",
+  );
   assert.equal(count(), "No events yet");
   holds["x:b"].resolve();
   await until(() => v.S.stops.length === 2);
-  assert.deepEqual(Array.from(v.S.stops, (s) => s.id), ["b1", "b2"]);
+  assert.deepEqual(
+    Array.from(v.S.stops, (s) => s.id),
+    ["b1", "b2"],
+  );
   assert.equal(count(), "Step 2 of 2");
 
   // The overtaken refresh fails: nothing to say, it's no longer shown.
@@ -444,7 +451,12 @@ function treeSource(nodes, stops = stopsOf(["e1", "e2"])) {
 test("R23: the page asks for the tree it shows, and lists the others from their summaries", async (t) => {
   const a = node("x:a", { cwd: "/w/a" });
   const b = node("x:b", { cwd: "/w/b", children: ["x:b/c"] });
-  const c = node("x:b/c", { parent: "x:b", agent_type: "Explore", state: "input_required", attention: "May I?" });
+  const c = node("x:b/c", {
+    parent: "x:b",
+    agent_type: "Explore",
+    state: "input_required",
+    attention: "May I?",
+  });
   const { asked, source } = treeSource([a, b, c]);
   const window = loadViewer(t, source, { hash: "#x:a" });
   const v = window.__viewer;
@@ -486,7 +498,13 @@ test("R23: with no session named, one request brings the newest session's tree",
 
 /** x:a waits on x:c, a session of its own, and on its agent x:c/d. */
 function waitingOnAnother() {
-  const wait = (on) => ({ wait_id: on, on, open: true, spawn: false, started_at: "2026-09-25T10:00:00.000Z" });
+  const wait = (on) => ({
+    wait_id: on,
+    on,
+    open: true,
+    spawn: false,
+    started_at: "2026-09-25T10:00:00.000Z",
+  });
   const a = node("x:a", {
     waits: [wait("x:c"), wait("x:c/d")],
     blocked: { on: ["x:c", "x:c/d"], starting: 0, nodes: 2, open_tasks: 0, cycle: false },
@@ -570,7 +588,9 @@ test("R23: an address naming a node that doesn't exist goes back to where it was
   window.location.hash = "#x:c/d";
   await until(() => v.S.root === "x:c/d" && v.S.live.root === "x:c/d");
   window.location.hash = "#x:typo";
-  await until(() => v.S.root === "x:c/d" && v.S.live.root === "x:c/d" && window.location.hash === "#x%3Ac%2Fd");
+  await until(
+    () => v.S.root === "x:c/d" && v.S.live.root === "x:c/d" && window.location.hash === "#x%3Ac%2Fd",
+  );
   await settle();
   assert.equal(v.S.root, "x:c/d");
 });
@@ -591,8 +611,12 @@ test("R23: at a past step, a node outside the tree still opens its own tree", as
   await until(() => v.S.stops.length === 2);
   assert.equal(v.S.live.others["x:c/d"], undefined);
   v.goTo(0);
-  await until(() => [...doc.querySelectorAll("#detail button.linkish")].some((b) => b.textContent.startsWith("Explore")));
-  [...doc.querySelectorAll("#detail button.linkish")].find((b) => b.textContent.startsWith("Explore")).click();
+  await until(() =>
+    [...doc.querySelectorAll("#detail button.linkish")].some((b) => b.textContent.startsWith("Explore")),
+  );
+  [...doc.querySelectorAll("#detail button.linkish")]
+    .find((b) => b.textContent.startsWith("Explore"))
+    .click();
   await until(() => v.S.root === "x:c/d" && v.S.live.root === "x:c/d");
 });
 
@@ -870,7 +894,12 @@ test("R36: an address that isn't a well-formed one names nothing, and the page s
 
 test("R37: long unbroken text wraps in cards and panels", async (t) => {
   const long = (what) => `${what}-${"x".repeat(300)}`;
-  const a = node("x:a", { title: long("title"), cwd: `/${long("folder")}`, headline: long("headline"), children: ["x:a/b"] });
+  const a = node("x:a", {
+    title: long("title"),
+    cwd: `/${long("folder")}`,
+    headline: long("headline"),
+    children: ["x:a/b"],
+  });
   const b = node("x:a/b", {
     parent: "x:a",
     agent_type: long("type"),
@@ -878,7 +907,9 @@ test("R37: long unbroken text wraps in cards and panels", async (t) => {
     headline: long("headline"),
     state: "input_required",
     attention: long("attention"),
-    messages: [{ direction: "received", peer: "x:a", ts: a.started_at, summary: long("summary"), body: long("body") }],
+    messages: [
+      { direction: "received", peer: "x:a", ts: a.started_at, summary: long("summary"), body: long("body") },
+    ],
   });
   const window = loadViewer(t, { graph: async () => graph([a, b]) }, { hash: "#x:a" });
   const doc = window.document;
@@ -910,10 +941,18 @@ test("R37: long unbroken text wraps in cards and panels", async (t) => {
 
 test("R38: new events leave keyboard focus and selected text where they were", async (t) => {
   const b = node("x:a/b", { parent: "x:a", agent_type: "Explore", purpose: "Read the whole codebase" });
-  const tree = (headline) => [node("x:a", { children: ["x:a/b"], headline }), b, node("x:z", { cwd: "/w/z" })];
+  const tree = (headline) => [
+    node("x:a", { children: ["x:a/b"], headline }),
+    b,
+    node("x:z", { cwd: "/w/z" }),
+  ];
   let live = graph(tree("one"));
   let stops = stopsOf(["e1"]);
-  const window = loadViewer(t, { graph: async () => live, timeline: async () => ({ stops }) }, { hash: "#x:a" });
+  const window = loadViewer(
+    t,
+    { graph: async () => live, timeline: async () => ({ stops }) },
+    { hash: "#x:a" },
+  );
   const v = window.__viewer;
   const doc = window.document;
   const arrive = async (nodes) => {
@@ -962,7 +1001,11 @@ test("R38: new events leave keyboard focus and selected text where they were", a
 test("R39: the timeline's hover tip and spoken step show a label as text, cleaned", async (t) => {
   const label = "Task: <img src=x onerror=alert(1)>‮gnp.exe\u0007⁦ done\u0085";
   const stops = stopsOf(["e1", "e2", "e3"]).map((s) => ({ ...s, label }));
-  const window = loadViewer(t, { graph: async () => graph([node("x:a")]), timeline: async () => ({ stops }) }, { hash: "#x:a" });
+  const window = loadViewer(
+    t,
+    { graph: async () => graph([node("x:a")]), timeline: async () => ({ stops }) },
+    { hash: "#x:a" },
+  );
   const doc = window.document;
   await until(() => window.__viewer.S.stops.length === 3);
   const unclean = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/;

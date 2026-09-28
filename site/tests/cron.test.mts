@@ -9,7 +9,9 @@ register("../scripts/resolve-ts.mjs", import.meta.url);
 const { cronAllowed } = await import("../lib/cleanup.ts");
 
 const req = (auth: string | null) =>
-  new Request("https://example.test/api/cron/cleanup", { headers: auth === null ? {} : { Authorization: auth } });
+  new Request("https://example.test/api/cron/cleanup", {
+    headers: auth === null ? {} : { Authorization: auth },
+  });
 
 test("only Vercel Cron, with the secret, can run the cleanup", () => {
   assert.equal(cronAllowed(req("Bearer the-secret"), "the-secret"), true);

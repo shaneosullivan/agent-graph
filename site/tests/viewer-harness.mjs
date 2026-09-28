@@ -119,11 +119,7 @@ export function asServer(g, root) {
   }
   const others = {};
   for (const n of Object.values(nodes)) {
-    const referred = [
-      ...((n.blocked && n.blocked.on) || []),
-      ...n.messages.map((m) => m.peer),
-      n.parent,
-    ];
+    const referred = [...((n.blocked && n.blocked.on) || []), ...n.messages.map((m) => m.peer), n.parent];
     for (const id of referred) if (id && !nodes[id] && g.all[id]) others[id] = brief(g.all[id]);
   }
   return Object.assign(g, { root: tree, nodes, others });

@@ -166,7 +166,9 @@ export function Uploader() {
             {busy ?? "Create shareable link"}
           </button>
         </div>
-        {progress !== null && <progress className="progress" max={1} value={progress} aria-label={busy ?? "Working"} />}
+        {progress !== null && (
+          <progress className="progress" max={1} value={progress} aria-label={busy ?? "Working"} />
+        )}
         {error && <p className="error">{error}</p>}
       </div>
     </form>
