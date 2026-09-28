@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Formats the site's staged files with Prettier before each commit, as
+# `npm run format` would (the site's .prettierrc and .prettierignore), and
+# stages the result. Git runs it once `core.hooksPath` is .githooks, which
+# `npm install` in site/ sets (its `prepare` script).
+#
+# A file with changes that aren't staged is only checked, not formatted:
+# staging it again would commit those changes too. If it needs formatting,
+# the commit stops, and says so.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+# The staged site files Prettier formats, as paths inside site/.
+files=()
+while IFS= read -r path; do
+  files+=("${path#site/}")
+done < <(git diff --cached --name-only --diff-filter=ACMR -- site |
+  grep -E '\.(js|mjs|cjs|jsx|ts|mts|cts|tsx|json|css|md|ya?ml)$' || true)
+[ ${#files[@]} -gt 0 ] || exit 0
+
+prettier=site/node_modules/.bin/prettier
+if [ ! -x "$prettier" ]; then
+  echo "pre-commit: Prettier isn't installed, so the site's files weren't formatted (cd site && npm install). CI checks them." >&2
+  exit 0
+fi
+prettier=node_modules/.bin/prettier
+
+# From site/, so its .prettierignore applies (it's read from where
+# Prettier runs).
+cd site
+whole=()
+partial=()
+for f in "${files[@]}"; do
+  if git diff --quiet -- "$f"; then whole+=("$f"); else partial+=("$f"); fi
+done
+
+if [ ${#whole[@]} -gt 0 ]; then
+  "$prettier" --write --ignore-unknown --log-level warn -- "${whole[@]}"
+  git add -- "${whole[@]}"
+fi
+
+# What's staged of each, as it's what's committed: formatted, it's the same.
+# (Empty lists are only expanded behind a check: bash 3, macOS's, calls
+# them unset.)
+unformatted=()
+if [ ${#partial[@]} -gt 0 ]; then
+  for f in "${partial[@]}"; do
+    staged="$(git show ":./$f")"
+    if [ "$(printf '%s\n' "$staged" | "$prettier" --stdin-filepath "$f")" != "$staged" ]; then
+      unformatted+=("site/$f")
+    fi
+  done
+fi
+if [ ${#unformatted[@]} -gt 0 ]; then
+  echo "pre-commit: these need formatting, and have changes that aren't staged, so they weren't formatted for you:" >&2
+  printf '  %s\n' "${unformatted[@]}" >&2
+  echo "Run \`npm run format\` in site/, stage what you want to commit, and commit again." >&2
+  exit 1
+fi

@@ -87,6 +87,8 @@ Requires Node 22, plus the Firebase CLI and Java for the Firestore emulator.
 npm install
 ```
 
+This also sets up the repository's pre-commit hook (`../.githooks/pre-commit`), which formats the site's staged files with Prettier before each commit. `npm run format` formats everything; CI fails on code it would change (`npm run format:check`).
+
 ```bash
 cp .env.example .env.local
 ```

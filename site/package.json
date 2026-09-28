@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "prepare": "node scripts/install-hooks.mjs",
     "sync-viewer": "node scripts/sync-viewer.mjs",
     "build-wasm": "bash ../scripts/fix-rust-lld.sh && node scripts/sync-viewer.mjs --wasm",
     "copy-help": "node scripts/copy-help.mjs",
