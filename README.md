@@ -56,7 +56,7 @@ Their own sessions aren't recorded yet; only Claude Code has hooks so far.
 | `agent-graph view --open` | Live web view on port 7777 (it prints a link with a key, `http://127.0.0.1:7777/?key=…`; only that link works; if it's already running, it prints that one's link). Has a timeline slider for stepping back through a session, saves images, and reopens a Claude Code session: in the Claude desktop app if it has the session, else in a new terminal window. |
 | `agent-graph snapshot` | Saves a phone-sized PNG of the current session and prints its path, ready for an agent to send you. `--out x.svg` for SVG, `--json` for the raw graph. |
 | `agent-graph tree` | One-off text tree (`--all` includes older sessions). |
-| `agent-graph watch-remote` | Shares the graph live at [agentgraph.chofter.com](https://agentgraph.chofter.com) and prints the link straight away. See below. |
+| `agent-graph watch-remote` | Shares the graph live to your account at [agentgraph.chofter.com](https://agentgraph.chofter.com), where only you can see it. See below. |
 | `agent-graph run -- <command>` | Runs any command as a node in the graph, e.g. an agent without hooks (`agent-graph run -- aider`) or a script that starts several agents, which then appear under it. Exits with the command's exit code. |
 
 ```
@@ -77,21 +77,20 @@ To see all of these at once, open the [example logs](examples/README.md).
 agent-graph watch-remote
 ```
 
-This prints a link to a web viewer (the same one as `view`) and keeps it updated as your agents work, until you stop it. You can also paste or upload a log at [agentgraph.chofter.com](https://agentgraph.chofter.com).
+This shares the graph to your account on the site and keeps it updated as your agents work, until you stop it. See it at [agentgraph.chofter.com/watch](https://agentgraph.chofter.com/watch), logged in: it's the same viewer as `view`, and only you can see it. The first time, it opens your browser to log in (with Google, or an email and password), and keeps the login for next time. You can also paste or upload a log at [agentgraph.chofter.com](https://agentgraph.chofter.com), and share its link with anyone.
 
-Run it again later and it carries on with the same share and link, without sending what the site already has. `--new` starts a new one.
+Run it again later and it carries on with the same share, without sending what the site already has. `--new` starts a new one.
 
 The site keeps a log's recent history: its last 1,000 to 2,000 events, with where everything stood before them. A log that has had no event for a week is deleted. Your own log keeps everything.
 
 | Option | Effect |
 |---|---|
-| `--password=…` | Viewers must enter it. `--password=` shares without one, even if a default is saved. |
-| `--save-default-password` | Saves `--password` for future runs, in a file only you can read. With `--password=`, clears it. |
 | `--session=…` | Shares one session instead of all of them. |
-| `--new` | Starts a new share, with a new link, rather than carry on with the last one. |
+| `--new` | Starts a new share, rather than carry on with the last one. |
+| `--logout` | Logs this computer out of the site, and forgets the login. |
 | `--url=…` | Shares to another copy of the site, e.g. `http://localhost:3000` while developing it. |
 
-Only the machine that created a shared log can add to it. Every update must carry a key that the site returned when the log was created, and the CLI keeps that key only in memory. The site is in [site/](site/README.md).
+Only you can see a live share, and only the machine that created it can add to it: every update must carry a key the site returned when the share was created, kept in a file only you can read. The site is in [site/](site/README.md).
 
 Events live in `~/.agent-graph/events/`, one JSON Lines file per session. The format is defined in [schema/event.schema.json](schema/event.schema.json).
 
