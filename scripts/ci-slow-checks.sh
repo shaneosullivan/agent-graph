@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The slow checks: the site's production build, then its API and store tests
-# against the built site and the Firestore emulator. Needs Java 21 and ports
-# 3000 and 8080; the Firebase CLI is used from PATH, or fetched with npx.
+# against the built site and the Firestore emulator, then a build of every
+# release target (scripts/build-local.sh). Needs Java 21 and ports 3000 and
+# 8080; the Firebase CLI is used from PATH, or fetched with npx.
 # Run scripts/ci-setup.sh first.
 set -euo pipefail
 cd "$(dirname "$0")/../site"
@@ -26,3 +27,5 @@ printf '\n==> npm run build\n'
 npm run build
 printf '\n==> npm run test:ci\n'
 npm run test:ci
+printf '\n==> scripts/build-local.sh\n'
+bash ../scripts/build-local.sh
