@@ -93,7 +93,7 @@
           onStatus(false);
           delay = 10000;
         }
-        setTimeout(tick, document.hidden ? Math.max(delay, 15000) : delay);
+        setTimeout(tick, typeof document !== "undefined" && document.hidden ? Math.max(delay, 15000) : delay);
       };
       setTimeout(tick, delay);
       document.addEventListener("visibilitychange", () => {
