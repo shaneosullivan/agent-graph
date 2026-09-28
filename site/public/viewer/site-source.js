@@ -93,6 +93,9 @@
           onStatus(false);
           delay = 10000;
         }
+        // The page (or, in tests, the window) may have gone away while
+        // `pull()` was in flight: nothing left to poll for.
+        if (typeof document === "undefined" || !document) return;
         setTimeout(tick, document.hidden ? Math.max(delay, 15000) : delay);
       };
       setTimeout(tick, delay);
