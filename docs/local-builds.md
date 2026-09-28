@@ -1,6 +1,6 @@
 # Building release binaries to test locally
 
-How to get the same binaries a release ships ([release.md](release.md)) without publishing anything, mainly on an Apple Silicon Mac (or x86_64 Linux, as CI does).
+How to get the same binaries a release ships ([release.md](release.md)) without publishing anything, mainly on an Apple Silicon Mac (or x86_64 Windows, as CI does).
 
 ## Everything at once
 
@@ -29,16 +29,20 @@ brew install zig llvm
 cargo install cargo-zigbuild cargo-xwin
 ```
 
-### On Linux (Chofter CI)
+### On Windows (Chofter CI)
 
-The script also runs on x86_64 Linux, which is how the Chofter CI machine (Windows, running the checks in WSL2 Ubuntu) builds every target: `scripts/ci-slow-checks.sh` runs it after the site's checks. There, the macOS builds are cross-compiled with `cargo zigbuild` too, using Zig's copy of the macOS system libraries; nothing here links Apple's frameworks, so no macOS SDK is needed. Those builds aren't signed, and only the x86_64 Linux one is run. It checks everything compiles; releases still come from `dist`.
+The script also runs on x86_64 Windows, in Git Bash, which is how the Chofter CI machine builds every target: its runner is a native Windows one, and `scripts/ci-slow-checks.sh` runs the script after the site's checks. There, the Windows builds are Visual Studio's own, and the macOS and Linux builds are cross-compiled with `cargo zigbuild`, using Zig's copy of the macOS system libraries: nothing here links Apple's frameworks, so no macOS SDK is needed. Those builds aren't signed, and only the x86_64 Windows one is run. It checks everything compiles; releases still come from `dist`.
 
-`scripts/ci-setup.sh` installs `cargo-zigbuild` and `cargo-xwin`, and says if Zig or LLVM is missing. Install those once on the machine:
+`scripts/ci-setup.sh` installs `cargo-zigbuild`, and says if Zig or LLVM is missing. Install these once on the machine, where the runner's account can find them:
 
-```bash
-sudo apt install clang lld llvm
-sudo snap install zig --classic --beta
+- Visual Studio's C++ build tools (which Rust needs anyway), with **MSVC ARM64 build tools** added in the Visual Studio Installer, for Windows on ARM.
+- Zig and LLVM (whose clang compiles ring's C for Windows on ARM):
+
+```powershell
+winget install zig.zig LLVM.LLVM
 ```
+
+It runs on x86_64 Linux too (`sudo apt install clang lld llvm`, and Zig from ziglang.org), cross-compiling Windows with `cargo-xwin` as a Mac does.
 
 The rest of this page is what the script does, step by step, and the other ways to get the binaries.
 

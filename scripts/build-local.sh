@@ -8,11 +8,12 @@
 #
 # The binaries are copied to target/dist/mac, linux and windows: the ARM
 # build as agent-graph, and the x86_64 one beside it as agent-graph-x86_64.
-# Runs on an Apple Silicon Mac, or on x86_64 Linux (Chofter CI's WSL
-# machine, from scripts/ci-slow-checks.sh), with:
-#   Mac:     brew install zig llvm
-#   Linux:   zig (https://ziglang.org/download) and apt install clang lld llvm
-#   Both:    cargo install cargo-zigbuild cargo-xwin
+# Runs on an Apple Silicon Mac, x86_64 Linux, or x86_64 Windows in Git
+# Bash (Chofter CI's machine, from scripts/ci-slow-checks.sh), with:
+#   Mac:     brew install zig llvm; cargo install cargo-zigbuild cargo-xwin
+#   Linux:   zig, apt install clang lld llvm; cargo install (the same)
+#   Windows: winget install zig.zig LLVM.LLVM; cargo install cargo-zigbuild;
+#            Visual Studio's C++ build tools, with its ARM64 ones
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,7 +25,7 @@ targets=(
 for arg in "$@"; do
   case "$arg" in
     -h | --help)
-      sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -35,6 +36,7 @@ for arg in "$@"; do
 done
 
 host="$(uname -s)-$(uname -m)"
+case "$host" in MINGW* | MSYS*) host="Windows-${host##*-}" ;; esac
 case "$host" in
   Darwin-arm64)
     zig_hint="brew install zig"
@@ -44,8 +46,14 @@ case "$host" in
     zig_hint="https://ziglang.org/download, or: sudo snap install zig --classic --beta"
     llvm_hint="sudo apt install clang lld llvm"
     ;;
+  Windows-x86_64)
+    zig_hint="winget install zig.zig"
+    llvm_hint="winget install LLVM.LLVM"
+    # LLVM's installer doesn't always put it on PATH.
+    [ -d "/c/Program Files/LLVM/bin" ] && PATH="/c/Program Files/LLVM/bin:$PATH"
+    ;;
   *)
-    echo "This script is for an Apple Silicon Mac, or x86_64 Linux." >&2
+    echo "This script is for an Apple Silicon Mac, x86_64 Linux or x86_64 Windows." >&2
     exit 1
     ;;
 esac
@@ -76,18 +84,22 @@ for target in "${targets[@]}"; do
       need zig "$zig_hint"
       need cargo-zigbuild "cargo install cargo-zigbuild"
       ;;
-    # Linux builds macOS's with Zig too.
+    # Linux and Windows build macOS's with Zig too.
     *-apple-darwin)
-      if [ "$host" = Linux-x86_64 ]; then
+      if [ "$host" != Darwin-arm64 ]; then
         need zig "$zig_hint"
         need cargo-zigbuild "cargo install cargo-zigbuild"
       fi
       ;;
+    # Windows builds its own with Visual Studio's tools, but ring's C
+    # for Windows on ARM needs clang.
     *-windows-*)
-      need cargo-xwin "cargo install cargo-xwin"
-      # ring's C is compiled with clang, and archived with llvm-lib.
       need clang "$llvm_hint"
-      need llvm-lib "$llvm_hint"
+      if [ "$host" != Windows-x86_64 ]; then
+        need cargo-xwin "cargo install cargo-xwin"
+        # And cargo-xwin archives it with llvm-lib.
+        need llvm-lib "$llvm_hint"
+      fi
       ;;
   esac
 done
@@ -103,7 +115,7 @@ rustup target add "${targets[@]}"
 # Windows links with the toolchain's rust-lld. If that can't run (some
 # toolchains ship it looking for libLLVM.dylib where it isn't), link with
 # Zig's copy of lld instead, by the name rustc runs: lld-link.
-if [[ " ${targets[*]} " == *-windows-* ]]; then
+if [ "$host" != Windows-x86_64 ] && [[ " ${targets[*]} " == *-windows-* ]]; then
   rust_lld="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/rust-lld"
   if ! "$rust_lld" -flavor link --version >/dev/null 2>&1; then
     echo "rust-lld doesn't run here; Windows links with Zig's lld."
@@ -124,14 +136,20 @@ fi
 for target in "${targets[@]}"; do
   case "$target" in
     *-apple-darwin)
-      # A Mac builds its own; Linux cross-compiles, with Zig's copy of the
-      # macOS system libraries (nothing here links Apple's frameworks).
+      # A Mac builds its own; elsewhere it's cross-compiled, with Zig's copy
+      # of the macOS system libraries (nothing here links Apple's frameworks).
       if [ "$host" = Darwin-arm64 ]; then build=(cargo build); else build=(cargo zigbuild); fi
       ;;
     *-linux-*) build=(cargo zigbuild) ;;
-    # ring compiles its C with clang, not clang-cl, for Windows on ARM,
-    # so cargo-xwin must pass flags clang takes.
-    *-windows-*) build=(cargo xwin build --cross-compiler clang) ;;
+    *-windows-*)
+      if [ "$host" = Windows-x86_64 ]; then
+        build=(cargo build)
+      else
+        # ring compiles its C with clang, not clang-cl, for Windows on ARM,
+        # so cargo-xwin must pass flags clang takes.
+        build=(cargo xwin build --cross-compiler clang)
+      fi
+      ;;
   esac
   printf '\n==> %s --profile dist --target %s\n' "${build[*]}" "$target"
   "${build[@]}" --profile dist --target "$target"
@@ -182,14 +200,19 @@ for f in "$out"/mac/* "$out"/linux/* "$out"/windows/*; do
   [[ " ${built[*]} " == *" $f "* ]] || rm -rf "$f"
 done
 
-# Runs what this machine can. Linux runs its own x86_64 build; the others
-# were only built. A Mac runs its own builds (the Intel one with Rosetta,
+# Runs what this machine can. Linux and Windows run their own x86_64
+# build; the others were only built. A Mac runs its own builds (the Intel one with Rosetta,
 # if it's installed), and Linux's in Docker if it's up.
-if [ "$host" = Linux-x86_64 ]; then
+own=""
+case "$host" in
+  Linux-x86_64) own=x86_64-unknown-linux-musl ;;
+  Windows-x86_64) own=x86_64-pc-windows-msvc ;;
+esac
+if [ -n "$own" ]; then
   printf '\n==> Smoke test: running the build for this machine\n'
-  printf '%s: ' "$(dest x86_64-unknown-linux-musl)"
-  "$(dest x86_64-unknown-linux-musl)" --version
-  echo "The macOS, Windows and ARM Linux binaries were built but can't run here, so they weren't tested."
+  printf '%s: ' "$(dest "$own")"
+  "$(dest "$own")" --version
+  echo "The other binaries were built but can't run here, so they weren't tested."
   exit 0
 fi
 printf '\n==> Smoke test: running each binary this Mac can\n'
