@@ -1,6 +1,6 @@
 # Building release binaries to test locally
 
-How to get the same binaries a release ships ([release.md](release.md)) without publishing anything, mainly on an Apple Silicon Mac.
+How to get the same binaries a release ships ([release.md](release.md)) without publishing anything, mainly on an Apple Silicon Mac (or x86_64 Linux, as CI does).
 
 ## Everything at once
 
@@ -27,6 +27,17 @@ The first time, install what it cross-compiles with (it says if any is missing, 
 ```bash
 brew install zig llvm
 cargo install cargo-zigbuild cargo-xwin
+```
+
+### On Linux (Chofter CI)
+
+The script also runs on x86_64 Linux, which is how the Chofter CI machine (Windows, running the checks in WSL2 Ubuntu) builds every target: `scripts/ci-slow-checks.sh` runs it after the site's checks. There, the macOS builds are cross-compiled with `cargo zigbuild` too, using Zig's copy of the macOS system libraries; nothing here links Apple's frameworks, so no macOS SDK is needed. Those builds aren't signed, and only the x86_64 Linux one is run. It checks everything compiles; releases still come from `dist`.
+
+`scripts/ci-setup.sh` installs `cargo-zigbuild` and `cargo-xwin`, and says if Zig or LLVM is missing. Install those once on the machine:
+
+```bash
+sudo apt install clang lld llvm
+sudo snap install zig --classic --beta
 ```
 
 The rest of this page is what the script does, step by step, and the other ways to get the binaries.
