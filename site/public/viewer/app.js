@@ -1531,6 +1531,8 @@ function wire() {
   window.addEventListener('popstate', () => {
     const was = document.body.classList.contains('paged');
     const update = () => {
+      // The list, as left: a reload stays on it.
+      if (!history.state) history.replaceState({ agentGraphList: true }, '', location.href);
       renderPage();
       if (paged()) window.scrollTo(0, 0);
       else {
@@ -1553,6 +1555,8 @@ function wire() {
     // Not one this graph has: if it doesn't exist, come back here.
     S.returnTo = known(id) ? null : S.root;
     switchTo(id);
+    // On a phone, as its page (a link to it was followed, say).
+    openPage();
   });
 
   // Keep "2m ago" fresh.
@@ -1561,6 +1565,10 @@ function wire() {
 
 async function main() {
   wire();
+  // On a phone, a session named in the address opens as its page, with the
+  // list a step back; not where the list was left (reloaded, say), whose
+  // address names the session last shown.
+  if (NARROW.matches && hashId() && !history.state) history.pushState({ agentGraphPage: true }, '', location.href);
   renderAll();
   try {
     S.info = await source.info();

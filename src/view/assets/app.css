@@ -454,8 +454,10 @@ main { padding: 22px 28px 40px; }
   .timeline { grid-template-areas: "steppers live" "track track" "caption caption"; grid-template-columns: auto 1fr; position: sticky; bottom: 0; }
   .legend { display: none; }
 
-  /* A session chosen in the list opens as a page of its own, with a way back. */
+  /* One page at a time: the list, or a session's page (its tree, details
+     and timeline), with a way back. */
   body.paged .sessions, body.paged .brand { display: none; }
+  body:not(.paged) main, body:not(.paged) .detail, body:not(.paged) .timeline { display: none; }
   body.paged .topbar { position: sticky; top: 0; z-index: 10; }
 
   /* Going between the list and a session's page (see `transition`): the
