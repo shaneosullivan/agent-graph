@@ -52,6 +52,10 @@ pub const DEFAULT_URL: &str = "https://agentgraph.chofter.com";
 pub const MAX_CHUNK: usize = 256 * 1024;
 /// How often to look for new lines.
 const POLL: Duration = Duration::from_secs(1);
+/// How often, at most, to send them: each request costs the site, so what
+/// arrives in a burst goes together. After a quiet spell, what's new is
+/// sent at once; so is a full chunk's worth.
+const SEND_EVERY: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// How often, at most, to work out again which files a shared session's
 /// tree spans (only when a file outside it has changed).
@@ -164,8 +168,15 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     if let Some(before) = trim {
         trims.ask(before, &client, &log)?;
     }
+    let mut last_send = Instant::now();
     loop {
-        while !stream.pending.is_empty() {
+        let due = retrying.is_some()
+            || last_send.elapsed() >= SEND_EVERY
+            || stream.pending.len() >= MAX_CHUNK;
+        if due && !stream.pending.is_empty() {
+            last_send = Instant::now();
+        }
+        while due && !stream.pending.is_empty() {
             let n = retrying.unwrap_or_else(|| stream.next_len(MAX_CHUNK));
             match client.append(&log, sent, &stream.pending[..n]) {
                 Ok(()) => {

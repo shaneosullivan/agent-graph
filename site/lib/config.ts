@@ -40,10 +40,9 @@ export async function bodyText(req: Request, max: number): Promise<string | null
 }
 
 /**
- * The most text a log may store: counted as its chunks are stored and
- * trimmed (lib/store.ts), so a live share that trims its start can go on
- * for good, but chunks that overlap each count in full. Appends are also
- * kept within this of where the log starts, judged from their offsets.
+ * The most text a log may store: the span from its first chunk kept to its
+ * last (chunks follow on from each other: lib/store.ts), so a live share
+ * that trims its start can go on for good.
  */
 export const MAX_LOG_BYTES = 64 * 1024 * 1024;
 

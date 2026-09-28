@@ -140,18 +140,10 @@ test("a read stops at a byte budget, and paging gets the rest", async () => {
   }
   assert.equal(text, parts.join(""));
 
-  // Chunks whose offsets overlap (only a log's own writer could store
-  // them) are no way round it.
+  // Chunks whose offsets overlap (only a log's own writer could send them)
+  // are refused, so they're no way round it.
   const crafted = await create(parts[0]);
-  for (let i = 1; i < parts.length; i++) {
-    assert.equal((await append(crafted.id, i, parts[i], crafted.writeToken)).status, 204);
-  }
-  const read = await content(crafted.id);
-  assert.ok(
-    Buffer.byteLength(read.text) <= 2.5 * 1024 * 1024,
-    `${Buffer.byteLength(read.text)} bytes in one read`,
-  );
-  assert.ok(read.more);
+  assert.equal((await append(crafted.id, 1, parts[1], crafted.writeToken)).status, 409);
 });
 
 // R16: a late original racing its retry: every copy is accepted, once.
@@ -297,43 +289,42 @@ test("a log's start can be trimmed, with its key", async () => {
   assert.equal(read.first, String(offsets[2]).padStart(15, "0"));
 });
 
-// What's stored counts towards a log's size limit, not what was ever sent:
-// a trimmed live share can go on for good.
-test("a trimmed log can go on past the size limit", async () => {
+// R44: each chunk starts where the one before it ends, so what a log stores
+// is the span from its first chunk to its last, and that's what's limited.
+test("a chunk must start where the log ends", async () => {
   const log = await create(line(1));
-  const kept = 63 * 1024 * 1024;
-  const past = 65 * 1024 * 1024;
-  assert.equal((await append(log.id, kept, line(2), log.writeToken)).status, 204, "within the limit");
-  assert.equal((await append(log.id, past, line(3), log.writeToken)).status, 413, "all still there");
-  assert.equal((await trim(log.id, kept, log.writeToken)).status, 204);
-  assert.equal((await append(log.id, past, line(3), log.writeToken)).status, 204);
-  // (A gap between them: a read stops there, and the next carries on.)
-  const read = await content(log.id);
-  assert.deepEqual([read.text, read.more], [line(2), true]);
-  assert.equal((await content(log.id, read.last)).text, line(3));
-  // But not before where it now starts, nor once it's all gone.
-  assert.equal((await trim(log.id, past, log.writeToken)).status, 204);
-  assert.equal((await append(log.id, past - 1000, line(4), log.writeToken)).status, 413);
-  assert.equal((await trim(log.id, past + 1, log.writeToken)).status, 204);
-  assert.equal((await append(log.id, past + 1000, line(4), log.writeToken)).status, 413);
+  const end = line(1).length;
+  const refused = await append(log.id, end + 1, line(2), log.writeToken);
+  assert.equal(refused.status, 409, "a gap");
+  assert.match(await refused.text(), /where the log's last chunk ends/);
+  assert.equal((await append(log.id, end - 1, line(2), log.writeToken)).status, 409, "an overlap");
+  assert.equal((await append(log.id, end, line(2), log.writeToken)).status, 204);
+  assert.equal((await content(log.id)).text, line(1) + line(2));
 });
 
-// R44: the limit is on the bytes stored, not the offsets used: chunks that
-// overlap (each at its own offset, a byte apart) are each stored in full,
-// so they count in full.
-test("overlapping chunks count towards the size limit", { timeout: 120_000 }, async () => {
-  const log = await create(line(1));
+// What's stored counts towards a log's size limit, not what was ever sent:
+// a trimmed live share can go on for good.
+test("a log is limited in size, and trimmed, it can go on", { timeout: 180_000 }, async () => {
   const big = `${"x".repeat(512 * 1024 - 1)}\n`;
-  // 127 of them and the first line fit in 64 MiB; one more doesn't.
-  for (let i = 1; i <= 127; i++)
-    assert.equal((await append(log.id, i, big, log.writeToken)).status, 204, `chunk ${i}`);
-  const full = await append(log.id, 128, big, log.writeToken);
+  const size = Buffer.byteLength(big);
+  const log = await create(big);
+  // 128 of them fill 64 MiB; one more doesn't fit.
+  let offset = size;
+  for (let i = 1; i < 128; i++, offset += size)
+    assert.equal((await append(log.id, offset, big, log.writeToken)).status, 204, `chunk ${i}`);
+  assert.equal((await append(log.id, offset, big, log.writeToken)).status, 204, "up to the limit");
+  offset += size;
+  const full = await append(log.id, offset, big, log.writeToken);
   assert.equal(full.status, 413);
   assert.match(await full.text(), /full/);
-  assert.equal((await append(log.id, 127, big, log.writeToken)).status, 204, "a retry is still accepted");
   // Trimming makes room again.
-  assert.equal((await trim(log.id, 100, log.writeToken)).status, 204);
-  assert.equal((await append(log.id, 128, big, log.writeToken)).status, 204);
+  assert.equal((await trim(log.id, 100 * size, log.writeToken)).status, 204);
+  assert.equal((await append(log.id, offset, big, log.writeToken)).status, 204);
+  assert.equal((await content(log.id)).first, String(100 * size).padStart(15, "0"));
+  // But not before where it now starts, nor once it's all gone.
+  assert.equal((await append(log.id, 99 * size, big, log.writeToken)).status, 409);
+  assert.equal((await trim(log.id, offset + size + 1, log.writeToken)).status, 204);
+  assert.equal((await append(log.id, offset + size, big, log.writeToken)).status, 413);
 });
 
 // Stored as sent, so chunks' offsets stay true: a byte-order mark at a

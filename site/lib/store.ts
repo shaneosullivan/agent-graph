@@ -4,7 +4,6 @@ import {
   BYTES_PER_READ,
   CHUNKS_PER_QUERY,
   CHUNKS_PER_READ,
-  MAX_LOG_BYTES,
   SCRYPT_CHECKS_PER_LOG_AND_ADDRESS,
   SCRYPT_RUNS_PER_ADDRESS,
   type Source,
@@ -21,8 +20,8 @@ import { firestore } from "./firebase";
 /**
  * How logs are kept in Firestore:
  *
- *   logs/{sid}                 { source, pw?, owner?, createdAt, mac, stored }
- *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, n: <its length>, t: <when written> }
+ *   logs/{sid}                 { source, pw?, owner?, createdAt, mac }
+ *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, n: <its length>, end: <offset + n>, t: <when written> }
  *   unlock-attempts/{bucket}   { n, since, at, expireAt }  (password guesses, and scrypt runs)
  *
  * `sid` is an HMAC of the log's id (lib/encryption.ts), not the id itself:
@@ -34,8 +33,8 @@ import { firestore } from "./firebase";
  *
  * Each chunk is a separate document whose id is its byte offset in the log,
  * zero-padded so ids sort in log order. Appending is therefore one write of a
- * new document: nothing is read, and nothing already stored is rewritten, so
- * the cost doesn't grow with the log. Readers page through chunks in id
+ * new document (and a read of the one it follows): nothing already stored is
+ * rewritten, so the cost doesn't grow with the log. Readers page through chunks in id
  * order, and never read one twice, so a chunk never changes: a retry of the
  * same bytes is accepted, and different bytes at an offset already stored
  * are refused (checking costs a read, only then).
@@ -43,13 +42,10 @@ import { firestore } from "./firebase";
  * A live share keeps only its last two keyframes' worth (see `trimLog`), so a
  * log's first chunk isn't always at offset 0.
  *
- * `stored` is how many bytes of text the log's chunks hold, which is what
- * `MAX_LOG_BYTES` limits: kept up to date in the transaction that stores or
- * deletes a chunk, and exactly the sum of its chunks' lengths (`n`), which
- * say what deleting them gives back. A chunk without one isn't counted:
- * stored before counting began, or while the log was still stored as it was
- * before storage ids (it had no count to add to; the migration counts those
- * as it copies it).
+ * Each chunk starts where the one before it ends (see `appendChunk`), so
+ * what a log stores is the span from its first chunk to its last, which is
+ * what `MAX_LOG_BYTES` limits. (Logs made before this may have a `stored`
+ * count; it's no longer kept.)
  */
 
 export type Meta = {
@@ -86,7 +82,6 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
     ...(meta.owner ? { owner: meta.owner } : {}),
     createdAt: Timestamp.now(),
     mac: metaTag(id, meta),
-    stored: Buffer.byteLength(text),
   });
   if (text) {
     const key = chunkKey(0);
@@ -101,16 +96,10 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   }
 }
 
-/**
- * A chunk's document: its text, encrypted; its length, if it's `counted` in
- * the log's `stored`; and when it was written.
- */
-function chunkData(id: string, key: string, text: string, counted = true) {
-  return {
-    e: encryptChunk(id, key, text),
-    ...(counted ? { n: Buffer.byteLength(text) } : {}),
-    t: Timestamp.now(),
-  };
+/** A chunk's document: its text, encrypted; its length, and where it ends; and when it was written. */
+function chunkData(id: string, key: string, text: string) {
+  const n = Buffer.byteLength(text);
+  return { e: encryptChunk(id, key, text), n, end: Number(key) + n, t: Timestamp.now() };
 }
 
 export class ChunkTaken extends Error {}
@@ -118,8 +107,8 @@ export class ChunkTaken extends Error {}
 /** The log isn't there (any more): one not in use is deleted (lib/cleanup.ts). */
 export class LogGone extends Error {}
 
-/** The log holds `MAX_LOG_BYTES` already, or would with the chunk. */
-export class LogFull extends Error {}
+/** The chunk doesn't start where the log's last one ends. */
+export class Misplaced extends Error {}
 
 /**
  * Whether log `id` is there to add to: stored, and not being deleted
@@ -151,17 +140,24 @@ async function where(
 
 /**
  * Encrypts and stores one chunk at `offset`, if the log's still there
- * (`LogGone` if not), and has room for it (`LogFull` if not). One write of
- * the chunk, and one read and write of the log's metadata (its count of
- * what it stores), unless a chunk is already stored there: then it's read,
- * and anything but the same bytes (or one that can't be decrypted) is
- * refused with `ChunkTaken`.
+ * (`LogGone` if not), and it follows on from what's there (`Misplaced` if
+ * not): a chunk ends where it starts, or, if none does, it's the log's
+ * first (at 0, with nothing stored yet) or a retry of the first one kept.
+ * So chunks never overlap, nor leave gaps but where a log's start was
+ * trimmed, and what a log stores is the span from its first chunk to its
+ * last, which the append route keeps within `MAX_LOG_BYTES`. One write, of
+ * the chunk, and two reads (the log's metadata, and the chunk it follows
+ * on from), unless a chunk is already stored there: then it's read, and
+ * anything but the same bytes (or one that can't be decrypted) is refused
+ * with `ChunkTaken`.
+ *
+ * (Chunks stored before they said where they end don't: a log whose first
+ * chunk is one of those isn't checked, until it's trimmed past them.)
  */
 export async function appendChunk(id: string, offset: number, text: string): Promise<void> {
   const key = chunkKey(offset);
-  const log = logDoc(id);
-  const doc = log.collection("chunks").doc(key);
-  const bytes = Buffer.byteLength(text);
+  const chunks = logDoc(id).collection("chunks");
+  const doc = chunks.doc(key);
   try {
     // Only while the log's there (read with it, so a deletion as it's
     // written makes it try again, and fail): otherwise what's sent after
@@ -169,18 +165,23 @@ export async function appendChunk(id: string, offset: number, text: string): Pro
     await firestore().runTransaction(async (tx) => {
       const found = await where(id, (ref) => tx.get(ref));
       if (found === null) throw new LogGone(id);
+      // (One still stored as it was before storage ids has chunks from
+      // before that aren't here to follow on from.)
       if (found) {
-        // Counted with it, so chunks that overlap, or are sent at once,
-        // can't get past the limit.
-        const stored = Number(found.get("stored")) || 0;
-        // (A retry of a stored chunk isn't refused: storing it, below,
-        // fails, and it's compared.)
-        if (stored + bytes > MAX_LOG_BYTES && !(await tx.get(doc)).exists) throw new LogFull(id);
-        tx.update(log, { stored: stored + bytes });
+        const ends = offset > 0 ? await tx.get(chunks.where("end", "==", offset).limit(1).select()) : null;
+        if (!ends || ends.empty) {
+          const [first] = (await tx.get(chunks.orderBy(FieldPath.documentId()).limit(1).select("end"))).docs;
+          // With nothing stored yet, it goes at 0. Else it's the first
+          // kept, again (a retry: storing it, below, fails, and it's
+          // compared), or it doesn't follow on.
+          const follows = first
+            ? first.id === key || (offset > 0 && first.get("end") === undefined)
+            : offset === 0;
+          if (!follows) throw new Misplaced(key);
+        }
       }
       // When it was written: a log with none newer than a week is deleted.
-      // (Without its length where it isn't counted, as it isn't subtracted.)
-      tx.create(doc, chunkData(id, key, text, found !== undefined));
+      tx.create(doc, chunkData(id, key, text));
     });
   } catch (err) {
     // gRPC ALREADY_EXISTS
@@ -217,9 +218,8 @@ const TRIM_BATCH = 500;
  * newest first, a batch at a time (each all at once), so a reader never
  * starts partway through what's being deleted; one that's reading across it
  * sees a gap, and starts again (site-source.js). Each batch is a
- * transaction that gives back what the chunks it deletes held (those still
- * there: two trims at once don't give back a chunk twice). Returns how many
- * went.
+ * transaction, with the log (so none go from a log being deleted). Returns
+ * how many went (those still there: two trims at once count each once).
  */
 export async function trimLog(id: string, before: number): Promise<number> {
   if (!(await there(id, (ref) => ref.get()))) throw new LogGone(id);
@@ -239,13 +239,9 @@ export async function trimLog(id: string, before: number): Promise<number> {
     deleted += await firestore().runTransaction(async (tx) => {
       const found = await where(id, (ref) => tx.get(ref));
       if (found === null) throw new LogGone(id);
-      const snaps = await tx.getAll(...refs, { fieldMask: ["n"] });
+      const snaps = await tx.getAll(...refs, { fieldMask: [] });
       const stored = snaps.filter((snap) => snap.exists);
       for (const snap of stored) tx.delete(snap.ref);
-      if (found) {
-        const freed = stored.reduce((sum, snap) => sum + (Number(snap.get("n")) || 0), 0);
-        tx.update(found.ref, { stored: Math.max(0, (Number(found.get("stored")) || 0) - freed) });
-      }
       return stored.length;
     });
   }

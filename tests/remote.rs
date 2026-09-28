@@ -133,15 +133,19 @@ fn shares_the_log_then_appends_only_new_lines_with_the_key() {
     );
     assert!(!create.headers.contains_key("x-agent-graph-password"));
 
-    // New lines follow, alone, at the right offset, with the key.
+    // New lines follow, alone, at the right offset, with the key; those
+    // that arrive close together, in one request (at most one every few
+    // seconds).
     agent_graph::store::append(&file, line(3).as_bytes()).unwrap();
-    let append = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+    std::thread::sleep(Duration::from_millis(1200));
+    agent_graph::store::append(&file, line(4).as_bytes()).unwrap();
+    let append = requests.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(
         append.path,
         format!("/api/logs/abc123def456/append?offset={}", first.len())
     );
     assert_eq!(append.headers["authorization"], "Bearer the-key");
-    assert_eq!(append.body, line(3));
+    assert_eq!(append.body, format!("{}{}", line(3), line(4)));
 
     child.kill().unwrap();
     child.wait().unwrap();

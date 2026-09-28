@@ -134,14 +134,14 @@ test(
     await store.appendChunk(id, Buffer.byteLength(text), text);
 
     const stored = await doc.get();
-    assert.deepEqual(Object.keys(stored.data()).sort(), ["createdAt", "mac", "source", "stored"]);
+    assert.deepEqual(Object.keys(stored.data()).sort(), ["createdAt", "mac", "source"]);
     const chunks = await doc.collection("chunks").get();
     assert.equal(chunks.size, 2);
     for (const chunk of chunks.docs) {
       assert.deepEqual(
         Object.keys(chunk.data()).sort(),
-        ["e", "n", "t"],
-        "ciphertext, its length, and when it was written",
+        ["e", "end", "n", "t"],
+        "ciphertext, its length and where it ends, and when it was written",
       );
       assert.ok(Math.abs(chunk.get("t").toMillis() - Date.now()) < 60_000);
       assert.ok(!Buffer.from(chunk.get("e")).includes(Buffer.from("recognisable")));
@@ -189,9 +189,8 @@ test("trimming more chunks than a batch holds deletes them all", { skip, timeout
   const id = newId();
   await store.createLog(id, { source: "watch" }, "");
   const count = 620;
-  // (One at a time: each counts what the log stores, so appends at once
-  // wait for each other.)
-  for (let i = 0; i < count; i++) await store.appendChunk(id, i * 10, `{"n":${i}}\n`);
+  // (One at a time: each follows on from the one before.)
+  for (let i = 0; i < count; i++) await store.appendChunk(id, i * 10, `${String(i).padStart(9, "0")}\n`);
   // Newest first: a reader starting from the first chunk left never starts
   // partway through what's being deleted.
   const { Transaction } = await import("firebase-admin/firestore");
@@ -219,38 +218,37 @@ test("trimming more chunks than a batch holds deletes them all", { skip, timeout
   assert.equal((await store.readChunks(id, "")).first, store.chunkKey(6000));
 });
 
-// R44: a log's count of what it stores goes up with each chunk stored
-// (once, however often it's sent) and down with each one trimmed (once,
-// however many trims delete it at once), so it bounds what's stored.
-test("a log counts what it stores, and trimming gives it back", { skip, timeout: 60_000 }, async () => {
-  const { MAX_LOG_BYTES } = await import("../lib/config.ts");
+// R44: each chunk starts where the one before it ends, so chunks never
+// overlap, and what a log stores is the span from its first to its last
+// (which the append route bounds). A retry of what's stored is accepted.
+test("a chunk follows on from the one before", { skip, timeout: 60_000 }, async () => {
   const store = await import("../lib/store.ts");
-  const { firestore } = await import("../lib/firebase.ts");
-  const { storageId } = await import("../lib/encryption.ts");
+  const misplaced = (promise) => assert.rejects(promise, store.Misplaced);
+
   const id = newId();
-  const log = firestore().collection("logs").doc(storageId(id));
-  const stored = async () => (await log.get()).get("stored");
-
   await store.createLog(id, { source: "watch" }, "AA\n");
-  assert.equal(await stored(), 3);
   await store.appendChunk(id, 3, "BBBB\n");
   await store.appendChunk(id, 3, "BBBB\n");
-  // Overlapping: counted in full.
-  await store.appendChunk(id, 4, "CCCCCC\n");
-  assert.equal(await stored(), 3 + 5 + 7);
+  await misplaced(store.appendChunk(id, 4, "CCCCCC\n"));
+  await misplaced(store.appendChunk(id, 9, "CCCCCC\n"));
+  await misplaced(store.appendChunk(id, 1, "C\n"));
+  await store.appendChunk(id, 8, "CCCCCC\n");
+  await store.appendChunk(id, 0, "AA\n");
+  assert.equal((await store.readChunks(id, "")).text, "AA\nBBBB\nCCCCCC\n");
 
-  await Promise.all([store.trimLog(id, 4), store.trimLog(id, 4)]);
-  assert.equal(await stored(), 7, "each chunk given back once");
+  // Trimmed: nothing goes before the first chunk kept (at 0, say), but it
+  // can be sent again.
+  await store.trimLog(id, 3);
+  await misplaced(store.appendChunk(id, 0, "AA\n"));
+  await store.appendChunk(id, 3, "BBBB\n");
+  await store.appendChunk(id, 15, "D\n");
+  assert.equal((await store.readChunks(id, "")).text, "BBBB\nCCCCCC\nD\n");
 
-  // Full: refused, but for a retry of what's stored.
-  await log.update({ stored: MAX_LOG_BYTES - 1 });
-  await store.appendChunk(id, 11, "D\n").then(
-    () => assert.fail("stored past the limit"),
-    (err) => assert.ok(err instanceof store.LogFull, String(err)),
-  );
-  await store.appendChunk(id, 4, "CCCCCC\n");
-  assert.equal(await stored(), MAX_LOG_BYTES - 1);
-  assert.equal((await store.readChunks(id, "")).text, "CCCCCC\n");
+  // A log made empty starts at 0.
+  const empty = newId();
+  await store.createLog(empty, { source: "watch" }, "");
+  await misplaced(store.appendChunk(empty, 5, "A\n"));
+  await store.appendChunk(empty, 0, "A\n");
 });
 
 // Chunks are stored one after another; a gap means the log's start was
@@ -258,14 +256,24 @@ test("a log counts what it stores, and trimming gives it back", { skip, timeout:
 // the next read start somewhere else, starts again.
 test("a read stops at a gap", { skip, timeout: 60_000 }, async () => {
   const store = await import("../lib/store.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const { storageId } = await import("../lib/encryption.ts");
   const id = newId();
   await store.createLog(id, { source: "watch" }, "A\n");
   await store.appendChunk(id, 2, "B\n");
-  await store.appendChunk(id, 10, "C\n");
+  await store.appendChunk(id, 4, "X\n");
+  await store.appendChunk(id, 6, "C\n");
+  // As a trim would leave it, had it deleted up to 6 as this was read.
+  await firestore()
+    .collection("logs")
+    .doc(storageId(id))
+    .collection("chunks")
+    .doc(store.chunkKey(4))
+    .delete();
   const page = await store.readChunks(id, "");
   assert.deepEqual(page, { text: "A\nB\n", first: store.chunkKey(0), last: store.chunkKey(2), more: true });
   const next = await store.readChunks(id, page.last);
-  assert.deepEqual(next, { text: "C\n", first: store.chunkKey(10), last: store.chunkKey(10), more: false });
+  assert.deepEqual(next, { text: "C\n", first: store.chunkKey(6), last: store.chunkKey(6), more: false });
 });
 
 // R18: metadata changed in the database (a password removed, or another
@@ -406,42 +414,28 @@ test("the migration copies logs, then deletes the old copies", { skip, timeout: 
   assert.match((await migrate(["--delete-old"])).stdout, /Deleted the old copies of 0 logs\./);
 });
 
-// R44: a log's count of what it stores is exact across the migration: what
-// the old site stored, and what the new one added before the copy (not
-// counted then: the log had no count), are counted once it's copied, once
-// each, however often it's copied; and trims give back what they delete.
-test("the size count is exact across the migration", { skip, timeout: 60_000 }, async () => {
+// R44: once copied, a log's chunks all say where they end (what the old
+// site stored didn't), and appends follow on from them.
+test("copied chunks say where they end", { skip, timeout: 60_000 }, async () => {
   const store = await import("../lib/store.ts");
+  const { firestore } = await import("../lib/firebase.ts");
+  const { storageId } = await import("../lib/encryption.ts");
   const a = await oldLog();
   const big = (c) => `${c.repeat(10 * 1024 - 1)}\n`;
-  // What its chunks hold, all of them (a read stops at a gap).
-  const total = async () => {
-    const { decryptChunk, storageId } = await import("../lib/encryption.ts");
-    const { firestore } = await import("../lib/firebase.ts");
-    const chunks = await firestore().collection("logs").doc(storageId(a.id)).collection("chunks").get();
-    return chunks.docs.reduce((sum, doc) => sum + decryptChunk(a.id, doc.id, doc.get("e")).length, 0);
-  };
   let offset = a.offset;
   for (const c of ["a", "b"]) {
     await store.appendChunk(a.id, offset, big(c));
     offset += big(c).length;
   }
-  const trimAt = a.offset + big("a").length;
 
   assert.equal((await migrate()).status, 0);
-  assert.equal((await copyOf(a.id)).get("stored"), a.offset + 20 * 1024);
-  assert.equal((await migrate()).status, 0);
-  assert.equal((await copyOf(a.id)).get("stored"), a.offset + 20 * 1024, "copied again, counted once");
-
+  const chunks = await firestore().collection("logs").doc(storageId(a.id)).collection("chunks").get();
+  for (const chunk of chunks.docs) {
+    assert.equal(chunk.get("end"), Number(chunk.id) + chunk.get("n"), `chunk ${chunk.id}`);
+  }
+  await assert.rejects(store.appendChunk(a.id, offset + 1, big("c")), store.Misplaced);
   await store.appendChunk(a.id, offset, big("c"));
-  assert.equal((await copyOf(a.id)).get("stored"), await total());
-  await store.trimLog(a.id, trimAt);
-  assert.equal(await total(), 20 * 1024);
-  assert.equal((await copyOf(a.id)).get("stored"), 20 * 1024, "what's still there");
-  // Copying again brings back the old copy's chunk that was trimmed (a
-  // gap before the rest, which reads past it), and counts it.
-  assert.equal((await migrate()).status, 0);
-  assert.equal((await copyOf(a.id)).get("stored"), await total(), "and copying again keeps it exact");
+  assert.equal((await store.readChunks(a.id, "")).text, a.chunks.join("") + big("a") + big("b") + big("c"));
 });
 
 test("the migration changes nothing with the wrong key, or none", { skip, timeout: 60_000 }, async () => {

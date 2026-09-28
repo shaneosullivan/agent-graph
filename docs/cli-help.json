@@ -275,7 +275,7 @@
         { "text": "Only you, logged in to the site: /watch shows your latest live share. Nobody else can open it. Your login is only sent over HTTPS, or to your own machine." },
         { "heading": "Who can change it" },
         { "text": "Only you. The site gives the share a key when it's made, and every update must carry it. It's kept in ~/.agent-graph/shares/, readable only by you, so the next run can carry on." },
-        { "text": "It checks for new events once a second and sends them together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why. The site deletes a share that has had no new events for a week: sharing it then stops." },
+        { "text": "It checks for new events once a second, and sends them at most every 5 seconds, together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why. The site deletes a share that has had no new events for a week: sharing it then stops." },
         { "heading": "Running it again" },
         { "text": "The next run for the same site, account and sessions carries on with the same share. What the site already has isn't sent again: it starts again from one summary of the log as it is now, and deletes what came before. --new starts a new share instead, as does logging in as someone else, and a share the site has deleted. If it's being shared now, by another run, it's left to that run." }
       ],

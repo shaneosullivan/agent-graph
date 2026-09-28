@@ -67,25 +67,21 @@ function newMeta(id, data) {
 }
 
 /**
- * Counts the chunks of `target` (a copy) that aren't counted in its
- * `stored` yet, those without a length (`n`: see lib/store.ts), a page at a
- * time: each page in a transaction that gives them their length and adds it
- * to the count, so a chunk deleted meanwhile (a trim) isn't counted, and
- * none is counted twice.
+ * Gives the chunks of `target` (a copy) that don't say where they end
+ * (`end`, and their length, `n`: see lib/store.ts) that, a page at a time,
+ * each page in a transaction, so a chunk deleted meanwhile (a trim) isn't
+ * brought back.
  */
 async function count(id, target) {
   for await (const chunks of pages(target)) {
-    const refs = chunks.filter((chunk) => chunk.get("n") === undefined).map((chunk) => chunk.ref);
+    const refs = chunks.filter((chunk) => chunk.get("end") === undefined).map((chunk) => chunk.ref);
     if (!refs.length) continue;
     await db.runTransaction(async (tx) => {
-      const snaps = (await tx.getAll(...refs)).filter((snap) => snap.exists && snap.get("n") === undefined);
-      let added = 0;
+      const snaps = (await tx.getAll(...refs)).filter((snap) => snap.exists && snap.get("end") === undefined);
       for (const snap of snaps) {
         const n = Buffer.byteLength(decryptChunk(id, snap.id, snap.get("e")));
-        tx.update(snap.ref, { n });
-        added += n;
+        tx.update(snap.ref, { n, end: Number(snap.id) + n });
       }
-      if (added) tx.update(target, { stored: FieldValue.increment(added) });
     });
   }
 }
@@ -111,9 +107,9 @@ async function inPages(write) {
 
 /**
  * Copies log `id`: its chunks first, then its metadata, so it only shows
- * once complete; then counts what it stores (`count`). A chunk the copy
- * already has (copied before, or stored by the new site) is kept as it is:
- * it may be counted, and viewers may have read it.
+ * once complete; then has its chunks say where they end (`count`). A chunk the
+ * copy already has (copied before, or stored by the new site) is kept as it
+ * is: viewers may have read it.
  */
 async function copy(id, old, meta) {
   const target = logs.doc(storageId(id));
@@ -130,12 +126,7 @@ async function copy(id, old, meta) {
         chunks.flatMap((chunk, i) => (copies[i].exists ? [] : [writer.create(copies[i].ref, chunk.data())])),
       );
     }
-    // Merged, and the count started at nothing but never reset: since
-    // it's been there, appends have been counted in it.
-    if (meta.exists) {
-      const data = { ...newMeta(id, meta.data()), stored: FieldValue.increment(0) };
-      await page((writer) => [writer.set(target, data, { merge: true })]);
-    }
+    if (meta.exists) await page((writer) => [writer.set(target, newMeta(id, meta.data()), { merge: true })]);
   });
   if (meta.exists) await count(id, target);
 }

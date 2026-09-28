@@ -1,6 +1,6 @@
 import { bodyText, gone, ID_PATTERN, MAX_CHUNK_BYTES, MAX_LOG_BYTES } from "@/lib/config";
 import { canWrite } from "@/lib/crypto";
-import { appendChunk, ChunkTaken, firstChunkOffset, LogFull, LogGone } from "@/lib/store";
+import { appendChunk, ChunkTaken, firstChunkOffset, LogGone, Misplaced } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,10 +19,10 @@ export const dynamic = "force-dynamic";
  * - the write token is checked by recomputing an HMAC, with no database read;
  * - the body is stored as it arrives (raw JSON Lines, never parsed);
  * - storing it is a single write of a new document keyed by the offset, in
- *   a transaction with the log's metadata: it's read, that the log's still
- *   there (410 if it's been deleted: lib/cleanup.ts), and its count of the
- *   bytes it stores updated (413 past `MAX_LOG_BYTES`: that's what bounds
- *   what a log stores, however its chunks overlap).
+ *   a transaction with the log's metadata (read, that the log's still
+ *   there: 410 if it's been deleted, lib/cleanup.ts) and the chunk before
+ *   it (read, that this one starts where it ends: 409 if not). Chunks never
+ *   overlap, so the span checked above bounds what a log stores.
  *
  * A chunk never changes once stored (viewers don't read one twice): the same
  * bytes again (a retry) are accepted, different ones (or any, where the stored
@@ -54,7 +54,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     await appendChunk(id, offset, text);
   } catch (err) {
     if (err instanceof LogGone) return gone();
-    if (err instanceof LogFull) return new Response("This log is full.", { status: 413 });
+    if (err instanceof Misplaced) {
+      return new Response("That isn't where the log's last chunk ends.", { status: 409 });
+    }
     if (err instanceof ChunkTaken) {
       return new Response("Other events are already stored at this offset.", { status: 409 });
     }
