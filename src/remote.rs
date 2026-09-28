@@ -17,6 +17,10 @@
 //! Bodies are raw JSON Lines, never wrapped in JSON, and are cut only at line
 //! boundaries.
 //!
+//! A share belongs to an account: the user logs in first (see `account`), and
+//! the log is made with their login's token (`Authorization: Bearer`), so
+//! only they can see it, at the site's /watch.
+//!
 //! A share is kept for next time (see `SavedShare`): the next run on this
 //! computer, for the same site and the same sessions, carries on with it
 //! rather than making another, so its link stays the same and what's already
@@ -46,8 +50,6 @@ use crate::reducer::{self, KEYFRAME_PART, Replay};
 pub const DEFAULT_URL: &str = "https://agentgraph.chofter.com";
 /// The most sent in one request; the site rejects bigger bodies.
 pub const MAX_CHUNK: usize = 256 * 1024;
-/// The longest password the site accepts, in bytes of UTF-8.
-pub const MAX_PASSWORD: usize = 1024;
 /// How often to look for new lines.
 const POLL: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -57,49 +59,22 @@ const RECHECK: Duration = Duration::from_secs(3);
 
 pub struct Options {
     pub url: String,
-    /// `Some("")` means "no password", even if a default is saved.
-    pub password: Option<String>,
-    pub save_default_password: bool,
     /// Share one session instead of everything.
     pub session: Option<String>,
     /// Start a new share, even if there's one to carry on with.
     pub new: bool,
+    /// Log out instead: the site forgets this computer's login.
+    pub logout: bool,
 }
 
 pub fn run(root: &Path, opts: Options) -> Result<(), String> {
-    let config = root.join("remote.json");
-    if opts.save_default_password {
-        match opts.password.as_deref() {
-            None => return Err(
-                "--save-default-password needs --password=<password> (or --password= to clear it)"
-                    .into(),
-            ),
-            Some("") => {
-                clear_default_password(&config)?;
-                eprintln!("Cleared the saved default password.");
-            }
-            Some(p) => {
-                check_password(p)?;
-                save_default_password(&config, p)?;
-                eprintln!(
-                    "Saved the password as the default for watch-remote ({}).",
-                    config.display()
-                );
-            }
-        }
-    }
-    let password = match opts.password {
-        Some(p) => Some(p).filter(|p| !p.is_empty()),
-        None => load_default_password(&config)?,
-    };
-    if let Some(p) = &password {
-        check_password(p)?;
-    }
-
     let base = opts.url.trim_end_matches('/').to_string();
-    if password.is_some() && !sends_privately(&base) {
+    if opts.logout {
+        return crate::account::logout(root, &base);
+    }
+    if !sends_privately(&base) {
         return Err(format!(
-            "{base} isn't HTTPS, so the password would be sent in the clear. Use an https:// URL."
+            "{base} isn't HTTPS, so your login would be sent in the clear. Use an https:// URL."
         ));
     }
 
@@ -125,15 +100,35 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         );
         return Ok(());
     }
-    let saved = saved.filter(|s| s.password == password_check(&s.id, password.as_deref()));
 
+    let client = Client::new(&base);
+    let mut account = match crate::account::load(root, &base) {
+        Some(account) => account,
+        None => crate::account::login(root, &base, &client)?,
+    };
     let mut source = Lines::new(&events, only.clone());
     let raw = source
         .poll()
         .map_err(|e| format!("reading {}: {e}", events.display()))?;
-    let client = Client::new(&base);
-    let (log, mut stream, mut sent, trim, carried_on) =
-        start_share(&client, raw, saved, password.as_deref())?;
+    // A login the site has forgotten (logged out on the account page, say)
+    // is done again, once.
+    let mut logged_in_again = false;
+    let (log, mut stream, mut sent, trim, carried_on) = loop {
+        // Only a share of this account's is carried on with.
+        let saved = saved
+            .clone()
+            .filter(|s| s.account.as_deref() == Some(account_key(&account)));
+        match start_share(&client, raw.clone(), saved, &account.token) {
+            Ok(started) => break started,
+            Err(SendError::LoggedOut(e)) if !logged_in_again => {
+                crate::account::forget(root)?;
+                eprintln!("{e}");
+                account = crate::account::login(root, &base, &client)?;
+                logged_in_again = true;
+            }
+            Err(e) => return Err(e.message()),
+        }
+    };
     let mut share = SavedShare {
         site: base.clone(),
         target: only.clone(),
@@ -141,26 +136,24 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         link: log.url.clone(),
         write_token: log.write_token.clone(),
         offset: sent,
-        password: password_check(&log.id, password.as_deref()),
+        account: Some(account_key(&account).to_string()),
         sharer: crate::process::lineage(std::process::id())
             .first()
             .map(|p| p.id()),
     };
     share.save(&share_path);
-    // The link first, so it can be shared straight away.
+    // The link first, so it can be opened straight away.
     println!("{}", log.url);
     io::stdout().flush().ok();
-    let who = if password.is_some() {
-        "Viewers need the password"
-    } else {
-        "Anyone with the link can view it"
-    };
     let how = if carried_on {
         "Carrying on with the last share of"
     } else {
         "Sharing"
     };
-    eprintln!("{how} {what}, live. {who}. Press Ctrl+C to stop.");
+    eprintln!(
+        "{how} {what}, live, to {}: only you can see it, logged in there. Press Ctrl+C to stop.",
+        account.who()
+    );
 
     let mut backoff = Duration::ZERO;
     let mut reading_failed = false;
@@ -190,7 +183,10 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                         backoff = Duration::ZERO;
                     }
                 }
-                Err(SendError::Fatal(e) | SendError::Expired(e)) => return Err(e),
+                // (A share's appends carry its own key, not the login.)
+                Err(SendError::Fatal(e) | SendError::Expired(e) | SendError::LoggedOut(e)) => {
+                    return Err(e);
+                }
                 Err(SendError::Retry(e)) => {
                     retrying = Some(n);
                     if backoff.is_zero() {
@@ -224,30 +220,40 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     }
 }
 
-/// Carries on with the `saved` share, if it can, else makes a new one. The
-/// log, what's still to send, how much the site has, where the site can
-/// delete before (if it can), and whether it carried on.
+/// The log, what's still to send, how much the site has, where the site
+/// can delete before (if it can), and whether it carried on with a share.
+type Started = (Created, Stream, u64, Option<u64>, bool);
+
+/// Carries on with the `saved` share, if it can, else makes a new one, as
+/// the account whose login `token` is. The site is told first that it's the
+/// account's latest share (which it checks is theirs), so /watch shows it.
 fn start_share(
     client: &Client,
     raw: Vec<u8>,
     saved: Option<SavedShare>,
-    password: Option<&str>,
-) -> Result<(Created, Stream, u64, Option<u64>, bool), String> {
+    token: &str,
+) -> Result<Started, SendError> {
     if let Some(saved) = saved {
-        let log = saved.log();
-        let mut stream = Stream::resume(raw.clone(), keyframe::EVERY);
-        if stream.pending.is_empty() {
-            return Ok((log, stream, saved.offset, None, true));
-        }
-        let n = stream.next_len(MAX_CHUNK);
-        match client.append(&log, saved.offset, &stream.pending[..n]) {
-            Ok(()) => {
-                let trim = stream.sent(n, saved.offset);
-                return Ok((log, stream, saved.offset + n as u64, trim, true));
+        let mut log = saved.log();
+        let carried = client.claim(&log, token).and_then(|url| {
+            log.url = url;
+            let mut stream = Stream::resume(raw.clone(), keyframe::EVERY);
+            if stream.pending.is_empty() {
+                return Ok((stream, saved.offset, None));
             }
-            Err(SendError::Retry(e)) => return Err(format!("couldn't reach the site: {e}")),
-            // Gone, or not where it was left (a run stopped between sending
-            // and saving how far it got): a new one, then.
+            let n = stream.next_len(MAX_CHUNK);
+            client.append(&log, saved.offset, &stream.pending[..n])?;
+            let trim = stream.sent(n, saved.offset);
+            Ok((stream, saved.offset + n as u64, trim))
+        });
+        match carried {
+            Ok((stream, sent, trim)) => return Ok((log, stream, sent, trim, true)),
+            Err(SendError::Retry(e)) => {
+                return Err(SendError::Retry(format!("couldn't reach the site: {e}")));
+            }
+            Err(e @ SendError::LoggedOut(_)) => return Err(e),
+            // Gone, not theirs, or not where it was left (a run stopped
+            // between sending and saving how far it got): a new one, then.
             Err(SendError::Fatal(e) | SendError::Expired(e)) => {
                 eprintln!("Couldn't carry on with the last share ({e}); starting a new one.");
             }
@@ -255,11 +261,15 @@ fn start_share(
     }
     let mut stream = Stream::start(raw, keyframe::EVERY);
     let first = stream.next_len(MAX_CHUNK);
-    let log = client
-        .create(&stream.pending[..first], password)
-        .map_err(|e| e.message())?;
+    let log = client.create(&stream.pending[..first], token)?;
     stream.sent(first, 0);
     Ok((log, stream, first as u64, None, false))
+}
+
+/// Which account a share is kept for: its email, or its token (a login with
+/// no email).
+fn account_key(account: &crate::account::Account) -> &str {
+    account.email.as_deref().unwrap_or(&account.token)
 }
 
 // ---------- the saved share ----------
@@ -267,7 +277,7 @@ fn start_share(
 /// A share, kept for the next run to carry on with: in the data folder,
 /// under `shares/`, one per site and what's shared, readable only by the
 /// user (the write token is in it).
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 struct SavedShare {
     site: String,
     /// The session shared, or none for everything.
@@ -277,9 +287,10 @@ struct SavedShare {
     write_token: String,
     /// How much the site has: where the next chunk goes.
     offset: u64,
-    /// A check of the password it was made with (see `password_check`): the
-    /// site keeps a log's password for good, so another means a new log.
-    password: Option<u64>,
+    /// The account it's a share of (`account_key`): another's login means a
+    /// new share. (One saved before accounts has none.)
+    #[serde(default)]
+    account: Option<String>,
     /// The run sharing it (`<pid>@<start>`), while it does.
     sharer: Option<String>,
 }
@@ -289,17 +300,6 @@ fn share_path(root: &Path, site: &str, target: Option<&str>) -> PathBuf {
         "{}.json",
         crate::paths::file_key(site, target.unwrap_or("all"))
     ))
-}
-
-/// A check that a password is the one a log was made with, without keeping
-/// it. (Not a password hash: the file it's in is readable only by the user,
-/// who can read their saved password anyway.)
-fn password_check(id: &str, password: Option<&str>) -> Option<u64> {
-    use std::hash::{Hash, Hasher};
-    let password = password?;
-    let mut hasher = std::hash::DefaultHasher::new();
-    (id, password).hash(&mut hasher);
-    Some(hasher.finish())
 }
 
 impl SavedShare {
@@ -343,7 +343,7 @@ impl SavedShare {
 
 /// Writes `path` whole (a reader never sees half of it), readable only by
 /// the user.
-fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         crate::store::ensure_dir(dir)?;
     }
@@ -407,7 +407,7 @@ impl Trims {
                 self.at = Some(Instant::now() + self.backoff);
             }
             // It keeps everything; sharing carries on.
-            Err(SendError::Fatal(e)) => {
+            Err(SendError::Fatal(e) | SendError::LoggedOut(e)) => {
                 eprintln!(
                     "The site can't trim the log ({e}), so it'll keep everything sent from here on."
                 );
@@ -1129,12 +1129,19 @@ pub enum SendError {
     Fatal(String),
     /// The log's gone: the site deletes one with no new events for a week.
     Expired(String),
+    /// The site doesn't know this computer's login (any more): logged out on
+    /// the account page, say.
+    LoggedOut(String),
 }
 
 impl SendError {
-    fn message(self) -> String {
+    /// What went wrong, for people.
+    pub fn message(self) -> String {
         match self {
-            SendError::Retry(m) | SendError::Fatal(m) | SendError::Expired(m) => m,
+            SendError::Retry(m)
+            | SendError::Fatal(m)
+            | SendError::Expired(m)
+            | SendError::LoggedOut(m) => m,
         }
     }
 }
@@ -1146,7 +1153,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(base: &str) -> Client {
-        // Plain HTTP to this machine, as a password may be sent (see
+        // Plain HTTP to this machine, as a login's token may be sent (see
         // `sends_privately`).
         let local = sends_privately(base)
             && base
@@ -1156,7 +1163,7 @@ impl Client {
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
             // The site never redirects, and a redirect would carry the
-            // password header on to wherever it points.
+            // login's token on to wherever it points.
             .max_redirects(0)
             // Not through a proxy, which would see what's sent.
             .proxy(if local {
@@ -1172,17 +1179,14 @@ impl Client {
         }
     }
 
-    pub fn create(&self, body: &[u8], password: Option<&str>) -> Result<Created, SendError> {
-        let mut req = self
+    /// Makes a share, the account's whose login `token` is.
+    pub fn create(&self, body: &[u8], token: &str) -> Result<Created, SendError> {
+        let mut res = self
             .agent
             .post(format!("{}/api/logs", self.base))
             .header("Content-Type", "application/x-ndjson")
-            .header("X-Agent-Graph-Source", "watch");
-        if let Some(p) = password {
-            // Headers must be ASCII, so the password travels base64url-encoded.
-            req = req.header("X-Agent-Graph-Password", base64url(p.as_bytes()));
-        }
-        let mut res = req
+            .header("X-Agent-Graph-Source", "watch")
+            .header("Authorization", format!("Bearer {token}"))
             .send(body)
             .map_err(|e| SendError::Retry(e.to_string()))?;
         let status = res.status().as_u16();
@@ -1190,11 +1194,97 @@ impl Client {
         match status {
             200 | 201 => serde_json::from_str(&text)
                 .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
+            401 => Err(SendError::LoggedOut(
+                "The site doesn't know this computer's login any more: log in again.".into(),
+            )),
             s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
             s => Err(SendError::Fatal(format!(
                 "the site refused to create the log ({s}): {}",
                 text.trim()
             ))),
+        }
+    }
+
+    /// Tells the site a share of the account's is its latest (the one /watch
+    /// shows): carrying on with it. Its link: /watch.
+    pub fn claim(&self, log: &Created, token: &str) -> Result<String, SendError> {
+        let mut res = self
+            .agent
+            .post(format!("{}/api/logs/{}/watch", self.base, log.id))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("X-Agent-Graph-Write-Token", &log.write_token)
+            .send_empty()
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        let status = res.status().as_u16();
+        let text = res.body_mut().read_to_string().unwrap_or_default();
+        #[derive(Deserialize)]
+        struct Claimed {
+            url: String,
+        }
+        match status {
+            200 => serde_json::from_str::<Claimed>(&text)
+                .map(|c| c.url)
+                .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
+            401 if !text.contains("write token") => Err(SendError::LoggedOut(
+                "The site doesn't know this computer's login any more: log in again.".into(),
+            )),
+            404 | 410 => Err(SendError::Expired(format!(
+                "the site hasn't it any more: {}",
+                text.trim()
+            ))),
+            s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
+            s => Err(SendError::Fatal(format!(
+                "the site refused it ({s}): {}",
+                text.trim()
+            ))),
+        }
+    }
+
+    /// Trades a login's one-time code, with the secret its challenge was made
+    /// from, for this computer's token (see `account`). The token, and the
+    /// account's email.
+    pub fn cli_token(
+        &self,
+        code: &str,
+        verifier: &str,
+        host: &str,
+    ) -> Result<(String, Option<String>), SendError> {
+        let body = serde_json::json!({ "code": code, "verifier": verifier, "host": host });
+        let mut res = self
+            .agent
+            .post(format!("{}/api/cli/token", self.base))
+            .header("Content-Type", "application/json")
+            .send(body.to_string().as_bytes())
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        let status = res.status().as_u16();
+        let text = res.body_mut().read_to_string().unwrap_or_default();
+        #[derive(Deserialize)]
+        struct Token {
+            token: String,
+            email: Option<String>,
+        }
+        match status {
+            200 => serde_json::from_str::<Token>(&text)
+                .map(|t| (t.token, t.email))
+                .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
+            s => Err(SendError::Fatal(format!(
+                "the site refused the login ({s}): {}",
+                text.trim()
+            ))),
+        }
+    }
+
+    /// Has the site forget this computer's login.
+    pub fn cli_logout(&self, token: &str) -> Result<(), SendError> {
+        let res = self
+            .agent
+            .post(format!("{}/api/cli/logout", self.base))
+            .header("Authorization", format!("Bearer {token}"))
+            .send_empty()
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        match res.status().as_u16() {
+            200 | 204 => Ok(()),
+            s => Err(SendError::Fatal(format!("the site returned {s}"))),
         }
     }
 
@@ -1248,19 +1338,7 @@ impl Client {
     }
 }
 
-/// Refuses a password the site would: it keeps none longer than
-/// `MAX_PASSWORD` bytes, since it unlocks with none longer.
-fn check_password(password: &str) -> Result<(), String> {
-    if password.len() > MAX_PASSWORD {
-        return Err(format!(
-            "The password is {} bytes; the site accepts at most {MAX_PASSWORD} bytes.",
-            password.len()
-        ));
-    }
-    Ok(())
-}
-
-/// Whether a password may be sent to `base`: over HTTPS, or over plain HTTP
+/// Whether a login's token may be sent to `base`: over HTTPS, or over plain HTTP
 /// to this machine (`localhost`, or a loopback address). Judged from the URL
 /// as it's parsed to be sent: the scheme in any case, the host after any
 /// userinfo, an IPv6 address in full. (Redirects aren't followed, so it
@@ -1297,57 +1375,6 @@ pub fn base64url(bytes: &[u8]) -> String {
         }
     }
     out
-}
-
-// ---------- the saved default password ----------
-
-#[derive(Serialize, Deserialize, Default)]
-struct Saved {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    password: Option<String>,
-}
-
-pub fn load_default_password(path: &Path) -> Result<Option<String>, String> {
-    match fs::read_to_string(path) {
-        Ok(text) => {
-            let saved: Saved = serde_json::from_str(&text)
-                .map_err(|e| format!("{} is damaged: {e}", path.display()))?;
-            Ok(saved.password.filter(|p| !p.is_empty()))
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("reading {}: {e}", path.display())),
-    }
-}
-
-/// Saves the password in plain text (the site needs it to be sent), in a
-/// file only the current user can read.
-pub fn save_default_password(path: &Path, password: &str) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        crate::store::ensure_dir(dir).map_err(|e| e.to_string())?;
-    }
-    let text = serde_json::to_string_pretty(&Saved {
-        password: Some(password.to_string()),
-    })
-    .expect("serializable");
-    let _ = fs::remove_file(path);
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path)
-        .and_then(|mut f| f.write_all(text.as_bytes()))
-        .map_err(|e| format!("writing {}: {e}", path.display()))
-}
-
-pub fn clear_default_password(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("removing {}: {e}", path.display())),
-    }
 }
 
 #[cfg(test)]
@@ -2079,10 +2106,10 @@ mod tests {
         assert_eq!(base64url("pässwörd?>".as_bytes()), "cMOkc3N3w7ZyZD8-");
     }
 
-    /// R47: a password goes only over HTTPS, or plain HTTP to this machine,
-    /// however the URL is written.
+    /// R47: a login's token (once a password) goes only over HTTPS, or plain
+    /// HTTP to this machine, however the URL is written.
     #[test]
-    fn a_password_is_only_sent_over_https_or_to_this_machine() {
+    fn a_login_is_only_sent_over_https_or_to_this_machine() {
         let private = [
             "https://agentgraph.chofter.com",
             "HTTPS://example.com/",
@@ -2120,29 +2147,6 @@ mod tests {
             .chain(not.iter().filter(|url| sends_privately(url)))
             .collect();
         assert!(wrong.is_empty(), "judged wrongly: {wrong:?}");
-    }
-
-    #[test]
-    fn default_password_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("remote.json");
-        assert_eq!(load_default_password(&path).unwrap(), None);
-        save_default_password(&path, "s3cret").unwrap();
-        assert_eq!(
-            load_default_password(&path).unwrap().as_deref(),
-            Some("s3cret")
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-        clear_default_password(&path).unwrap();
-        assert_eq!(load_default_password(&path).unwrap(), None);
-        clear_default_password(&path).unwrap();
     }
 
     #[test]

@@ -20,6 +20,7 @@ dependencies = [
  "libc",
  "miniz_oxide 0.9.1",
  "resvg",
+ "ring",
  "serde",
  "serde_json",
  "tempfile",

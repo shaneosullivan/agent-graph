@@ -4,6 +4,8 @@
 //! Without the default `cli` feature the crate is just the event model, the
 //! reducer and the timeline logic, which also build for WebAssembly.
 
+#[cfg(feature = "cli")]
+pub mod account;
 pub mod adapter;
 pub mod clock;
 pub mod event;

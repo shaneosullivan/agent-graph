@@ -136,14 +136,12 @@ enum Command {
     WatchRemote {
         #[arg(long, default_value = crate::remote::DEFAULT_URL, help = help::watch_remote::opt::URL)]
         url: String,
-        #[arg(long, help = help::watch_remote::opt::PASSWORD)]
-        password: Option<String>,
-        #[arg(long, help = help::watch_remote::opt::SAVE_DEFAULT_PASSWORD)]
-        save_default_password: bool,
         #[arg(long, help = help::watch_remote::opt::SESSION)]
         session: Option<String>,
         #[arg(long, help = help::watch_remote::opt::NEW)]
         new: bool,
+        #[arg(long, help = help::watch_remote::opt::LOGOUT)]
+        logout: bool,
     },
     #[command(
         display_order = 4,
@@ -312,10 +310,9 @@ pub fn run() -> ExitCode {
         }
         Command::WatchRemote {
             url,
-            password,
-            save_default_password,
             session,
             new,
+            logout,
         } => paths::data_dir()
             .ok_or_else(|| "can't find your home directory".to_string())
             .and_then(|root| {
@@ -323,10 +320,9 @@ pub fn run() -> ExitCode {
                     &root,
                     crate::remote::Options {
                         url,
-                        password,
-                        save_default_password,
                         session,
                         new,
+                        logout,
                     },
                 )
             }),

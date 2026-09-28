@@ -615,13 +615,15 @@ fn same_origin(origin: Option<&str>, host: Option<&str>) -> bool {
     }
 }
 
-fn open_browser(url: &str) {
+/// Opens `url` in the default browser (and says nothing if it can't).
+pub fn open_browser(url: &str) {
     use std::process::{Command, Stdio};
     let mut cmd = if cfg!(target_os = "macos") {
         Command::new("open")
     } else if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "start", ""]);
+        // Not `cmd /C start`: cmd reads `&` in an address as another command.
+        let mut c = Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler");
         c
     } else {
         Command::new("xdg-open")

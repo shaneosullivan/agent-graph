@@ -36,7 +36,7 @@
       "examples": [
         { "command": "agent-graph tree --all", "text": "Every session, once, as text." },
         { "command": "agent-graph snapshot", "text": "A picture of this session, sized for a phone." },
-        { "command": "agent-graph watch-remote --password=hunter2", "text": "Share it live; prints a link." },
+        { "command": "agent-graph watch-remote", "text": "Share it live, to your account; prints where to see it." },
         { "command": "agent-graph install codex", "text": "Add the command to Codex as well." }
       ]
     },
@@ -264,41 +264,32 @@
     },
     {
       "name": "watch-remote",
-      "summary": "Share the graph live on the web, and print its link",
+      "summary": "Share the graph live on the web, to your account",
       "description": [
-        { "text": "Share the graph live on the web, and print its link." },
-        { "text": "It sends the event log to the Agent Graph site (https://agentgraph.chofter.com, or --url), prints the link straight away, then sends each new event as it's recorded, until you stop it with Ctrl+C. Open the link anywhere, including on a phone: it's the same viewer as `agent-graph view`, timeline and all." },
+        { "text": "Share the graph live on the web, to your account, and print where to see it." },
+        { "text": "It sends the event log to the Agent Graph site (https://agentgraph.chofter.com, or --url), prints the address of your live share straight away (the site's /watch), then sends each new event as it's recorded, until you stop it with Ctrl+C. Open it anywhere you're logged in, including on a phone: it's the same viewer as `agent-graph view`, timeline and all." },
         { "text": "What's shared: every session on the machine agent-graph runs on, or just one with --session (`--session current` for the one this runs in). Agent Graph records task names and agent descriptions, not prompts or tool output (unless you've set AGENT_GRAPH_CAPTURE_BODIES=1). The site stores it encrypted." },
+        { "heading": "Logging in" },
+        { "text": "The first time, it opens your browser at the site's login page: log in with Google, or an email and password (or create an account), and agent-graph is told when you're done. Its login is kept in ~/.agent-graph/account.json, readable only by you, for next time. `--logout` ends it (on the site too), and you can log a computer out from the site's account page. If it can't open a browser, it prints the address to open yourself." },
         { "heading": "Who can see it" },
-        { "text": "Anyone with the link, unless there's a password:" },
-        {
-          "table": [
-            ["--password=…", "Viewers must enter it (at most 1024 bytes). The site keeps only a hash."],
-            ["--save-default-password", "Also use that password from now on. It's saved in ~/.agent-graph/remote.json, readable only by you."],
-            ["--password= --save-default-password", "Forget the saved password."],
-            ["--password=", "Share this time without one, even if one's saved."]
-          ]
-        },
-        { "text": "A password is only sent over HTTPS, or to your own machine." },
+        { "text": "Only you, logged in to the site: /watch shows your latest live share. Nobody else can open it. Your login is only sent over HTTPS, or to your own machine." },
         { "heading": "Who can change it" },
         { "text": "Only you. The site gives the share a key when it's made, and every update must carry it. It's kept in ~/.agent-graph/shares/, readable only by you, so the next run can carry on." },
-        { "text": "It checks for new events once a second and sends them together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why. The site deletes a log that has had no new events for a week: sharing it then stops." },
+        { "text": "It checks for new events once a second and sends them together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why. The site deletes a share that has had no new events for a week: sharing it then stops." },
         { "heading": "Running it again" },
-        { "text": "The next run for the same site and the same sessions carries on with the same share, so the link stays the same. What the site already has isn't sent again: it starts again from one summary of the log as it is now, and deletes what came before. A different password means a new share (the site keeps a share's password for good), as does --new, and so does a share the site has deleted. If the share's being shared now, by another run, that run's link is printed instead." }
+        { "text": "The next run for the same site, account and sessions carries on with the same share. What the site already has isn't sent again: it starts again from one summary of the log as it is now, and deletes what came before. --new starts a new share instead, as does logging in as someone else, and a share the site has deleted. If it's being shared now, by another run, it's left to that run." }
       ],
       "options": [
         { "id": "url", "flag": "--url <URL>", "text": "The site to share on." },
-        { "id": "password", "flag": "--password <PASSWORD>", "text": "Viewers must enter this. `--password=` shares without one, even if a default is saved." },
-        { "id": "save_default_password", "flag": "--save-default-password", "text": "Save --password as the default for future runs; with an empty --password=, forget it." },
         { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code session this runs in; if that isn't recorded, it stops rather than guess)." },
-        { "id": "new", "flag": "--new", "text": "Start a new share, with a new link, rather than carry on with the last one." }
+        { "id": "new", "flag": "--new", "text": "Start a new share, rather than carry on with the last one." },
+        { "id": "logout", "flag": "--logout", "text": "Log this computer out of the site, and forget the login. The next run asks you to log in again." }
       ],
       "examples": [
-        { "command": "agent-graph watch-remote", "text": "Share every session, live. The first line printed is the link." },
+        { "command": "agent-graph watch-remote", "text": "Share every session, live, to your account (logging in the first time). The first line printed is where to see it." },
         { "command": "agent-graph watch-remote --session current", "text": "Share just the session this runs in." },
-        { "command": "agent-graph watch-remote --new", "text": "Share every session under a new link, rather than carry on with the last share." },
-        { "command": "agent-graph watch-remote --password=s3cret --save-default-password", "text": "Require a password, and use it from now on." },
-        { "command": "agent-graph watch-remote --password= --save-default-password", "text": "Forget the saved password (and share this time without one)." },
+        { "command": "agent-graph watch-remote --new", "text": "Start a new share of every session, rather than carry on with the last one." },
+        { "command": "agent-graph watch-remote --logout", "text": "Log out on this computer." },
         { "command": "agent-graph watch-remote --url=http://localhost:3000", "text": "Share to a copy of the site you're running yourself." }
       ]
     },

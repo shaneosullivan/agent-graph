@@ -23,11 +23,21 @@ fn mock_site() -> (u16, mpsc::Receiver<Request>) {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let request = read_request(&stream);
-            let reply = if request.path == "/api/logs" {
-                let body = r#"{"id":"abc123def456","url":"https://site.example/l/abc123def456","writeToken":"the-key"}"#;
+            let json = |status: &str, body: &str| {
                 format!(
-                    "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
+                )
+            };
+            let reply = if request.path == "/api/logs" {
+                json(
+                    "201 Created",
+                    r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key"}"#,
+                )
+            } else if request.path == "/api/cli/token" {
+                json(
+                    "200 OK",
+                    r#"{"token":"agt_from_login","email":"me@example.com"}"#,
                 )
             } else {
                 "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_string()
@@ -39,6 +49,20 @@ fn mock_site() -> (u16, mpsc::Receiver<Request>) {
         }
     });
     (port, rx)
+}
+
+/// Logged in to the site on `port`, as agent-graph would be after logging in.
+fn logged_in(home: &std::path::Path, port: u16) {
+    logged_in_as(home, port, "me@example.com");
+}
+
+fn logged_in_as(home: &std::path::Path, port: u16, email: &str) {
+    let account = serde_json::json!({
+        "site": format!("http://127.0.0.1:{port}"),
+        "token": "agt_test",
+        "email": email,
+    });
+    std::fs::write(home.join("account.json"), account.to_string()).unwrap();
 }
 
 fn read_request(stream: &TcpStream) -> Request {
@@ -78,6 +102,7 @@ fn line(n: u32) -> String {
 fn shares_the_log_then_appends_only_new_lines_with_the_key() {
     let (port, requests) = mock_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let file = events.join("x-s.jsonl");
@@ -85,11 +110,7 @@ fn shares_the_log_then_appends_only_new_lines_with_the_key() {
     std::fs::write(&file, &first).unwrap();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
-        .args([
-            "watch-remote",
-            &format!("--url=http://127.0.0.1:{port}"),
-            "--password=pässword",
-        ])
+        .args(["watch-remote", &format!("--url=http://127.0.0.1:{port}")])
         .env("AGENT_GRAPH_HOME", home.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -100,17 +121,17 @@ fn shares_the_log_then_appends_only_new_lines_with_the_key() {
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     let mut link = String::new();
     stdout.read_line(&mut link).unwrap();
-    assert_eq!(link.trim(), "https://site.example/l/abc123def456");
+    assert_eq!(link.trim(), "https://site.example/watch");
 
     let create = requests.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(create.path, "/api/logs");
     assert_eq!(create.body, first, "the existing log");
     assert_eq!(create.headers["x-agent-graph-source"], "watch");
     assert_eq!(
-        create.headers["x-agent-graph-password"], "cMOkc3N3b3Jk",
-        "base64url of the password"
+        create.headers["authorization"], "Bearer agt_test",
+        "the login's token: it's the account's share"
     );
-    assert!(!create.headers.contains_key("authorization"));
+    assert!(!create.headers.contains_key("x-agent-graph-password"));
 
     // New lines follow, alone, at the right offset, with the key.
     agent_graph::store::append(&file, line(3).as_bytes()).unwrap();
@@ -170,6 +191,7 @@ fn started(session: &str, cwd: &str) -> String {
 fn sharing_the_current_session_never_falls_back_to_another() {
     let (port, requests) = mock_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     std::fs::write(
@@ -260,6 +282,7 @@ fn watch(home: &std::path::Path, port: u16, args: &[&str], env: &[(&str, &str)])
 fn a_session_prefix_never_matches_another_sessions_agent() {
     let (port, requests) = mock_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let agent = r#"{"v":1,"id":"01K0000000000000000000AG01","ts":"2026-09-25T10:00:01.000Z","type":"agent.spawned","node":"claude-code:9d1e/a3f91c2e5b","parent":"claude-code:9d1e","data":{}}"#;
@@ -282,6 +305,7 @@ fn a_session_prefix_never_matches_another_sessions_agent() {
 fn the_shared_sessions_description_is_cleaned() {
     let (port, requests) = mock_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let cwd = r"/tmp/x\u001b]0;PWNED\u0007\u001b[2J\u202egnp.exe";
@@ -316,6 +340,7 @@ fn started_under(session: &str, parent: &str) -> String {
 fn sharing_a_session_includes_the_sessions_under_it() {
     let (port, requests) = mock_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let write = |file: &str, text: &str| {
@@ -407,6 +432,7 @@ impl Drop for Stopped {
 fn a_session_that_leaves_the_shared_tree_stops_being_shared() {
     let (port, requests) = mock_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let write = |file: &str, text: &str| {
@@ -475,7 +501,7 @@ fn scripted_site() -> (u16, mpsc::Receiver<Request>, mpsc::Sender<u16>) {
         for stream in listener.incoming().flatten() {
             let request = read_request(&stream);
             let reply = if request.path == "/api/logs" {
-                let body = r#"{"id":"abc123def456","url":"https://site.example/l/abc123def456","writeToken":"the-key"}"#;
+                let body = r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key"}"#;
                 if tx.send(request).is_err() {
                     return;
                 }
@@ -484,12 +510,20 @@ fn scripted_site() -> (u16, mpsc::Receiver<Request>, mpsc::Sender<u16>) {
                     body.len()
                 )
             } else {
+                // A claim (carrying on with a share) is answered with /watch.
+                let claim = request.path.ends_with("/watch");
                 if tx.send(request).is_err() {
                     return;
                 }
                 let Ok(status) = reply_rx.recv() else { return };
+                let body = if status == 200 && claim {
+                    r#"{"url":"https://site.example/watch"}"#
+                } else {
+                    ""
+                };
                 format!(
-                    "HTTP/1.1 {status} Whatever\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    "HTTP/1.1 {status} Whatever\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
                 )
             };
             let _ = (&stream).write_all(reply.as_bytes());
@@ -506,6 +540,7 @@ fn scripted_site() -> (u16, mpsc::Receiver<Request>, mpsc::Sender<u16>) {
 fn a_retried_append_sends_the_same_bytes() {
     let (port, requests, replies) = scripted_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let file = events.join("x-s.jsonl");
@@ -513,7 +548,7 @@ fn a_retried_append_sends_the_same_bytes() {
     std::fs::write(&file, &first).unwrap();
     let _running = Stopped(
         Command::new(env!("CARGO_BIN_EXE_agent-graph"))
-            .args(["watch-remote", "--password=", "--url"])
+            .args(["watch-remote", "--url"])
             .arg(format!("http://127.0.0.1:{port}"))
             .env("AGENT_GRAPH_HOME", home.path())
             .stdin(Stdio::null())
@@ -567,13 +602,14 @@ fn numbered(n: u32) -> String {
 fn a_long_log_is_shared_from_its_last_keyframe_but_one() {
     let (port, requests) = mock_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let file = events.join("x-s.jsonl");
     std::fs::write(&file, (0..2500).map(numbered).collect::<String>()).unwrap();
     let _running = Stopped(
         Command::new(env!("CARGO_BIN_EXE_agent-graph"))
-            .args(["watch-remote", "--password=", "--url"])
+            .args(["watch-remote", "--url"])
             .arg(format!("http://127.0.0.1:{port}"))
             .env("AGENT_GRAPH_HOME", home.path())
             .stdin(Stdio::null())
@@ -668,12 +704,13 @@ fn a_long_log_is_shared_from_its_last_keyframe_but_one() {
 fn an_expired_log_stops_the_share() {
     let (port, requests, replies) = scripted_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let file = events.join("x-s.jsonl");
     std::fs::write(&file, (0..2500).map(numbered).collect::<String>()).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
-        .args(["watch-remote", "--password=", "--url"])
+        .args(["watch-remote", "--url"])
         .arg(format!("http://127.0.0.1:{port}"))
         .env("AGENT_GRAPH_HOME", home.path())
         .stdin(Stdio::null())
@@ -730,40 +767,7 @@ fn an_expired_log_stops_the_share() {
     assert!(stderr.contains("no new events for a week"), "{stderr}");
 }
 
-/// R46: the site accepts passwords of up to 1024 bytes (of UTF-8), and
-/// unlocks with no longer one; a longer one is refused before anything's
-/// sent, or saved.
-#[test]
-fn a_password_too_long_for_the_site_is_refused() {
-    let (port, requests) = mock_site();
-    let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(home.path().join("events")).unwrap();
-    // 1025 bytes, in 513 characters.
-    let long = format!("--password={}", "é".repeat(512) + "x");
-    let err = watch(home.path(), port, &[&long], &[]);
-    assert!(err.contains("at most 1024 bytes"), "{err}");
-    let err = watch(home.path(), port, &[&long, "--save-default-password"], &[]);
-    assert!(err.contains("at most 1024 bytes"), "{err}");
-    assert!(!home.path().join("remote.json").exists(), "not saved");
-    assert!(
-        requests.recv_timeout(Duration::from_millis(300)).is_err(),
-        "nothing sent"
-    );
-
-    // 1024 is fine.
-    let err = watch(
-        home.path(),
-        port,
-        &[&format!("--password={}", "é".repeat(512))],
-        &[],
-    );
-    let create = requests
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap_or_else(|_| panic!("not shared: {err}"));
-    assert_eq!(create.path, "/api/logs");
-}
-
-/// R47: a redirect isn't followed. (One would carry the password header on
+/// R47: a redirect isn't followed. (One would carry the login's token on
 /// to wherever it points, over plain HTTP too: only `Authorization` and
 /// cookies are dropped.) The site's API never redirects.
 #[test]
@@ -781,8 +785,9 @@ fn a_redirect_is_not_followed() {
         }
     });
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     std::fs::create_dir_all(home.path().join("events")).unwrap();
-    let err = watch(home.path(), port, &["--password=s3cret"], &[]);
+    let err = watch(home.path(), port, &[], &[]);
     assert!(err.contains("302"), "{err}");
     assert!(
         followed.recv_timeout(Duration::from_millis(300)).is_err(),
@@ -835,6 +840,11 @@ fn next_request(
             replies.send(204).unwrap();
             continue;
         }
+        // Carrying on: the share's still the account's.
+        if r.path.ends_with("/watch") {
+            replies.send(200).unwrap();
+            continue;
+        }
         replies.send(status).unwrap();
         return r;
     }
@@ -848,13 +858,14 @@ fn next_request(
 fn a_second_run_carries_on_with_the_last_share() {
     let (port, requests, replies) = scripted_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     let file = events.join("x-s.jsonl");
     let first = line(1) + &line(2);
     std::fs::write(&file, &first).unwrap();
 
-    let (running, printed) = share(home.path(), port, &["--password="]);
+    let (running, printed) = share(home.path(), port, &[]);
     let create = next_request(&requests, &replies, 204);
     assert_eq!(create.path, "/api/logs");
     assert_eq!(create.body, first);
@@ -862,7 +873,7 @@ fn a_second_run_carries_on_with_the_last_share() {
     drop(running);
 
     agent_graph::store::append(&file, line(3).as_bytes()).unwrap();
-    let (_running, printed) = share(home.path(), port, &["--password="]);
+    let (_running, printed) = share(home.path(), port, &[]);
     let resumed = next_request(&requests, &replies, 204);
     assert_eq!(
         resumed.path,
@@ -902,24 +913,25 @@ fn a_second_run_carries_on_with_the_last_share() {
     assert_eq!(next.body, line(4));
 }
 
-/// A new share, not the last one: with --new; with another password (the
-/// site keeps a log's for good); or when the last is gone.
+/// A new share, not the last one: with --new; logged in as someone else; or
+/// when the last is gone.
 #[test]
 fn a_new_share_when_asked_for_or_when_the_last_cant_go_on() {
     let (port, requests, replies) = scripted_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     std::fs::write(events.join("x-s.jsonl"), line(1)).unwrap();
 
     // Each run is stopped once it has printed its link, by when its share
     // is saved.
-    let (running, printed) = share(home.path(), port, &["--password="]);
+    let (running, printed) = share(home.path(), port, &[]);
     assert_eq!(next_request(&requests, &replies, 204).path, "/api/logs");
     link_of(&printed);
     drop(running);
 
-    let (running, printed) = share(home.path(), port, &["--password=", "--new"]);
+    let (running, printed) = share(home.path(), port, &["--new"]);
     assert_eq!(
         next_request(&requests, &replies, 204).path,
         "/api/logs",
@@ -928,17 +940,19 @@ fn a_new_share_when_asked_for_or_when_the_last_cant_go_on() {
     link_of(&printed);
     drop(running);
 
-    let (running, printed) = share(home.path(), port, &["--password=another"]);
+    // Logged in as someone else: shares are per account.
+    logged_in_as(home.path(), port, "someone-else@example.com");
+    let (running, printed) = share(home.path(), port, &[]);
     let r = next_request(&requests, &replies, 204);
-    assert_eq!(r.path, "/api/logs", "another password");
-    assert!(r.headers.contains_key("x-agent-graph-password"));
+    assert_eq!(r.path, "/api/logs", "another account");
     link_of(&printed);
     drop(running);
 
-    // The last share (with that password) has been deleted by the site.
-    let (_running, _printed) = share(home.path(), port, &["--password=another"]);
-    let tried = next_request(&requests, &replies, 410);
-    assert!(tried.path.contains("/append"), "{}", tried.path);
+    // The last share (that account's) has been deleted by the site.
+    let (_running, _printed) = share(home.path(), port, &[]);
+    let tried = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(tried.path.ends_with("/watch"), "{}", tried.path);
+    replies.send(410).unwrap();
     assert_eq!(
         next_request(&requests, &replies, 204).path,
         "/api/logs",
@@ -951,16 +965,17 @@ fn a_new_share_when_asked_for_or_when_the_last_cant_go_on() {
 fn a_share_being_shared_now_is_left_to_its_run() {
     let (port, requests, replies) = scripted_site();
     let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
     let events = home.path().join("events");
     std::fs::create_dir_all(&events).unwrap();
     std::fs::write(events.join("x-s.jsonl"), line(1)).unwrap();
 
-    let (_running, printed) = share(home.path(), port, &["--password="]);
+    let (_running, printed) = share(home.path(), port, &[]);
     assert_eq!(next_request(&requests, &replies, 204).path, "/api/logs");
     let link = link_of(&printed);
 
     let second = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
-        .args(["watch-remote", "--password=", "--url"])
+        .args(["watch-remote", "--url"])
         .arg(format!("http://127.0.0.1:{port}"))
         .env("AGENT_GRAPH_HOME", home.path())
         .stdin(Stdio::null())
@@ -972,4 +987,129 @@ fn a_share_being_shared_now_is_left_to_its_run() {
         requests.recv_timeout(Duration::from_millis(500)).is_err(),
         "nothing sent"
     );
+}
+
+/// A GET of `url` (on this machine), and the reply's status line and body.
+fn get(url: &str) -> (String, String) {
+    let rest = url.strip_prefix("http://").unwrap();
+    let (host, path) = rest.split_once('/').unwrap();
+    let mut stream = TcpStream::connect(host).unwrap();
+    write!(
+        stream,
+        "GET /{path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    let (head, body) = reply.split_once("\r\n\r\n").unwrap();
+    (head.lines().next().unwrap().to_string(), body.to_string())
+}
+
+/// Not logged in: it opens the site's login (here, only prints it), waits
+/// for the browser to come back with a one-time code and its `state`, trades
+/// the code, with the secret its challenge was made from, for a token, keeps
+/// that (readable only by the user), and shares with it. A callback with
+/// another `state` isn't the login.
+#[test]
+fn logging_in_through_the_browser() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("events")).unwrap();
+    std::fs::write(home.path().join("events/x-s.jsonl"), line(1)).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .env("AGENT_GRAPH_HOME", home.path())
+        .env("AGENT_GRAPH_NO_BROWSER", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let _running = Stopped(child);
+    let login = loop {
+        let mut l = String::new();
+        assert!(stderr.read_line(&mut l).unwrap() > 0, "no login address");
+        if let Some(at) = l.find("http://127.0.0.1:") {
+            if l.contains("/login?") {
+                break l[at..].trim().to_string();
+            }
+        }
+    };
+    let query = login.split_once('?').unwrap().1;
+    let param = |name: &str| {
+        query
+            .split('&')
+            .find_map(|p| p.strip_prefix(&format!("{name}=")))
+            .unwrap()
+            .to_string()
+    };
+    let (cli, state, challenge) = (param("cli"), param("state"), param("challenge"));
+    assert_eq!(state.len(), 43);
+
+    // Not this login's state: refused, and it keeps waiting.
+    let (status, _) = get(&format!(
+        "http://127.0.0.1:{cli}/callback?code=c0de&state=someone-elses"
+    ));
+    assert!(status.contains("400"), "{status}");
+
+    let (status, page) = get(&format!(
+        "http://127.0.0.1:{cli}/callback?code=c0de&state={state}"
+    ));
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        page.contains("me@example.com") && page.contains("close this window"),
+        "{page}"
+    );
+
+    let trade = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(trade.path, "/api/cli/token");
+    let body: serde_json::Value = serde_json::from_str(&trade.body).unwrap();
+    assert_eq!(body["code"], "c0de");
+    let verifier = body["verifier"].as_str().unwrap();
+    let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
+    assert_eq!(
+        agent_graph::remote::base64url(digest.as_ref()),
+        challenge,
+        "the challenge is the verifier's SHA-256"
+    );
+
+    let create = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(create.path, "/api/logs");
+    assert_eq!(create.headers["authorization"], "Bearer agt_from_login");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.path().join("account.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["token"], "agt_from_login");
+    assert_eq!(saved["email"], "me@example.com");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(home.path().join("account.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+}
+
+/// `--logout`: the site forgets the login, and it's removed here.
+#[test]
+fn logging_out() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
+    let out = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", "--logout", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .env("AGENT_GRAPH_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Logged out"));
+    let told = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(told.path, "/api/cli/logout");
+    assert_eq!(told.headers["authorization"], "Bearer agt_test");
+    assert!(!home.path().join("account.json").exists());
 }
