@@ -18,6 +18,8 @@ It builds with the `dist` profile, as a release does, for every target a release
 | Linux (statically linked) | `target/dist/linux/agent-graph` | `target/dist/linux/agent-graph-x86_64` |
 | Windows | `target/dist/windows/agent-graph.exe` | `target/dist/windows/agent-graph-x86_64.exe` |
 
+Each binary goes in as a new file, renamed over the old one, never copied over it: macOS remembers an executable's code signature by its file, so one overwritten in place is killed (`Killed: 9`) whenever it runs, and your hooks and viewer may be running `target/dist/mac/agent-graph`. If you copy a build there yourself, delete the old one first.
+
 Then it runs what it can: the Mac builds (the Intel one with Rosetta, if it's installed), and the Linux builds in Docker if Docker is running.
 
 The first time, install what it cross-compiles with (it says if any is missing, and adds the Rust targets itself):

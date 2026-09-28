@@ -114,7 +114,7 @@ done
 # Where each build is copied: one folder per OS, the ARM build named for
 # it, and the x86_64 build beside it, named for its arch.
 # (target/dist is also cargo's folder for the dist profile's build scripts,
-# so only these three folders are replaced.)
+# so only these three folders are touched.)
 out=target/dist
 dest() {
   local os ext=""
@@ -128,13 +128,28 @@ dest() {
     *) echo "$out/$os/agent-graph-${1%%-*}$ext" ;;
   esac
 }
-rm -rf "$out/mac" "$out/linux" "$out/windows"
+# Each binary goes in as a new file, renamed over the old one, never copied
+# over it: macOS remembers an executable's code signature by its file, so
+# one overwritten in place is killed ("Killed: 9") whenever it runs. The
+# hooks and the viewer may run target/dist/mac/agent-graph, and a rename
+# also means there's always a whole one there.
+install_bin() {
+  local tmp="$2.new.$$"
+  cp "$1" "$tmp" && mv -f "$tmp" "$2"
+}
 printf '\n==> Built\n'
+built=()
 for target in "${targets[@]}"; do
   bin="$(dest "$target")"
   mkdir -p "$(dirname "$bin")"
-  cp "target/$target/dist/$(basename "${bin/-x86_64/}")" "$bin"
+  install_bin "target/$target/dist/$(basename "${bin/-x86_64/}")" "$bin"
+  built+=("$bin")
   printf '%s\n    %s\n' "$bin" "$(file -b "$bin")"
+done
+# Anything else in those folders is left from an older build.
+for f in "$out"/mac/* "$out"/linux/* "$out"/windows/*; do
+  [ -e "$f" ] || continue
+  [[ " ${built[*]} " == *" $f "* ]] || rm -rf "$f"
 done
 
 # Runs what this Mac can: its own builds (the Intel one with Rosetta, if
