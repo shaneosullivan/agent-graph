@@ -27,7 +27,8 @@ step node site/scripts/sync-viewer.mjs
 step git diff --exit-code -- site/public/viewer/app.js site/public/viewer/app.css site/lib/viewer-shell.ts
 step node site/scripts/sync-viewer.mjs --check-wasm
 
-# The site.
+# The site. Its code must be as Prettier formats it (`npm run format`).
 cd site
+step npm run format:check
 step npm run typecheck
 step npm run test:unit

@@ -8,6 +8,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "sync-viewer": "node scripts/sync-viewer.mjs",
     "build-wasm": "bash ../scripts/fix-rust-lld.sh && node scripts/sync-viewer.mjs --wasm",
     "copy-help": "node scripts/copy-help.mjs",
@@ -32,6 +34,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "jsdom": "^27.4.0",
+    "prettier": "3.9.9",
     "typescript": "^5.9.3"
   },
   "overrides": {
