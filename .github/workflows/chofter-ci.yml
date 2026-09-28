@@ -30,7 +30,26 @@ jobs:
     defaults:
       run:
         shell: bash        # the bash from Git for Windows
+        working-directory: run-${{ github.run_id }}
     steps:
+      - name: Clear out earlier runs' checkouts
+        working-directory: ${{ github.workspace }}
+        run: |
+          KEEP="run-${{ github.run_id }}"
+          shopt -s dotglob nullglob
+          left=""
+          for d in *; do
+            if [ "$d" = "$KEEP" ]; then continue; fi
+            rm -rf -- "$d" 2>/dev/null || true
+            if [ -e "$d" ]; then left="$left $d"; fi
+          done
+          if [ -n "$left" ]; then
+            echo "Could not remove yet, still in use by something an earlier run left running:$left"
+            echo "The ChofterCI panel retries until it can."
+          else
+            echo "Workspace clear."
+          fi
+
       - name: Mint GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v2
@@ -40,6 +59,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
+          path: run-${{ github.run_id }}
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
@@ -370,7 +390,7 @@ jobs:
 
       - name: Slow checks
         id: e2e
-        if: ${{ !cancelled() && steps.prep.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.prep.outcome == 'success' && steps.setup.outcome == 'success' }}
         continue-on-error: true
         env:
           CHOFTER_LOG: ${{ steps.prep.outputs.log }}
@@ -615,6 +635,7 @@ jobs:
       - name: Find artifacts.txt
         id: artifacts
         if: always()
+        working-directory: ${{ github.workspace }}
         run: |
           F="${CHOFTER_OUTPUT_DIR:-}/artifacts.txt"
           if [ -n "${CHOFTER_OUTPUT_DIR:-}" ] && [ -s "$F" ]; then
@@ -698,6 +719,7 @@ jobs:
 
       - name: Report the test result
         if: (steps.setup.outcome == 'failure' || steps.tests.outcome == 'failure' || steps.e2e.outcome == 'failure')
+        working-directory: ${{ github.workspace }}
         run: |
           if [ "${{ steps.setup.outcome }}" = "failure" ]; then
             echo "Failing the run because the setup command failed."
