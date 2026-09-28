@@ -353,7 +353,10 @@ jobs:
           CHOFTER_EVIDENCE_LINES: 200
           CHOFTER_PR_DRAFT: true
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CHOFTER_PHASE: ${{ steps.prep.outputs.phase }}
         run: |
+          C="${{ steps.tests.outputs.exit_code }}"; [ -n "$C" ] || C="${{ steps.setup.outputs.exit_code }}"; [ -n "$C" ] || C=1
+          printf '{"phase":"verifying","exitCode":%s}' "$C" > "$CHOFTER_PHASE" 2>/dev/null || true
           if [ ! -s "$CHOFTER_PR_FILE" ]; then
             echo "The agent wrote no pull request text, so there is nothing to open."
             exit 0
@@ -373,7 +376,11 @@ jobs:
           CHOFTER_LOG: ${{ steps.prep.outputs.log }}
           CHOFTER_DIR: ${{ steps.prep.outputs.dir }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CHOFTER_PHASE: ${{ steps.prep.outputs.phase }}
         run: |
+          C="${{ steps.tests.outputs.exit_code }}"; [ -n "$C" ] || C="${{ steps.setup.outputs.exit_code }}"; [ -n "$C" ] || C=0
+          if [ "$C" = "0" ]; then P=slow-checks; else P=slow-checks-after-failure; fi
+          printf '{"phase":"%s","exitCode":%s}' "$P" "$C" > "$CHOFTER_PHASE" 2>/dev/null || true
           printf '=== slow checks: %s ===\n' 'bash scripts/ci-slow-checks.sh' >> "$CHOFTER_LOG"
           set +e
           { bash scripts/ci-slow-checks.sh; } >> "$CHOFTER_LOG" 2>&1
@@ -422,7 +429,7 @@ jobs:
             echo "skipped=false" >> "$GITHUB_OUTPUT"
             CODE="${{ steps.e2e.outputs.exit_code }}"
             [ -n "$CODE" ] || CODE=1
-            printf '{"phase":"autofix","exitCode":%s}' "$CODE" > "$CHOFTER_PHASE"
+            printf '{"phase":"autofix-slow-checks","exitCode":%s}' "$CODE" > "$CHOFTER_PHASE"
           fi
 
       - name: Run the agent on the slow checks
@@ -590,7 +597,10 @@ jobs:
           CHOFTER_EVIDENCE_LINES: 200
           CHOFTER_PR_DRAFT: true
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CHOFTER_PHASE: ${{ steps.prep.outputs.phase }}
         run: |
+          C="${{ steps.e2e.outputs.exit_code }}"; [ -n "$C" ] || C=1
+          printf '{"phase":"verifying","exitCode":%s}' "$C" > "$CHOFTER_PHASE" 2>/dev/null || true
           if [ ! -s "$CHOFTER_PR_FILE" ]; then
             echo "The agent wrote no pull request text, so there is nothing to open."
             exit 0
