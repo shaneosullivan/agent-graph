@@ -46,7 +46,7 @@ jobs:
       - name: Put local env files in place
         run: |
           ENV_DIR="$HOME/.chofter/env/$(printf %s "${{ github.repository }}" | sed 's#[^A-Za-z0-9._-][^A-Za-z0-9._-]*#__#g')"
-          [ -d "$ENV_DIR" ] || { echo "No local env files for this repo."; exit 0; }
+          [ -d "$ENV_DIR" ] || echo "No local env files for this repo."
           n=0
           for f in "$ENV_DIR"/* "$ENV_DIR"/.*; do
             [ -f "$f" ] || continue
@@ -83,6 +83,16 @@ jobs:
             echo "prscript=$HOME/.chofter/bin/chofter-pr"
           } >> "$GITHUB_OUTPUT"
           echo "Logging to $LOG on $(hostname)"
+          OUT="$DIR/output-${{ github.run_id }}"
+          mkdir -p "$OUT"
+          BASE="$(cat "$HOME/.chofter/output-url" 2>/dev/null || true)"
+          [ -n "$BASE" ] || BASE="http://$(hostname):4311"
+          {
+            echo "CHOFTER_OUTPUT_DIR=$OUT"
+            echo "CHOFTER_OUTPUT_URL=${BASE%/}/runs/${{ github.run_id }}/"
+            echo "CHOFTER_LOG_URL=${BASE%/}/logs/${{ github.run_id }}"
+          } >> "$GITHUB_ENV"
+          echo "Files put in \$CHOFTER_OUTPUT_DIR are served at ${BASE%/}/runs/${{ github.run_id }}/"
           if [ -z "${npm_config_script_shell:-}" ]; then
             for c in "$PROGRAMFILES/Git/bin/bash.exe" "$LOCALAPPDATA/Programs/Git/bin/bash.exe"; do
               if [ -x "$c" ] && [ -n "${GITHUB_ENV:-}" ]; then
@@ -143,8 +153,8 @@ jobs:
           fi
           echo ""
           echo "The same output is on the build machine ($(hostname)), where it outlives"
-          echo "GitHub's retention. To read it there:"
-          echo "  dashboard   http://127.0.0.1:4310/#run/${{ github.repository }}/${{ github.run_id }}"
+          echo "GitHub's retention. To read it:"
+          echo "  log         ${CHOFTER_LOG_URL:-}"
           echo "  terminal    ./chofter logs ${{ github.repository }} ${{ github.run_id }}"
           echo "  file        $CHOFTER_LOG"
           # Exit truthfully. continue-on-error keeps the job going;
@@ -357,7 +367,7 @@ jobs:
 
       - name: Slow checks
         id: e2e
-        if: always()
+        if: ${{ !cancelled() && steps.prep.outcome == 'success' }}
         continue-on-error: true
         env:
           CHOFTER_LOG: ${{ steps.prep.outputs.log }}
@@ -591,6 +601,29 @@ jobs:
             echo "The agent changed no files; opening a PR for its reasoning."
           fi
           bash "$CHOFTER_PR" --pr-file "$CHOFTER_PR_FILE" --allow-failing
+
+      - name: Find artifacts.txt
+        id: artifacts
+        if: always()
+        run: |
+          F="${CHOFTER_OUTPUT_DIR:-}/artifacts.txt"
+          if [ -n "${CHOFTER_OUTPUT_DIR:-}" ] && [ -s "$F" ]; then
+            command -v cygpath >/dev/null 2>&1 && F="$(cygpath -w "$F")"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "path=$F" >> "$GITHUB_OUTPUT"
+            echo "Uploading artifacts.txt: $(grep -c . "${CHOFTER_OUTPUT_DIR}/artifacts.txt") URL(s)."
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No artifacts.txt in the run's output directory; nothing to upload."
+          fi
+
+      - name: Upload artifacts.txt
+        if: always() && steps.artifacts.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: ${{ steps.artifacts.outputs.path }}
+          if-no-files-found: ignore
 
       - name: Record the run locally
         if: always()
