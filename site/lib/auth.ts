@@ -1,7 +1,7 @@
-import { cookies } from "next/headers";
+import {cookies} from "next/headers";
 
-import { isHttps } from "./config";
-import { auth } from "./firebase";
+import {isHttps} from "./config";
+import {auth} from "./firebase";
 
 /**
  * Accounts: who's logged in, in a browser.
@@ -28,7 +28,7 @@ export const SESSION_MS = 14 * 24 * 60 * 60 * 1000;
 /** How recently the browser must have signed in to be given a session. */
 export const RECENT_SIGN_IN_MS = 5 * 60 * 1000;
 
-export type User = { uid: string; email: string | null };
+export type User = {uid: string; email: string | null};
 
 /** The account logged in in this request's browser, if any. */
 export async function currentUser(): Promise<User | null> {
@@ -40,14 +40,18 @@ export async function currentUser(): Promise<User | null> {
 export async function userOfSession(cookie: string): Promise<User | null> {
   try {
     const claims = await auth().verifySessionCookie(cookie);
-    return { uid: claims.uid, email: claims.email ?? null };
+    return {uid: claims.uid, email: claims.email ?? null};
   } catch {
     return null;
   }
 }
 
 /** Set-Cookie values that log this browser in with `session`, for `maxAge` ms. */
-export function sessionCookies(req: Request, session: string, maxAge: number): string[] {
+export function sessionCookies(
+  req: Request,
+  session: string,
+  maxAge: number,
+): Array<string> {
   const seconds = Math.floor(maxAge / 1000);
   const secure = isHttps(req) ? ["Secure"] : [];
   return [
@@ -59,14 +63,20 @@ export function sessionCookies(req: Request, session: string, maxAge: number): s
       "SameSite=Lax",
       ...secure,
     ].join("; "),
-    [`${SIGNED_IN_COOKIE}=1`, "Path=/", `Max-Age=${seconds}`, "SameSite=Lax", ...secure].join("; "),
+    [
+      `${SIGNED_IN_COOKIE}=1`,
+      "Path=/",
+      `Max-Age=${seconds}`,
+      "SameSite=Lax",
+      ...secure,
+    ].join("; "),
   ];
 }
 
 /** Set-Cookie values that log this browser out. */
-export function clearedCookies(req: Request): string[] {
+export function clearedCookies(req: Request): Array<string> {
   const secure = isHttps(req) ? ["Secure"] : [];
-  return [SESSION_COOKIE, SIGNED_IN_COOKIE].map((name) =>
+  return [SESSION_COOKIE, SIGNED_IN_COOKIE].map(name =>
     [`${name}=`, "Path=/", "Max-Age=0", "SameSite=Lax", ...secure].join("; "),
   );
 }
@@ -79,7 +89,9 @@ export function clearedCookies(req: Request): string[] {
 export function sameOrigin(req: Request): boolean {
   const origin = req.headers.get("origin");
   const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
-  if (!origin || !host) return false;
+  if (!origin || !host) {
+    return false;
+  }
   try {
     return new URL(origin).host === host;
   } catch {

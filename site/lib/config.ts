@@ -8,9 +8,12 @@ export const MAX_CHUNK_BYTES = 512 * 1024;
 
 /** A log not in use is deleted (lib/cleanup.ts); its sharer stops, and says so. */
 export function gone(): Response {
-  return new Response("This log has expired: it had no new events for a week, so it was deleted.", {
-    status: 410,
-  });
+  return new Response(
+    "This log has expired: it had no new events for a week, so it was deleted.",
+    {
+      status: 410,
+    },
+  );
 }
 
 /**
@@ -20,14 +23,19 @@ export function gone(): Response {
  * it's read as it arrives, and only that far (a body sent without a
  * Content-Length could be any size).
  */
-export async function bodyText(req: Request, max: number): Promise<string | null> {
-  const parts: Uint8Array[] = [];
+export async function bodyText(
+  req: Request,
+  max: number,
+): Promise<string | null> {
+  const parts: Array<Uint8Array> = [];
   let size = 0;
   if (req.body) {
     const reader = req.body.getReader();
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const {done, value} = await reader.read();
+      if (done) {
+        break;
+      }
       size += value.byteLength;
       if (size > max) {
         await reader.cancel().catch(() => {});
@@ -36,7 +44,9 @@ export async function bodyText(req: Request, max: number): Promise<string | null
       parts.push(value);
     }
   }
-  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(Buffer.concat(parts));
+  return new TextDecoder("utf-8", {ignoreBOM: true}).decode(
+    Buffer.concat(parts),
+  );
 }
 
 /**
@@ -106,7 +116,7 @@ export const UNLOCK_BUSY_SECONDS = 5;
 export const ID_PATTERN = /^[A-Za-z0-9]{12}$/;
 
 export type Source = "watch" | "paste" | "upload";
-export const SOURCES: readonly Source[] = ["watch", "paste", "upload"];
+export const SOURCES: ReadonlyArray<Source> = ["watch", "paste", "upload"];
 
 /** The public origin for links, e.g. https://agentgraph.chofter.com. */
 export function siteUrl(req: Request): string {
@@ -140,14 +150,20 @@ export function clientAddress(req: Request): string | null {
  */
 export function addressBlock(address: string): string {
   const withPort = /^(\d+\.\d+\.\d+\.\d+):\d+$/.exec(address);
-  if (withPort) return withPort[1];
+  if (withPort) {
+    return withPort[1];
+  }
   const bare = address.replace(/^\[|\](:\d+)?$/g, "").replace(/%.*$/, "");
-  if (!bare.includes(":")) return bare;
+  if (!bare.includes(":")) {
+    return bare;
+  }
   // Its groups, as numbers; an IPv4 address at the end (::ffff:1.2.3.4) is two.
   const parse = (part: string) =>
-    (part ? part.split(":") : []).flatMap((g) => {
-      if (!g.includes(".")) return [Number.parseInt(g, 16) || 0];
-      const [a, b, c, d] = g.split(".").map((n) => Number(n) || 0);
+    (part ? part.split(":") : []).flatMap(g => {
+      if (!g.includes(".")) {
+        return [Number.parseInt(g, 16) || 0];
+      }
+      const [a, b, c, d] = g.split(".").map(n => Number(n) || 0);
       return [(a << 8) | b, (c << 8) | d];
     });
   const [head, tail] = bare.split("::");
@@ -156,20 +172,36 @@ export function addressBlock(address: string): string {
   const groups =
     tail === undefined
       ? front
-      : [...front, ...Array(Math.max(0, 8 - front.length - back.length)).fill(0), ...back];
+      : [
+          ...front,
+          ...Array(Math.max(0, 8 - front.length - back.length)).fill(0),
+          ...back,
+        ];
   // IPv4 mapped into IPv6, however it's written: the IPv4 address.
-  if (groups.length === 8 && groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
-    return [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join(".");
+  if (
+    groups.length === 8 &&
+    groups.slice(0, 5).every(g => g === 0) &&
+    groups[5] === 0xffff
+  ) {
+    return [
+      groups[6] >> 8,
+      groups[6] & 255,
+      groups[7] >> 8,
+      groups[7] & 255,
+    ].join(".");
   }
   return `${groups
     .slice(0, 4)
-    .map((g) => g.toString(16))
+    .map(g => g.toString(16))
     .join(":")}::/64`;
 }
 
 /** Whether the request came over HTTPS (directly or via a proxy). */
 export function isHttps(req: Request): boolean {
-  return req.headers.get("x-forwarded-proto") === "https" || new URL(req.url).protocol === "https:";
+  return (
+    req.headers.get("x-forwarded-proto") === "https" ||
+    new URL(req.url).protocol === "https:"
+  );
 }
 
 /**
@@ -177,9 +209,21 @@ export function isHttps(req: Request): boolean {
  * `fallback`. (Never another site: an address that sends people elsewhere
  * after logging in is a phishing tool.)
  */
-export function safeNext(next: string | null | undefined, fallback = "/account"): string {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return fallback;
+export function safeNext(
+  next: string | null | undefined,
+  fallback = "/account",
+): string {
+  if (
+    !next ||
+    !next.startsWith("/") ||
+    next.startsWith("//") ||
+    next.startsWith("/\\")
+  ) {
+    return fallback;
+  }
   // No control characters (a tab or newline can hide a scheme).
-  if (/[\u0000-\u001f\u007f]/.test(next)) return fallback;
+  if (/[\u0000-\u001f\u007f]/.test(next)) {
+    return fallback;
+  }
   return next;
 }

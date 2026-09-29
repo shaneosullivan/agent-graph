@@ -1,5 +1,5 @@
-import { newCliCode, SECRET_PATTERN } from "@/lib/accounts";
-import { currentUser, sameOrigin } from "@/lib/auth";
+import {newCliCode, SECRET_PATTERN} from "@/lib/accounts";
+import {currentUser, sameOrigin} from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,16 +12,22 @@ export const dynamic = "force-dynamic";
  * a one-time code for it.
  */
 export async function POST(req: Request): Promise<Response> {
-  if (!sameOrigin(req)) return new Response("Forbidden.", { status: 403 });
+  if (!sameOrigin(req)) {
+    return new Response("Forbidden.", {status: 403});
+  }
   const user = await currentUser();
-  if (!user) return new Response("Log in first.", { status: 401 });
-  let body: { port?: unknown; state?: unknown; challenge?: unknown };
+  if (!user) {
+    return new Response("Log in first.", {status: 401});
+  }
+  let body: {port?: unknown; state?: unknown; challenge?: unknown};
   try {
     body = await req.json();
   } catch {
-    return new Response("Expected JSON: { port, state, challenge }.", { status: 400 });
+    return new Response("Expected JSON: { port, state, challenge }.", {
+      status: 400,
+    });
   }
-  const { port, state, challenge } = body;
+  const {port, state, challenge} = body;
   if (
     typeof port !== "number" ||
     !Number.isInteger(port) ||
@@ -32,10 +38,12 @@ export async function POST(req: Request): Promise<Response> {
     typeof challenge !== "string" ||
     !SECRET_PATTERN.test(challenge)
   ) {
-    return new Response("Expected JSON: { port, state, challenge }.", { status: 400 });
+    return new Response("Expected JSON: { port, state, challenge }.", {
+      status: 400,
+    });
   }
   const code = await newCliCode(user, challenge);
   // 127.0.0.1, not localhost: another program could be listening on [::1].
-  const redirect = `http://127.0.0.1:${port}/callback?${new URLSearchParams({ code, state })}`;
-  return Response.json({ redirect }, { headers: { "Cache-Control": "no-store" } });
+  const redirect = `http://127.0.0.1:${port}/callback?${new URLSearchParams({code, state})}`;
+  return Response.json({redirect}, {headers: {"Cache-Control": "no-store"}});
 }

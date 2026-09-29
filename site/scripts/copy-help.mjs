@@ -3,9 +3,9 @@
 // into the binary), to lib/cli-help.json for the /docs page. The copy isn't
 // committed: `dev`, `build` and `typecheck` make a fresh one each time.
 
-import { copyFileSync, existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import {copyFileSync, existsSync} from "node:fs";
+import {dirname, join, resolve} from "node:path";
+import {fileURLToPath} from "node:url";
 
 const site = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = resolve(site, "../docs/cli-help.json");

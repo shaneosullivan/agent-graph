@@ -1,4 +1,4 @@
-import { accountOfToken, deleteCliToken } from "@/lib/accounts";
+import {accountOfToken, deleteCliToken} from "@/lib/accounts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +11,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request): Promise<Response> {
   const header = req.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  if (token && (await accountOfToken(token))) await deleteCliToken(token);
-  return new Response(null, { status: 204 });
+  if (token && (await accountOfToken(token))) {
+    await deleteCliToken(token);
+  }
+  return new Response(null, {status: 204});
 }

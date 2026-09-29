@@ -2,12 +2,12 @@
 
 import "../../site.css";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import {useRouter} from "next/navigation";
+import {useState} from "react";
 
-import { SiteHeader } from "../../site-header";
+import {SiteHeader} from "../../site-header";
 
-export function Unlock({ id }: { id: string }) {
+export function Unlock({id}: {id: string}) {
   const router = useRouter();
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -19,14 +19,16 @@ export function Unlock({ id }: { id: string }) {
     setError(null);
     const res = await fetch(`/api/logs/${id}/unlock`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({password}),
     });
     if (res.ok) {
       router.refresh();
       return;
     }
-    setError(res.status === 401 ? "That's not the password." : await res.text());
+    setError(
+      res.status === 401 ? "That's not the password." : await res.text(),
+    );
     setBusy(false);
   }
 
@@ -43,13 +45,16 @@ export function Unlock({ id }: { id: string }) {
               <input
                 type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={e => setPassword(e.target.value)}
                 autoFocus
                 autoComplete="current-password"
                 required
               />
             </label>
-            <button className="button" type="submit" disabled={busy || !password}>
+            <button
+              className="button"
+              type="submit"
+              disabled={busy || !password}>
               {busy ? "Checking…" : "View log"}
             </button>
             {error && <p className="error">{error}</p>}

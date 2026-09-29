@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import {Fragment} from "react";
 
 /**
  * Renders the CLI's help text (lib/cli-help.json, the same file compiled into
@@ -7,36 +7,40 @@ import { Fragment } from "react";
  */
 
 export type Block =
-  | { text: string }
-  | { heading: string }
-  | { list: string[] }
-  | { steps: { command?: string; text: string }[] }
-  | { table: [string, string][] }
-  | { code: string };
+  | {text: string}
+  | {heading: string}
+  | {list: Array<string>}
+  | {steps: Array<{command?: string; text: string}>}
+  | {table: Array<[string, string]>}
+  | {code: string};
 
-export type Example = { command: string; text: string };
-export type Option = { id: string; flag: string; text: string };
+export type Example = {command: string; text: string};
+export type Option = {id: string; flag: string; text: string};
 
 export type Command = {
   name: string;
   summary: string;
-  description: Block[];
-  options: Option[];
-  examples: Example[];
+  description: Array<Block>;
+  options: Array<Option>;
+  examples: Array<Example>;
 };
 
 export type Help = {
   program: string;
   summary: string;
-  description: Block[];
-  quickStart: string[];
-  sections: { title: string; blocks?: Block[]; examples?: Example[] }[];
+  description: Array<Block>;
+  quickStart: Array<string>;
+  sections: Array<{
+    title: string;
+    blocks?: Array<Block>;
+    examples?: Array<Example>;
+  }>;
   footer: string;
-  commands: Command[];
+  commands: Array<Command>;
 };
 
 /** Text with `code spans` and bare https:// links. */
-export function Inline({ text }: { text: string }) {
+export function Inline({text}: {text: string}) {
   return (
     <>
       {text.split("`").map((part, i) =>
@@ -61,22 +65,29 @@ export function Inline({ text }: { text: string }) {
 }
 
 /** Table terms that look like code (paths, flags, variables) are shown as code. */
-function Term({ term }: { term: string }) {
-  return /[/_=<>[\]~.-]/.test(term) ? <code>{term}</code> : <strong>{term}</strong>;
+function Term({term}: {term: string}) {
+  return /[/_=<>[\]~.-]/.test(term) ? (
+    <code>{term}</code>
+  ) : (
+    <strong>{term}</strong>
+  );
 }
 
-export function Blocks({ blocks }: { blocks: Block[] }) {
+export function Blocks({blocks}: {blocks: Array<Block>}) {
   return (
     <>
       {blocks.map((block, i) => {
-        if ("text" in block)
+        if ("text" in block) {
           return (
             <p key={i}>
               <Inline text={block.text} />
             </p>
           );
-        if ("heading" in block) return <h4 key={i}>{block.heading}</h4>;
-        if ("list" in block)
+        }
+        if ("heading" in block) {
+          return <h4 key={i}>{block.heading}</h4>;
+        }
+        if ("list" in block) {
           return (
             <ul key={i}>
               {block.list.map((item, j) => (
@@ -86,7 +97,8 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
               ))}
             </ul>
           );
-        if ("steps" in block)
+        }
+        if ("steps" in block) {
           return (
             <ol key={i} className="steps">
               {block.steps.map((step, j) => (
@@ -99,7 +111,8 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
               ))}
             </ol>
           );
-        if ("table" in block)
+        }
+        if ("table" in block) {
           return (
             <table key={i} className="terms">
               <tbody>
@@ -116,6 +129,7 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
               </tbody>
             </table>
           );
+        }
         return (
           <pre key={i} className="block-code">
             {block.code}
@@ -126,7 +140,7 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
   );
 }
 
-export function Examples({ examples }: { examples: Example[] }) {
+export function Examples({examples}: {examples: Array<Example>}) {
   return (
     <div className="examples">
       {examples.map((example, i) => (
@@ -146,11 +160,11 @@ export function Examples({ examples }: { examples: Example[] }) {
   );
 }
 
-export function Options({ options }: { options: Option[] }) {
+export function Options({options}: {options: Array<Option>}) {
   return (
     <table className="terms options">
       <tbody>
-        {options.map((option) => (
+        {options.map(option => (
           <tr key={option.id}>
             <th scope="row">
               <code>{option.flag}</code>

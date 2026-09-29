@@ -16,13 +16,16 @@
 // where the site can't find them, and nothing could find them again: the
 // ids are only in the old documents' names.
 
-import { register } from "node:module";
+import {register} from "node:module";
 
 register("./resolve-ts.mjs", import.meta.url);
 
 const deleteOld = process.argv.includes("--delete-old");
 
-if (!process.env.AGENT_GRAPH_ENCRYPTION_KEY && !process.env.FIRESTORE_EMULATOR_HOST) {
+if (
+  !process.env.AGENT_GRAPH_ENCRYPTION_KEY &&
+  !process.env.FIRESTORE_EMULATOR_HOST
+) {
   console.error(
     "Set AGENT_GRAPH_ENCRYPTION_KEY to the site's key (and FIREBASE_SERVICE_ACCOUNT): " +
       "with any other key, the logs would be moved where the site can't find them.",
@@ -30,19 +33,24 @@ if (!process.env.AGENT_GRAPH_ENCRYPTION_KEY && !process.env.FIRESTORE_EMULATOR_H
   process.exit(2);
 }
 
-const { getApps } = await import("firebase-admin/app");
-const { FieldPath, FieldValue } = await import("firebase-admin/firestore");
-const { ID_PATTERN } = await import("../lib/config.ts");
-const { decryptChunk, metaTag, storageId } = await import("../lib/encryption.ts");
-const { firestore } = await import("../lib/firebase.ts");
+const {getApps} = await import("firebase-admin/app");
+const {FieldPath, FieldValue} = await import("firebase-admin/firestore");
+const {ID_PATTERN} = await import("../lib/config.ts");
+const {decryptChunk, metaTag, storageId} = await import("../lib/encryption.ts");
+const {firestore} = await import("../lib/firebase.ts");
 
 const db = firestore();
 const logs = db.collection("logs");
-console.log(`Project: ${getApps()[0]?.options.projectId ?? "the environment's default"}`);
+console.log(
+  `Project: ${getApps()[0]?.options.projectId ?? "the environment's default"}`,
+);
 
 /** A log's chunks, a page at a time (they can be 512 KB each). */
 async function* pages(log) {
-  const query = log.collection("chunks").orderBy(FieldPath.documentId()).limit(16);
+  const query = log
+    .collection("chunks")
+    .orderBy(FieldPath.documentId())
+    .limit(16);
   let last = null;
   for (;;) {
     const snap = await (last ? query.startAfter(last) : query).get();
@@ -60,10 +68,16 @@ async function* pages(log) {
  * (lib/cleanup.ts), so a log isn't half deleted.
  */
 function newMeta(id, data) {
-  const { source, pw, createdAt } = data;
+  const {source, pw, createdAt} = data;
   if (typeof source !== "string" || !createdAt)
     throw new Error("its metadata has no source or creation time");
-  return { source, ...(pw ? { pw } : {}), createdAt, mac: metaTag(id, { source, pw }), oldCopy: true };
+  return {
+    source,
+    ...(pw ? {pw} : {}),
+    createdAt,
+    mac: metaTag(id, {source, pw}),
+    oldCopy: true,
+  };
 }
 
 /**
@@ -74,13 +88,17 @@ function newMeta(id, data) {
  */
 async function count(id, target) {
   for await (const chunks of pages(target)) {
-    const refs = chunks.filter((chunk) => chunk.get("end") === undefined).map((chunk) => chunk.ref);
+    const refs = chunks
+      .filter(chunk => chunk.get("end") === undefined)
+      .map(chunk => chunk.ref);
     if (!refs.length) continue;
-    await db.runTransaction(async (tx) => {
-      const snaps = (await tx.getAll(...refs)).filter((snap) => snap.exists && snap.get("end") === undefined);
+    await db.runTransaction(async tx => {
+      const snaps = (await tx.getAll(...refs)).filter(
+        snap => snap.exists && snap.get("end") === undefined,
+      );
       for (const snap of snaps) {
         const n = Buffer.byteLength(decryptChunk(id, snap.id, snap.get("e")));
-        tx.update(snap.ref, { n, end: Number(snap.id) + n });
+        tx.update(snap.ref, {n, end: Number(snap.id) + n});
       }
     });
   }
@@ -94,7 +112,7 @@ async function count(id, target) {
 async function inPages(write) {
   const writer = db.bulkWriter();
   try {
-    await write(async (queue) => {
+    await write(async queue => {
       // Queued first, then waited on with the flush: a write that fails
       // while flush() waits on another's retry is still caught here.
       const writes = queue(writer);
@@ -113,7 +131,7 @@ async function inPages(write) {
  */
 async function copy(id, old, meta) {
   const target = logs.doc(storageId(id));
-  await inPages(async (page) => {
+  await inPages(async page => {
     let checked = false;
     for await (const chunks of pages(old)) {
       if (!checked) {
@@ -121,12 +139,19 @@ async function copy(id, old, meta) {
         decryptChunk(id, chunks[0].id, chunks[0].get("e"));
         checked = true;
       }
-      const copies = await db.getAll(...chunks.map((chunk) => target.collection("chunks").doc(chunk.id)));
-      await page((writer) =>
-        chunks.flatMap((chunk, i) => (copies[i].exists ? [] : [writer.create(copies[i].ref, chunk.data())])),
+      const copies = await db.getAll(
+        ...chunks.map(chunk => target.collection("chunks").doc(chunk.id)),
+      );
+      await page(writer =>
+        chunks.flatMap((chunk, i) =>
+          copies[i].exists ? [] : [writer.create(copies[i].ref, chunk.data())],
+        ),
       );
     }
-    if (meta.exists) await page((writer) => [writer.set(target, newMeta(id, meta.data()), { merge: true })]);
+    if (meta.exists)
+      await page(writer => [
+        writer.set(target, newMeta(id, meta.data()), {merge: true}),
+      ]);
   });
   if (meta.exists) await count(id, target);
 }
@@ -140,30 +165,42 @@ async function removeOld(id, old, meta) {
     if (!copied.exists || copied.get("mac") !== expected.mac)
       throw new Error("its metadata hasn't been copied");
   }
-  await inPages(async (page) => {
+  await inPages(async page => {
     for await (const chunks of pages(old)) {
-      const copies = await db.getAll(...chunks.map((chunk) => target.collection("chunks").doc(chunk.id)));
+      const copies = await db.getAll(
+        ...chunks.map(chunk => target.collection("chunks").doc(chunk.id)),
+      );
       chunks.forEach((chunk, i) => {
         // Compared as text: a chunk the new site stored itself (a retry) has
         // other ciphertext for the same text.
         const copy = copies[i];
         if (
           !copy.exists ||
-          decryptChunk(id, chunk.id, copy.get("e")) !== decryptChunk(id, chunk.id, chunk.get("e"))
+          decryptChunk(id, chunk.id, copy.get("e")) !==
+            decryptChunk(id, chunk.id, chunk.get("e"))
         ) {
           throw new Error(`chunk ${chunk.id} hasn't been copied`);
         }
       });
-      await page((writer) => chunks.map((chunk) => writer.delete(chunk.ref)));
+      await page(writer => chunks.map(chunk => writer.delete(chunk.ref)));
     }
   });
   // The old metadata last, and with it the copy's mark (above), at once.
-  if (meta.exists) await db.batch().delete(old).update(target, { oldCopy: FieldValue.delete() }).commit();
+  if (meta.exists)
+    await db
+      .batch()
+      .delete(old)
+      .update(target, {oldCopy: FieldValue.delete()})
+      .commit();
 }
 
 /** Whether log `id`'s copy has a chunk (the new site stored it) that decrypts: proof of the key. */
 async function copyDecrypts(id) {
-  const first = await logs.doc(storageId(id)).collection("chunks").limit(1).get();
+  const first = await logs
+    .doc(storageId(id))
+    .collection("chunks")
+    .limit(1)
+    .get();
   if (first.empty) return false;
   try {
     decryptChunk(id, first.docs[0].id, first.docs[0].get("e"));
@@ -175,12 +212,17 @@ async function copyDecrypts(id) {
 
 // Old documents are named by the id (12 characters); new ones never are.
 // The most recently created go first.
-const old = (await logs.listDocuments()).filter((doc) => ID_PATTERN.test(doc.id));
+const old = (await logs.listDocuments()).filter(doc => ID_PATTERN.test(doc.id));
 const metas = [];
-for (let i = 0; i < old.length; i += 500) metas.push(...(await db.getAll(...old.slice(i, i + 500))));
+for (let i = 0; i < old.length; i += 500)
+  metas.push(...(await db.getAll(...old.slice(i, i + 500))));
 const order = metas
-  .map((meta, i) => ({ doc: old[i], meta }))
-  .sort((a, b) => (b.meta.get("createdAt")?.toMillis() ?? 0) - (a.meta.get("createdAt")?.toMillis() ?? 0));
+  .map((meta, i) => ({doc: old[i], meta}))
+  .sort(
+    (a, b) =>
+      (b.meta.get("createdAt")?.toMillis() ?? 0) -
+      (a.meta.get("createdAt")?.toMillis() ?? 0),
+  );
 
 /**
  * Whether the key decrypts the old logs' chunks: stops if it decrypts none of
@@ -189,8 +231,12 @@ const order = metas
  */
 async function keyWorks() {
   const tried = [];
-  for (const { doc } of order) {
-    const first = await doc.collection("chunks").orderBy(FieldPath.documentId()).limit(1).get();
+  for (const {doc} of order) {
+    const first = await doc
+      .collection("chunks")
+      .orderBy(FieldPath.documentId())
+      .limit(1)
+      .get();
     if (first.empty) continue;
     try {
       decryptChunk(doc.id, first.docs[0].id, first.docs[0].get("e"));
@@ -202,7 +248,7 @@ async function keyWorks() {
   }
   if (tried.length) {
     console.error(
-      `No old log checked (${tried.map((id) => `logs/${id}`).join(", ")}) decrypts with this ` +
+      `No old log checked (${tried.map(id => `logs/${id}`).join(", ")}) decrypts with this ` +
         "AGENT_GRAPH_ENCRYPTION_KEY: either it isn't the site's key, or those logs are damaged. Nothing was changed.",
     );
     process.exit(1);
@@ -213,7 +259,7 @@ async function keyWorks() {
 const keyChecked = await keyWorks();
 let done = 0;
 const failed = [];
-for (const { doc, meta } of order) {
+for (const {doc, meta} of order) {
   try {
     if (deleteOld) {
       // A log without chunks can't prove the key itself; another log, or its
@@ -232,12 +278,20 @@ for (const { doc, meta } of order) {
   } catch (err) {
     failed.push(doc.id);
     // Named by its id, which is its old document's name: it's the operator's database.
-    console.error(`logs/${doc.id}: ${err instanceof Error ? err.message : err}`);
+    console.error(
+      `logs/${doc.id}: ${err instanceof Error ? err.message : err}`,
+    );
   }
 }
-const logsWord = (n) => `${n} log${n === 1 ? "" : "s"}`;
-console.log(deleteOld ? `Deleted the old copies of ${logsWord(done)}.` : `Copied ${logsWord(done)}.`);
+const logsWord = n => `${n} log${n === 1 ? "" : "s"}`;
+console.log(
+  deleteOld
+    ? `Deleted the old copies of ${logsWord(done)}.`
+    : `Copied ${logsWord(done)}.`,
+);
 if (failed.length) {
-  console.error(`${logsWord(failed.length)} failed (above), and were left as they were.`);
+  console.error(
+    `${logsWord(failed.length)} failed (above), and were left as they were.`,
+  );
   process.exit(1);
 }

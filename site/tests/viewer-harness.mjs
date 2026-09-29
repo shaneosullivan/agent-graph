@@ -3,11 +3,14 @@
 // behaviour can be tested without a browser. See the `agentGraphSource`
 // interface at the top of app.js.
 
-import { readFileSync } from "node:fs";
-import { JSDOM } from "jsdom";
+import {readFileSync} from "node:fs";
+import {JSDOM} from "jsdom";
 
 const assets = new URL("../../src/view/assets/", import.meta.url);
-const html = readFileSync(new URL("index.html", assets), "utf8").replace(/<script[^>]*><\/script>/, "");
+const html = readFileSync(new URL("index.html", assets), "utf8").replace(
+  /<script[^>]*><\/script>/,
+  "",
+);
 const app = readFileSync(new URL("app.js", assets), "utf8");
 
 /**
@@ -16,15 +19,19 @@ const app = readFileSync(new URL("app.js", assets), "utf8");
  * keep the test run alive). Returns jsdom's window; `window.__viewer`
  * exposes the page's state `S` and its navigation functions.
  */
-export function loadViewer(t, source, { hash = "", path = "", fetch, EventSource } = {}) {
+export function loadViewer(
+  t,
+  source,
+  {hash = "", path = "", fetch, EventSource} = {},
+) {
   const dom = new JSDOM(html, {
     url: `http://localhost:7777/${path}${hash}`,
     runScripts: "outside-only",
     pretendToBeVisual: true,
   });
-  const { window } = dom;
+  const {window} = dom;
   t.after(() => window.close());
-  window.matchMedia = () => ({ matches: false, addEventListener() {} });
+  window.matchMedia = () => ({matches: false, addEventListener() {}});
   window.HTMLElement.prototype.scrollIntoView = function () {
     window.__scrolls = (window.__scrolls || 0) + 1;
   };
@@ -35,11 +42,11 @@ export function loadViewer(t, source, { hash = "", path = "", fetch, EventSource
   if (source) {
     // The page doesn't ask for a timeline: the graph now carries it. A stub
     // gives it as `timeline(root)`.
-    const { timeline = async () => ({ stops: [] }), ...rest } = source;
+    const {timeline = async () => ({stops: []}), ...rest} = source;
     window.agentGraphSource = {
       liveLabel: "Live",
       imageUrl: null,
-      info: async () => ({ now_ms: Date.now(), where: "test" }),
+      info: async () => ({now_ms: Date.now(), where: "test"}),
       subscribe() {},
       ...rest,
       // Replies as the server's do: the tree asked for (see `asServer`),
@@ -48,7 +55,8 @@ export function loadViewer(t, source, { hash = "", path = "", fetch, EventSource
         ? {
             graph: async (until, root) => {
               const g = asServer(await source.graph(until, root), root);
-              if (!until) g.stops = g.root ? (await timeline(g.root)).stops : [];
+              if (!until)
+                g.stops = g.root ? (await timeline(g.root)).stops : [];
               return g;
             },
           }
@@ -67,8 +75,9 @@ export async function until(check, ms = 2000) {
   for (;;) {
     const value = check();
     if (value) return value;
-    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${check}`);
-    await new Promise((r) => setTimeout(r, 5));
+    if (Date.now() - start > ms)
+      throw new Error(`timed out waiting for ${check}`);
+    await new Promise(r => setTimeout(r, 5));
   }
 }
 
@@ -94,8 +103,30 @@ export function node(id, fields = {}) {
 
 /** What names a node and how it's doing: `timeline::Brief`. */
 function brief(n) {
-  const { id, kind, provider, parent, title, cwd, agent_type, attention, state, stale } = n;
-  return { id, kind, provider, parent, title, cwd, agent_type, attention, state, stale };
+  const {
+    id,
+    kind,
+    provider,
+    parent,
+    title,
+    cwd,
+    agent_type,
+    attention,
+    state,
+    stale,
+  } = n;
+  return {
+    id,
+    kind,
+    provider,
+    parent,
+    title,
+    cwd,
+    agent_type,
+    attention,
+    state,
+    stale,
+  };
 }
 
 /**
@@ -119,10 +150,15 @@ export function asServer(g, root) {
   }
   const others = {};
   for (const n of Object.values(nodes)) {
-    const referred = [...((n.blocked && n.blocked.on) || []), ...n.messages.map((m) => m.peer), n.parent];
-    for (const id of referred) if (id && !nodes[id] && g.all[id]) others[id] = brief(g.all[id]);
+    const referred = [
+      ...((n.blocked && n.blocked.on) || []),
+      ...n.messages.map(m => m.peer),
+      n.parent,
+    ];
+    for (const id of referred)
+      if (id && !nodes[id] && g.all[id]) others[id] = brief(g.all[id]);
   }
-  return Object.assign(g, { root: tree, nodes, others });
+  return Object.assign(g, {root: tree, nodes, others});
 }
 
 /**
@@ -132,9 +168,9 @@ export function asServer(g, root) {
  * server would (`asServer`).
  */
 export function graph(nodes, fields = {}) {
-  const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
-  const roots = nodes.filter((n) => !n.parent || !byId[n.parent]).map((n) => n.id);
-  const tree = (id) => {
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  const roots = nodes.filter(n => !n.parent || !byId[n.parent]).map(n => n.id);
+  const tree = id => {
     const out = [];
     const queue = [id];
     while (queue.length) {
@@ -146,10 +182,10 @@ export function graph(nodes, fields = {}) {
     return out;
   };
   const sessions = Object.fromEntries(
-    roots.map((id) => {
+    roots.map(id => {
       const root = byId[id];
       const all = tree(id);
-      const first = (f) => {
+      const first = f => {
         const n = all.find(f);
         return n ? brief(n) : null;
       };
@@ -163,10 +199,10 @@ export function graph(nodes, fields = {}) {
           tasks: root.tasks.length,
           open_tasks: root.open_tasks,
           agents: all.length - 1,
-          needs_you: first((n) => n.state === "input_required"),
-          deadlocked: all.some((n) => n.blocked && n.blocked.cycle),
-          stuck: first((n) => n.stale),
-          busy: all.some((n) => n.state === "working"),
+          needs_you: first(n => n.state === "input_required"),
+          deadlocked: all.some(n => n.blocked && n.blocked.cycle),
+          stuck: first(n => n.stale),
+          busy: all.some(n => n.state === "working"),
         },
       ];
     }),

@@ -1,10 +1,15 @@
-import { FieldPath, FieldValue, type QueryDocumentSnapshot, Timestamp } from "firebase-admin/firestore";
+import {
+  FieldPath,
+  FieldValue,
+  type QueryDocumentSnapshot,
+  Timestamp,
+} from "firebase-admin/firestore";
 
-import { ID_PATTERN } from "./config";
-import { safeEqual } from "./crypto";
-import { storageId } from "./encryption";
-import { firestore } from "./firebase";
-import { forgetMeta } from "./store";
+import {ID_PATTERN} from "./config";
+import {safeEqual} from "./crypto";
+import {storageId} from "./encryption";
+import {firestore} from "./firebase";
+import {forgetMeta} from "./store";
 
 /**
  * Deleting logs that are no longer in use: a log that has had no event (no
@@ -23,8 +28,13 @@ import { forgetMeta } from "./store";
  * Whether `req` is Vercel Cron's, which sends `Authorization: Bearer
  * <CRON_SECRET>`. Without the secret set, nothing is.
  */
-export function cronAllowed(req: Request, secret = process.env.CRON_SECRET): boolean {
-  return !!secret && safeEqual(req.headers.get("authorization"), `Bearer ${secret}`);
+export function cronAllowed(
+  req: Request,
+  secret = process.env.CRON_SECRET,
+): boolean {
+  return (
+    !!secret && safeEqual(req.headers.get("authorization"), `Bearer ${secret}`)
+  );
 }
 
 /** How long a log can go without an event before it's deleted. */
@@ -48,38 +58,45 @@ export async function deleteIdleLogs(opts: {
   budgetMs: number;
   /** Logs per query. */
   page?: number;
-}): Promise<{ checked: number; deleted: number; done: boolean }> {
+}): Promise<{checked: number; deleted: number; done: boolean}> {
   const size = opts.page ?? PAGE;
   const started = Date.now();
   const now = opts.now ?? Date.now();
   const saved = await state().get();
   const since: number = saved.get("since")?.toMillis() ?? now;
   if (!saved.exists || saved.get("since") === undefined) {
-    await state().set({ since: Timestamp.fromMillis(since) }, { merge: true });
+    await state().set({since: Timestamp.fromMillis(since)}, {merge: true});
   }
   let cursor: string | undefined = saved.get("cursor") ?? undefined;
   const logs = firestore().collection("logs").orderBy(FieldPath.documentId());
   let checked = 0;
   let deleted = 0;
   for (;;) {
-    const page = await (cursor ? logs.startAfter(cursor) : logs).limit(size).get();
+    const page = await (cursor ? logs.startAfter(cursor) : logs)
+      .limit(size)
+      .get();
     for (let i = 0; i < page.docs.length; i += AT_ONCE) {
       const group = page.docs.slice(i, i + AT_ONCE);
-      const idle = await Promise.all(group.map((log) => isIdle(log, since, now)));
+      const idle = await Promise.all(group.map(log => isIdle(log, since, now)));
       for (const [j, gone] of idle.entries()) {
         checked++;
-        if (gone && (await deleteIfIdle(group[j].id, since, now))) deleted++;
+        if (gone && (await deleteIfIdle(group[j].id, since, now))) {
+          deleted++;
+        }
       }
       cursor = group[group.length - 1].id;
       // Time's checked as it goes: deleting a log can take a while.
-      if (Date.now() - started > opts.budgetMs && (i + AT_ONCE < page.docs.length || page.size === size)) {
-        await state().set({ cursor }, { merge: true });
-        return { checked, deleted, done: false };
+      if (
+        Date.now() - started > opts.budgetMs &&
+        (i + AT_ONCE < page.docs.length || page.size === size)
+      ) {
+        await state().set({cursor}, {merge: true});
+        return {checked, deleted, done: false};
       }
     }
     if (page.size < size) {
-      await state().set({ cursor: FieldValue.delete() }, { merge: true });
-      return { checked, deleted, done: true };
+      await state().set({cursor: FieldValue.delete()}, {merge: true});
+      return {checked, deleted, done: true};
     }
   }
 }
@@ -102,29 +119,48 @@ export async function deleteIdleLogs(opts: {
  * own, the old one would still take appends, which no one could read. A
  * copy made before that mark is a log of its own.
  */
-export async function deleteIfIdle(key: string, since: number, now: number): Promise<boolean> {
-  const { ref, added, sid } = where(key);
+export async function deleteIfIdle(
+  key: string,
+  since: number,
+  now: number,
+): Promise<boolean> {
+  const {ref, added, sid} = where(key);
   const old = !added.isEqual(ref);
-  const marked = await firestore().runTransaction(async (tx) => {
+  const marked = await firestore().runTransaction(async tx => {
     const log = await tx.get(ref);
-    if (!log.exists) return false;
-    if (log.get("deleting")) return true;
+    if (!log.exists) {
+      return false;
+    }
+    if (log.get("deleting")) {
+      return true;
+    }
     // A copy goes with its old copy (below), which appends accept too.
-    if (log.get("oldCopy")) return false;
+    if (log.get("oldCopy")) {
+      return false;
+    }
     const copy = old ? await tx.get(added) : null;
     const newest = await tx.get(newestChunk(added));
-    if (!idleSince(log, newest, since, now)) return false;
-    tx.update(ref, { deleting: true });
-    if (copy?.get("oldCopy")) tx.update(added, { deleting: true });
+    if (!idleSince(log, newest, since, now)) {
+      return false;
+    }
+    tx.update(ref, {deleting: true});
+    if (copy?.get("oldCopy")) {
+      tx.update(added, {deleting: true});
+    }
     return true;
   });
-  if (!marked) return false;
+  if (!marked) {
+    return false;
+  }
   forgetMeta(sid);
   await firestore().recursiveDelete(ref.collection("chunks"));
   if (old) {
     const copy = await added.get();
-    if (!copy.exists) await firestore().recursiveDelete(added.collection("chunks"));
-    else if (copy.get("oldCopy")) await firestore().recursiveDelete(added);
+    if (!copy.exists) {
+      await firestore().recursiveDelete(added.collection("chunks"));
+    } else if (copy.get("oldCopy")) {
+      await firestore().recursiveDelete(added);
+    }
   }
   await ref.delete();
   await firestore().collection("unlock-attempts").doc(`log-${sid}`).delete();
@@ -138,13 +174,24 @@ export async function deleteIfIdle(key: string, since: number, now: number): Pro
 function where(key: string) {
   const logs = firestore().collection("logs");
   const sid = ID_PATTERN.test(key) ? storageId(key) : key;
-  return { ref: logs.doc(key), added: logs.doc(sid), sid };
+  return {ref: logs.doc(key), added: logs.doc(sid), sid};
 }
 
 /** Whether `log` has had no event for `LOG_IDLE_MS` as of `now`, or is being deleted. */
-async function isIdle(log: QueryDocumentSnapshot, since: number, now: number): Promise<boolean> {
-  if (log.get("deleting")) return true;
-  return idleSince(log, await newestChunk(where(log.id).added).get(), since, now);
+async function isIdle(
+  log: QueryDocumentSnapshot,
+  since: number,
+  now: number,
+): Promise<boolean> {
+  if (log.get("deleting")) {
+    return true;
+  }
+  return idleSince(
+    log,
+    await newestChunk(where(log.id).added).get(),
+    since,
+    now,
+  );
 }
 
 const newestChunk = (log: FirebaseFirestore.DocumentReference) =>

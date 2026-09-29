@@ -1,11 +1,11 @@
 import "../site.css";
 
-import type { Metadata } from "next";
+import type {Metadata} from "next";
 
 import cliHelp from "@/lib/cli-help.json";
-import { Blocks, Examples, type Help, Inline, Options } from "@/lib/help-render";
+import {Blocks, Examples, type Help, Inline, Options} from "@/lib/help-render";
 
-import { SiteHeader } from "../site-header";
+import {SiteHeader} from "../site-header";
 
 // The same text `agent-graph --help` prints: lib/cli-help.json is copied from
 // docs/cli-help.json (which build.rs compiles into the binary) by `npm run dev`
@@ -23,21 +23,21 @@ export default function Docs() {
       <div className="page docs">
         <SiteHeader
           links={[
-            { href: "/", label: "Share a log" },
-            { href: "/docs", label: "Docs" },
+            {href: "/", label: "Share a log"},
+            {href: "/docs", label: "Docs"},
           ]}
         />
 
         <div className="docs-layout">
           <aside className="docs-nav" aria-label="Commands">
             <a href="#overview">Overview</a>
-            {help.sections.map((s) => (
+            {help.sections.map(s => (
               <a key={s.title} href={`#${slug(s.title)}`}>
                 {s.title}
               </a>
             ))}
             <span className="docs-nav-label">Commands</span>
-            {help.commands.map((c) => (
+            {help.commands.map(c => (
               <a key={c.name} href={`#${c.name}`}>
                 <code>{c.name}</code>
               </a>
@@ -55,8 +55,11 @@ export default function Docs() {
               <Blocks blocks={help.description} />
             </div>
 
-            {help.sections.map((section) => (
-              <section key={section.title} id={slug(section.title)} className="doc-section">
+            {help.sections.map(section => (
+              <section
+                key={section.title}
+                id={slug(section.title)}
+                className="doc-section">
                 <h2>{section.title}</h2>
                 {section.blocks && (
                   <div className="prose">
@@ -71,8 +74,11 @@ export default function Docs() {
             <p className="muted">
               <Inline text={help.footer} />
             </p>
-            {help.commands.map((command) => (
-              <section key={command.name} id={command.name} className="doc-command">
+            {help.commands.map(command => (
+              <section
+                key={command.name}
+                id={command.name}
+                className="doc-command">
                 <h3>
                   <code>
                     {help.program} {command.name}

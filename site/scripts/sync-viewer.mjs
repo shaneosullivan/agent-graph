@@ -17,12 +17,18 @@
 // --if-present it quietly does nothing when ../src isn't there (e.g. a host
 // that only has this folder).
 
-import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import {spawnSync} from "node:child_process";
+import {createHash} from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import {homedir} from "node:os";
+import {dirname, join, relative, resolve, sep} from "node:path";
+import {fileURLToPath} from "node:url";
 
 const site = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const crate = resolve(site, "..");
@@ -44,13 +50,20 @@ function hashOf(files) {
   for (const f of files) {
     hash.update(`${f}\n`);
     hash.update(
-      existsSync(join(crate, f)) ? readFileSync(join(crate, f), "utf8").replace(/\r\n/g, "\n") : "(gone)",
+      existsSync(join(crate, f))
+        ? readFileSync(join(crate, f), "utf8").replace(/\r\n/g, "\n")
+        : "(gone)",
     );
   }
   return hash.digest("hex");
 }
 
-const wasmArgs = ["-p", "agent-graph-wasm", "--target", "wasm32-unknown-unknown"];
+const wasmArgs = [
+  "-p",
+  "agent-graph-wasm",
+  "--target",
+  "wasm32-unknown-unknown",
+];
 
 /** The crates the build uses, as "name version features" (the crates here without their paths). */
 function crates() {
@@ -67,15 +80,19 @@ function crates() {
     "--color",
     "never",
   ];
-  const tree = spawnSync("cargo", args, { cwd: crate, encoding: "utf8" });
+  const tree = spawnSync("cargo", args, {cwd: crate, encoding: "utf8"});
   if (tree.status !== 0) {
-    console.error(tree.error ? `Can't run cargo (${tree.error.message}); is Rust installed?` : tree.stderr);
+    console.error(
+      tree.error
+        ? `Can't run cargo (${tree.error.message}); is Rust installed?`
+        : tree.stderr,
+    );
     process.exit(tree.status ?? 1);
   }
   const lines = tree.stdout
     .split("\n")
-    // eslint-disable-next-line no-control-regex
-    .map((l) =>
+
+    .map(l =>
       l
         .replace(/\x1b\[[0-9;]*m/g, "")
         .replace(/ \([^)]*\)/g, "")
@@ -86,20 +103,25 @@ function crates() {
 
 /** The build's profile: `[profile.wasm]`, and the `[profile.release]` it inherits. */
 function profiles() {
-  const manifest = readFileSync(join(crate, "Cargo.toml"), "utf8").replace(/\r\n/g, "\n");
-  return ["release", "wasm"].map((name) => {
+  const manifest = readFileSync(join(crate, "Cargo.toml"), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
+  return ["release", "wasm"].map(name => {
     const at = manifest.indexOf(`[profile.${name}]`);
     const end = manifest.indexOf("\n[", at + 1);
     const section = at < 0 ? "" : manifest.slice(at, end < 0 ? undefined : end);
     return section
       .split("\n")
-      .filter((l) => l.trim() && !l.trim().startsWith("#"))
+      .filter(l => l.trim() && !l.trim().startsWith("#"))
       .join("\n");
   });
 }
 
 if (args.has("--check-wasm")) {
-  const record = existsSync(stamp) ? JSON.parse(readFileSync(stamp, "utf8")) : null;
+  const record = existsSync(stamp)
+    ? JSON.parse(readFileSync(stamp, "utf8"))
+    : null;
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const problem = !record
     ? "there's no record of what it was built from"
@@ -115,12 +137,14 @@ if (args.has("--check-wasm")) {
       `public/viewer/agent_graph.wasm is out of date: ${problem}. In site/, run \`npm run build-wasm\`, and commit it.`,
     );
     // What differs, to see why.
-    const now = { crates: crates(), profiles: profiles() };
+    const now = {crates: crates(), profiles: profiles()};
     for (const key of ["crates", "profiles"]) {
       const was = new Set(record ? record[key] : []);
       const is = new Set(now[key]);
-      for (const line of was) if (!is.has(line)) console.error(`  was: ${key}: ${line}`);
-      for (const line of is) if (!was.has(line)) console.error(`  now: ${key}: ${line}`);
+      for (const line of was)
+        if (!is.has(line)) console.error(`  was: ${key}: ${line}`);
+      for (const line of is)
+        if (!was.has(line)) console.error(`  now: ${key}: ${line}`);
     }
     process.exit(1);
   }
@@ -128,11 +152,14 @@ if (args.has("--check-wasm")) {
   process.exit(0);
 }
 
-mkdirSync(out, { recursive: true });
-for (const name of ["app.js", "app.css"]) copyFileSync(join(assets, name), join(out, name));
+mkdirSync(out, {recursive: true});
+for (const name of ["app.js", "app.css"])
+  copyFileSync(join(assets, name), join(out, name));
 
 const html = readFileSync(join(assets, "index.html"), "utf8");
-const body = html.slice(html.indexOf("<body>") + "<body>".length, html.lastIndexOf("</body>")).trim();
+const body = html
+  .slice(html.indexOf("<body>") + "<body>".length, html.lastIndexOf("</body>"))
+  .trim();
 if (!body.startsWith('<div class="app">')) {
   console.error('index.html\'s <body> should hold a single <div class="app">');
   process.exit(1);
@@ -150,15 +177,28 @@ if (args.has("--wasm")) {
   const given = process.env.CARGO_ENCODED_RUSTFLAGS
     ? process.env.CARGO_ENCODED_RUSTFLAGS.split("\x1f")
     : (process.env.RUSTFLAGS || "").split(/\s+/).filter(Boolean);
-  const remap = [`--remap-path-prefix=${homedir()}=~`, `--remap-path-prefix=${crate}=.`];
-  const build = spawnSync("cargo", ["build", ...wasmArgs, "--profile", "wasm"], {
-    cwd: crate,
-    stdio: "inherit",
-    env: { ...process.env, CARGO_ENCODED_RUSTFLAGS: [...given, ...remap].join("\x1f") },
-  });
+  const remap = [
+    `--remap-path-prefix=${homedir()}=~`,
+    `--remap-path-prefix=${crate}=.`,
+  ];
+  const build = spawnSync(
+    "cargo",
+    ["build", ...wasmArgs, "--profile", "wasm"],
+    {
+      cwd: crate,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        CARGO_ENCODED_RUSTFLAGS: [...given, ...remap].join("\x1f"),
+      },
+    },
+  );
   if (build.status !== 0) process.exit(build.status ?? 1);
   const target = join(crate, "target/wasm32-unknown-unknown/wasm");
-  copyFileSync(join(target, "agent_graph_wasm.wasm"), join(out, "agent_graph.wasm"));
+  copyFileSync(
+    join(target, "agent_graph_wasm.wasm"),
+    join(out, "agent_graph.wasm"),
+  );
 
   // What it was built from: the crate's files the build compiled (its
   // dep-info), and the crates it used, at their versions.
@@ -168,11 +208,18 @@ if (args.has("--wasm")) {
     .trim()
     .split(/(?<!\\) /);
   const files = inputs
-    .map((f) => relative(crate, f.replace(/\\ /g, " ")).split(sep).join("/"))
-    .filter((f) => !f.startsWith(".."))
+    .map(f => relative(crate, f.replace(/\\ /g, " ")).split(sep).join("/"))
+    .filter(f => !f.startsWith(".."))
     .sort();
-  const record = { files, crates: crates(), profiles: profiles(), hash: hashOf(files) };
+  const record = {
+    files,
+    crates: crates(),
+    profiles: profiles(),
+    hash: hashOf(files),
+  };
   writeFileSync(stamp, `${JSON.stringify(record, null, 2)}\n`);
 }
 
-console.log(`Synced the viewer into ${out}${args.has("--wasm") ? " (with WebAssembly)" : ""}.`);
+console.log(
+  `Synced the viewer into ${out}${args.has("--wasm") ? " (with WebAssembly)" : ""}.`,
+);

@@ -1,38 +1,52 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import {useMemo, useState} from "react";
 
-import { eventsShared, forSite } from "@/lib/trim";
-import { type Summary, share, summarize } from "@/lib/upload";
+import {eventsShared, forSite} from "@/lib/trim";
+import {type Summary, share, summarize} from "@/lib/upload";
 
 type Mode = "paste" | "upload";
 
 export function Uploader() {
   const [mode, setMode] = useState<Mode>("paste");
   const [pasted, setPasted] = useState("");
-  const [files, setFiles] = useState<{ name: string; size: number; text: string }[]>([]);
+  const [files, setFiles] = useState<
+    Array<{name: string; size: number; text: string}>
+  >([]);
   const [password, setPassword] = useState("");
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const text = mode === "paste" ? pasted : files.map((f) => f.text.trimEnd()).join("\n");
-  const summary = useMemo<Summary | null>(() => (text.trim() ? summarize(text) : null), [text]);
+  const text =
+    mode === "paste" ? pasted : files.map(f => f.text.trimEnd()).join("\n");
+  const summary = useMemo<Summary | null>(
+    () => (text.trim() ? summarize(text) : null),
+    [text],
+  );
   const ready = !!summary && summary.events > 0 && !busy;
 
   async function addFiles(list: FileList | null) {
-    if (!list?.length) return;
+    if (!list?.length) {
+      return;
+    }
     const read = await Promise.all(
-      Array.from(list).map(async (f) => ({ name: f.name, size: f.size, text: await f.text() })),
+      Array.from(list).map(async f => ({
+        name: f.name,
+        size: f.size,
+        text: await f.text(),
+      })),
     );
-    setFiles((prev) => [...prev, ...read]);
+    setFiles(prev => [...prev, ...read]);
     setError(null);
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!ready || !summary) return;
+    if (!ready || !summary) {
+      return;
+    }
     setError(null);
     try {
       // Only its last two keyframes' worth: the site keeps no more.
@@ -45,7 +59,9 @@ export function Uploader() {
         source: mode,
         password: password || undefined,
         onProgress: (sent, total) => {
-          if (total <= 1) return;
+          if (total <= 1) {
+            return;
+          }
           setBusy(`Uploading… ${sent} of ${total}`);
           setProgress(sent / total);
         },
@@ -68,8 +84,7 @@ export function Uploader() {
           role="tab"
           className="tab"
           aria-selected={mode === "paste"}
-          onClick={() => setMode("paste")}
-        >
+          onClick={() => setMode("paste")}>
           Paste
         </button>
         <button
@@ -77,8 +92,7 @@ export function Uploader() {
           role="tab"
           className="tab"
           aria-selected={mode === "upload"}
-          onClick={() => setMode("upload")}
-        >
+          onClick={() => setMode("upload")}>
           Upload files
         </button>
       </div>
@@ -87,7 +101,7 @@ export function Uploader() {
           <textarea
             className="paste"
             value={pasted}
-            onChange={(e) => setPasted(e.target.value)}
+            onChange={e => setPasted(e.target.value)}
             placeholder={
               '{"v":1,"id":"01K…","ts":"2026-09-25T10:14:03.221Z","type":"session.started","node":"claude-code:5f2c…",…}\n…'
             }
@@ -98,26 +112,26 @@ export function Uploader() {
           <>
             <label
               className={`drop${over ? " over" : ""}`}
-              onDragOver={(e) => {
+              onDragOver={e => {
                 e.preventDefault();
                 setOver(true);
               }}
               onDragLeave={() => setOver(false)}
-              onDrop={(e) => {
+              onDrop={e => {
                 e.preventDefault();
                 setOver(false);
                 addFiles(e.dataTransfer.files);
-              }}
-            >
+              }}>
               <input
                 type="file"
                 multiple
                 accept=".jsonl,.json,.ndjson,.txt,application/x-ndjson,text/plain"
-                onChange={(e) => addFiles(e.target.files)}
+                onChange={e => addFiles(e.target.files)}
               />
               <strong>Drop log files here, or click to choose</strong>
               <span>
-                One or more <code>.jsonl</code> files from <code>~/.agent-graph/events/</code>
+                One or more <code>.jsonl</code> files from{" "}
+                <code>~/.agent-graph/events/</code>
               </span>
             </label>
             {files.length > 0 && (
@@ -133,14 +147,17 @@ export function Uploader() {
           </>
         )}
 
-        <p className={`summary${summary && summary.events === 0 ? " bad" : ""}`} aria-live="polite">
+        <p
+          className={`summary${summary && summary.events === 0 ? " bad" : ""}`}
+          aria-live="polite">
           {summary &&
             (summary.events === 0 ? (
               "That doesn't look like an Agent Graph log: no events found."
             ) : (
               <>
                 <span className="ok">
-                  {summary.events} event{summary.events === 1 ? "" : "s"} in {summary.sessions} session
+                  {summary.events} event{summary.events === 1 ? "" : "s"} in{" "}
+                  {summary.sessions} session
                   {summary.sessions === 1 ? "" : "s"}
                 </span>
                 {summary.skipped > 0 &&
@@ -153,11 +170,12 @@ export function Uploader() {
 
         <div className="row">
           <label className="field">
-            Password <span className="hint">Optional. Viewers will need it.</span>
+            Password{" "}
+            <span className="hint">Optional. Viewers will need it.</span>
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={e => setPassword(e.target.value)}
               autoComplete="new-password"
               maxLength={200}
             />
@@ -167,7 +185,12 @@ export function Uploader() {
           </button>
         </div>
         {progress !== null && (
-          <progress className="progress" max={1} value={progress} aria-label={busy ?? "Working"} />
+          <progress
+            className="progress"
+            max={1}
+            value={progress}
+            aria-label={busy ?? "Working"}
+          />
         )}
         {error && <p className="error">{error}</p>}
       </div>

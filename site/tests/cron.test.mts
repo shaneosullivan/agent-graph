@@ -2,15 +2,15 @@
 // npm run test:unit
 
 import assert from "node:assert/strict";
-import { register } from "node:module";
-import { test } from "node:test";
+import {register} from "node:module";
+import {test} from "node:test";
 
 register("../scripts/resolve-ts.mjs", import.meta.url);
-const { cronAllowed } = await import("../lib/cleanup.ts");
+const {cronAllowed} = await import("../lib/cleanup.ts");
 
 const req = (auth: string | null) =>
   new Request("https://example.test/api/cron/cleanup", {
-    headers: auth === null ? {} : { Authorization: auth },
+    headers: auth === null ? {} : {Authorization: auth},
   });
 
 test("only Vercel Cron, with the secret, can run the cleanup", () => {

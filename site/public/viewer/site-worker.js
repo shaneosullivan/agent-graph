@@ -20,7 +20,7 @@
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const exact = new TextDecoder("utf-8", { ignoreBOM: true });
+const exact = new TextDecoder("utf-8", {ignoreBOM: true});
 
 let wasm = null;
 
@@ -58,7 +58,9 @@ let next = null;
 async function pull(log) {
   let added = 0;
   for (;;) {
-    const res = await fetch(`/api/logs/${log}/content?after=${after}`, { cache: "no-store" });
+    const res = await fetch(`/api/logs/${log}/content?after=${after}`, {
+      cache: "no-store",
+    });
     if (res.status === 401) return null; // the password cookie expired; the page asks again
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
     // Its bytes, as stored: a byte-order mark at its start is kept (text()
@@ -96,7 +98,8 @@ function startsWithKeyframe(text) {
 async function loadWasm(url) {
   if (WebAssembly.instantiateStreaming) {
     try {
-      return (await WebAssembly.instantiateStreaming(fetch(url), {})).instance.exports;
+      return (await WebAssembly.instantiateStreaming(fetch(url), {})).instance
+        .exports;
     } catch {
       // Falls through: some servers send the wrong content type.
     }
@@ -105,22 +108,24 @@ async function loadWasm(url) {
   return (await WebAssembly.instantiate(bytes, {})).instance.exports;
 }
 
-const loading = loadWasm("/viewer/agent_graph.wasm").then((exports) => (wasm = exports));
+const loading = loadWasm("/viewer/agent_graph.wasm").then(
+  exports => (wasm = exports),
+);
 loading.catch(() => {}); // said in reply to each request instead
 
-self.onmessage = async ({ data }) => {
-  const { id, op } = data;
+self.onmessage = async ({data}) => {
+  const {id, op} = data;
   try {
     await loading;
     if (op === "pull") {
       const added = await pull(data.log);
-      postMessage(added === null ? { id, reload: true } : { id, added: added > 0 });
+      postMessage(added === null ? {id, reload: true} : {id, added: added > 0});
     } else if (op === "query") {
-      postMessage({ id, result: call(data.request) });
+      postMessage({id, result: call(data.request)});
     } else {
       throw new Error(`no op ${op}`);
     }
   } catch (err) {
-    postMessage({ id, error: err.message || String(err) });
+    postMessage({id, error: err.message || String(err)});
   }
 };

@@ -11,12 +11,12 @@ import {
   signOut,
   type User,
 } from "firebase/auth";
-import { type FormEvent, useEffect, useState } from "react";
+import {type FormEvent, useEffect, useState} from "react";
 
-import { clientAuth } from "@/lib/firebase-client";
+import {clientAuth} from "@/lib/firebase-client";
 
 /** `agent-graph watch-remote`, waiting on this computer for the login. */
-export type CliLogin = { port: number; state: string; challenge: string };
+export type CliLogin = {port: number; state: string; challenge: string};
 
 type Mode = "log-in" | "sign-up" | "reset";
 
@@ -49,8 +49,8 @@ export function LoginForm({
   // Back from a Google sign-in that went by redirect (a popup was blocked).
   useEffect(() => {
     getRedirectResult(clientAuth())
-      .then((result) => result && finish(result.user))
-      .catch((err) => setError(message(err)));
+      .then(result => result && finish(result.user))
+      .catch(err => setError(message(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -62,12 +62,14 @@ export function LoginForm({
       const idToken = await user.getIdToken();
       const res = await fetch("/api/session", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idToken }),
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({idToken}),
       });
       // The session cookie is the record of it from here on.
       await signOut(clientAuth()).catch(() => {});
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
       if (cli) {
         setAccount(user.email ?? "");
         await connect();
@@ -87,15 +89,17 @@ export function LoginForm({
     try {
       const res = await fetch("/api/cli/code", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {"Content-Type": "application/json"},
         body: JSON.stringify(cli),
       });
       if (res.status === 401) {
         setAccount(null);
         throw new Error("Log in first.");
       }
-      if (!res.ok) throw new Error(await res.text());
-      const { redirect } = (await res.json()) as { redirect: string };
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const {redirect} = (await res.json()) as {redirect: string};
       location.assign(redirect);
     } catch (err) {
       setError(message(err));
@@ -111,12 +115,15 @@ export function LoginForm({
       const result = await signInWithPopup(clientAuth(), provider);
       await finish(result.user);
     } catch (err) {
-      const code = (err as { code?: string }).code;
+      const code = (err as {code?: string}).code;
       if (code === "auth/popup-blocked") {
         await signInWithRedirect(clientAuth(), provider);
         return;
       }
-      if (code !== "auth/popup-closed-by-user" && code !== "auth/cancelled-popup-request") {
+      if (
+        code !== "auth/popup-closed-by-user" &&
+        code !== "auth/cancelled-popup-request"
+      ) {
         setError(message(err));
       }
       setBusy(false);
@@ -150,11 +157,15 @@ export function LoginForm({
   }
 
   async function useAnother() {
-    await fetch("/api/session", { method: "DELETE" }).catch(() => {});
+    await fetch("/api/session", {method: "DELETE"}).catch(() => {});
     setAccount(null);
   }
 
-  const heading = cli ? "Connect agent-graph" : mode === "sign-up" ? "Create an account" : "Log in";
+  const heading = cli
+    ? "Connect agent-graph"
+    : mode === "sign-up"
+      ? "Create an account"
+      : "Log in";
 
   return (
     <div className="card narrow">
@@ -162,25 +173,36 @@ export function LoginForm({
         <h1>{heading}</h1>
         {badCli ? (
           <p className="error">
-            This link from agent-graph isn&rsquo;t complete. Run <code>agent-graph watch-remote</code> again.
+            This link from agent-graph isn&rsquo;t complete. Run{" "}
+            <code>agent-graph watch-remote</code> again.
           </p>
         ) : null}
         {cli ? (
           <p>
-            <code>agent-graph watch-remote</code> is asking to share your agents&rsquo; activity to your
-            account. Only you will be able to see it, at <a href="/watch">/watch</a>.
+            <code>agent-graph watch-remote</code> is asking to share your
+            agents&rsquo; activity to your account. Only you will be able to see
+            it, at <a href="/watch">/watch</a>.
           </p>
         ) : null}
 
         {cli && account !== null ? (
           <div className="auth-choice">
             <p>
-              You&rsquo;re logged in as <strong>{account || "your account"}</strong>.
+              You&rsquo;re logged in as{" "}
+              <strong>{account || "your account"}</strong>.
             </p>
-            <button className="button" type="button" onClick={connect} disabled={busy}>
+            <button
+              className="button"
+              type="button"
+              onClick={connect}
+              disabled={busy}>
               {busy ? "Connecting…" : "Connect agent-graph"}
             </button>
-            <button className="link-button" type="button" onClick={useAnother} disabled={busy}>
+            <button
+              className="link-button"
+              type="button"
+              onClick={useAnother}
+              disabled={busy}>
               Use another account
             </button>
           </div>
@@ -188,7 +210,11 @@ export function LoginForm({
           <div className="auth-choice">
             {mode !== "reset" ? (
               <>
-                <button className="button secondary" type="button" onClick={google} disabled={busy}>
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={google}
+                  disabled={busy}>
                   Continue with Google
                 </button>
                 <div className="or">or</div>
@@ -202,7 +228,7 @@ export function LoginForm({
                   autoComplete="email"
                   required
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={e => setEmail(e.target.value)}
                 />
               </label>
               {mode !== "reset" ? (
@@ -210,31 +236,48 @@ export function LoginForm({
                   Password
                   <input
                     type="password"
-                    autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
+                    autoComplete={
+                      mode === "sign-up" ? "new-password" : "current-password"
+                    }
                     required
                     minLength={mode === "sign-up" ? 6 : undefined}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={e => setPassword(e.target.value)}
                   />
                 </label>
               ) : null}
               <button className="button" type="submit" disabled={busy}>
-                {mode === "reset" ? "Send a reset link" : mode === "sign-up" ? "Create account" : "Log in"}
+                {mode === "reset"
+                  ? "Send a reset link"
+                  : mode === "sign-up"
+                    ? "Create account"
+                    : "Log in"}
               </button>
             </form>
             <div className="auth-switch">
               {mode === "log-in" ? (
                 <>
-                  <button className="link-button" type="button" onClick={() => setMode("sign-up")}>
+                  <button
+                    className="link-button"
+                    type="button"
+                    onClick={() => setMode("sign-up")}>
                     Create an account
                   </button>
-                  <button className="link-button" type="button" onClick={() => setMode("reset")}>
+                  <button
+                    className="link-button"
+                    type="button"
+                    onClick={() => setMode("reset")}>
                     Forgot your password?
                   </button>
                 </>
               ) : (
-                <button className="link-button" type="button" onClick={() => setMode("log-in")}>
-                  {mode === "sign-up" ? "I have an account: log in" : "Back to logging in"}
+                <button
+                  className="link-button"
+                  type="button"
+                  onClick={() => setMode("log-in")}>
+                  {mode === "sign-up"
+                    ? "I have an account: log in"
+                    : "Back to logging in"}
                 </button>
               )}
             </div>
@@ -249,7 +292,7 @@ export function LoginForm({
 
 /** What went wrong, for people: Firebase's errors are codes. */
 function message(err: unknown): string {
-  const code = (err as { code?: string }).code ?? "";
+  const code = (err as {code?: string}).code ?? "";
   switch (code) {
     case "auth/invalid-credential":
     case "auth/wrong-password":
@@ -270,6 +313,8 @@ function message(err: unknown): string {
     case "auth/popup-blocked":
       return "Your browser blocked the sign-in window.";
     default:
-      return err instanceof Error && err.message ? err.message : "That didn't work. Try again.";
+      return err instanceof Error && err.message
+        ? err.message
+        : "That didn't work. Try again.";
   }
 }

@@ -1,30 +1,35 @@
 import "../site.css";
 
-import type { Metadata } from "next";
-import { redirect } from "next/navigation";
+import type {Metadata} from "next";
+import {redirect} from "next/navigation";
 
-import { computersOf, watchLog } from "@/lib/accounts";
-import { currentUser } from "@/lib/auth";
+import {computersOf, watchLog} from "@/lib/accounts";
+import {currentUser} from "@/lib/auth";
 
-import { SiteHeader } from "../site-header";
-import { Computers, LogOut } from "./actions";
+import {SiteHeader} from "../site-header";
+import {Computers, LogOut} from "./actions";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Account · Agent Graph",
-  robots: { index: false, follow: false },
+  robots: {index: false, follow: false},
 };
 
 /** Who's logged in, their live share, and the computers sharing to it. */
 export default async function Account() {
   const user = await currentUser();
-  if (!user) redirect("/login?next=/account");
-  const [computers, share] = await Promise.all([computersOf(user.uid), watchLog(user.uid)]);
+  if (!user) {
+    redirect("/login?next=/account");
+  }
+  const [computers, share] = await Promise.all([
+    computersOf(user.uid),
+    watchLog(user.uid),
+  ]);
   return (
     <div className="site">
       <div className="page">
-        <SiteHeader links={[{ href: "/docs", label: "Docs" }]} />
+        <SiteHeader links={[{href: "/docs", label: "Docs"}]} />
         <div className="card narrow">
           <div className="card-body">
             <h1>Your account</h1>
@@ -39,8 +44,8 @@ export default async function Account() {
               </p>
             ) : (
               <p>
-                Nothing yet. Run <code>agent-graph watch-remote</code> on your computer, and it&rsquo;ll be at{" "}
-                <a href="/watch">/watch</a>.
+                Nothing yet. Run <code>agent-graph watch-remote</code> on your
+                computer, and it&rsquo;ll be at <a href="/watch">/watch</a>.
               </p>
             )}
             <h2>Computers</h2>

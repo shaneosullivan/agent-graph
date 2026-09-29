@@ -1,7 +1,7 @@
-import { accountOfRequest, accountStatus, setWatchLog } from "@/lib/accounts";
-import { ID_PATTERN, siteUrl } from "@/lib/config";
-import { safeEqual, writeToken } from "@/lib/crypto";
-import { getMeta } from "@/lib/store";
+import {accountOfRequest, accountStatus, setWatchLog} from "@/lib/accounts";
+import {ID_PATTERN, siteUrl} from "@/lib/config";
+import {safeEqual, writeToken} from "@/lib/crypto";
+import {getMeta} from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,23 +14,35 @@ export const dynamic = "force-dynamic";
  * where the account stands (lib/accounts.ts). 404 if it isn't a
  * share of theirs, or is gone.
  */
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
-  const { id } = await params;
-  if (!ID_PATTERN.test(id)) return new Response("Unknown log.", { status: 404 });
+export async function POST(
+  req: Request,
+  {params}: {params: Promise<{id: string}>},
+): Promise<Response> {
+  const {id} = await params;
+  if (!ID_PATTERN.test(id)) {
+    return new Response("Unknown log.", {status: 404});
+  }
   const account = await accountOfRequest(req);
   if (!account) {
-    return new Response("That login has ended. Log in again: agent-graph watch-remote asks you to.", {
-      status: 401,
-    });
+    return new Response(
+      "That login has ended. Log in again: agent-graph watch-remote asks you to.",
+      {
+        status: 401,
+      },
+    );
   }
-  if (!safeEqual(req.headers.get("x-agent-graph-write-token"), writeToken(id))) {
-    return new Response("Bad or missing write token.", { status: 401 });
+  if (
+    !safeEqual(req.headers.get("x-agent-graph-write-token"), writeToken(id))
+  ) {
+    return new Response("Bad or missing write token.", {status: 401});
   }
   const meta = await getMeta(id);
-  if (!meta || meta.owner !== account.uid) return new Response("Not a share of yours.", { status: 404 });
+  if (!meta || meta.owner !== account.uid) {
+    return new Response("Not a share of yours.", {status: 404});
+  }
   await setWatchLog(account.uid, id);
   return Response.json(
-    { url: `${siteUrl(req)}/watch`, accountStatus: accountStatus(account) },
-    { headers: { "Cache-Control": "no-store" } },
+    {url: `${siteUrl(req)}/watch`, accountStatus: accountStatus(account)},
+    {headers: {"Cache-Control": "no-store"}},
   );
 }

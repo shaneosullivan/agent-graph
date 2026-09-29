@@ -1,4 +1,11 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto";
 
 /**
  * Encrypts log chunks before they're stored, so Firestore only ever holds
@@ -40,9 +47,14 @@ let master: Buffer | undefined;
  * random 32-byte key tells nothing about it.
  */
 function describeKey(value: string, decoded: Buffer): string {
-  const others = [...value].filter((c) => !/[A-Za-z0-9_-]/.test(c));
-  const fingerprint = createHash("sha256").update(value).digest("hex").slice(0, 12);
-  const where = process.env.VERCEL_ENV ? ` (Vercel environment: ${process.env.VERCEL_ENV})` : "";
+  const others = [...value].filter(c => !/[A-Za-z0-9_-]/.test(c));
+  const fingerprint = createHash("sha256")
+    .update(value)
+    .digest("hex")
+    .slice(0, 12);
+  const where = process.env.VERCEL_ENV
+    ? ` (Vercel environment: ${process.env.VERCEL_ENV})`
+    : "";
   return (
     `The value here${where} is ${value.length} characters` +
     (others.length
@@ -55,7 +67,7 @@ function describeKey(value: string, decoded: Buffer): string {
 }
 
 /** Characters that aren't base64url, named (never the key's own). */
-function describeChars(chars: string[]): string {
+function describeChars(chars: Array<string>): string {
   const names: Record<string, string> = {
     " ": "space",
     "\n": "newline",
@@ -69,14 +81,20 @@ function describeChars(chars: string[]): string {
   };
   const counts = new Map<string, number>();
   for (const c of chars) {
-    const name = names[c] ?? `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`;
+    const name =
+      names[c] ??
+      `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`;
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
-  return [...counts].map(([name, n]) => (n > 1 ? `${n} × ${name}` : name)).join(", ");
+  return [...counts]
+    .map(([name, n]) => (n > 1 ? `${n} × ${name}` : name))
+    .join(", ");
 }
 
 function masterKey(): Buffer {
-  if (master) return master;
+  if (master) {
+    return master;
+  }
   const value = process.env.AGENT_GRAPH_ENCRYPTION_KEY;
   if (value) {
     const key = Buffer.from(value, "base64url");
@@ -89,7 +107,9 @@ function masterKey(): Buffer {
   } else if (process.env.NODE_ENV === "production") {
     throw new Error("AGENT_GRAPH_ENCRYPTION_KEY must be set in production");
   } else {
-    console.warn("AGENT_GRAPH_ENCRYPTION_KEY isn't set; using an insecure development key.");
+    console.warn(
+      "AGENT_GRAPH_ENCRYPTION_KEY isn't set; using an insecure development key.",
+    );
     master = Buffer.alloc(KEY_BYTES, 0x5a);
   }
   return master;
@@ -102,8 +122,12 @@ const LOG_KEY_CACHE_LIMIT = 1000;
 function logKey(id: string): Buffer {
   let key = logKeys.get(id);
   if (!key) {
-    key = Buffer.from(hkdfSync("sha256", masterKey(), "agent-graph", `log:${id}`, KEY_BYTES));
-    if (logKeys.size >= LOG_KEY_CACHE_LIMIT) logKeys.delete(logKeys.keys().next().value!);
+    key = Buffer.from(
+      hkdfSync("sha256", masterKey(), "agent-graph", `log:${id}`, KEY_BYTES),
+    );
+    if (logKeys.size >= LOG_KEY_CACHE_LIMIT) {
+      logKeys.delete(logKeys.keys().next().value!);
+    }
     logKeys.set(id, key);
   }
   return key;
@@ -115,7 +139,9 @@ const subKeys = new Map<string, Buffer>();
 function subKey(purpose: "storage-id" | "meta" | "account-log"): Buffer {
   let key = subKeys.get(purpose);
   if (!key) {
-    key = Buffer.from(hkdfSync("sha256", masterKey(), "agent-graph", purpose, KEY_BYTES));
+    key = Buffer.from(
+      hkdfSync("sha256", masterKey(), "agent-graph", purpose, KEY_BYTES),
+    );
     subKeys.set(purpose, key);
   }
   return key;
@@ -123,7 +149,9 @@ function subKey(purpose: "storage-id" | "meta" | "account-log"): Buffer {
 
 /** Where log `id` is stored: an HMAC of it, from which the id can't be had. */
 export function storageId(id: string): string {
-  return createHmac("sha256", subKey("storage-id")).update(id).digest("base64url");
+  return createHmac("sha256", subKey("storage-id"))
+    .update(id)
+    .digest("base64url");
 }
 
 /**
@@ -131,11 +159,16 @@ export function storageId(id: string): string {
  * owner (an account's live share) has it in the MAC too, so it can't be
  * taken off, or changed.
  */
-export function metaTag(id: string, meta: { source: string; pw?: string; owner?: string }): string {
+export function metaTag(
+  id: string,
+  meta: {source: string; pw?: string; owner?: string},
+): string {
   const fields = meta.owner
     ? ["meta/2", id, meta.source, meta.pw || null, meta.owner]
     : ["meta/1", id, meta.source, meta.pw || null];
-  return createHmac("sha256", subKey("meta")).update(JSON.stringify(fields)).digest("base64url");
+  return createHmac("sha256", subKey("meta"))
+    .update(JSON.stringify(fields))
+    .digest("base64url");
 }
 
 /**
@@ -154,13 +187,21 @@ export function sealLogId(uid: string, id: string): Buffer {
 /** The log id `sealLogId` sealed for `uid`, or null if it isn't one. */
 export function openLogId(uid: string, sealed: Uint8Array): string | null {
   const data = Buffer.from(sealed);
-  if (data.length < 1 + IV_BYTES + TAG_BYTES || data[0] !== VERSION) return null;
+  if (data.length < 1 + IV_BYTES + TAG_BYTES || data[0] !== VERSION) {
+    return null;
+  }
   try {
-    const decipher = createDecipheriv("aes-256-gcm", subKey("account-log"), data.subarray(1, 1 + IV_BYTES));
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      subKey("account-log"),
+      data.subarray(1, 1 + IV_BYTES),
+    );
     decipher.setAAD(Buffer.from(`agent-graph:account:${uid}`));
     decipher.setAuthTag(data.subarray(data.length - TAG_BYTES));
     const body = data.subarray(1 + IV_BYTES, data.length - TAG_BYTES);
-    return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+    return Buffer.concat([decipher.update(body), decipher.final()]).toString(
+      "utf8",
+    );
   } catch {
     return null;
   }
@@ -181,7 +222,11 @@ export function encryptChunk(id: string, chunk: string, text: string): Buffer {
 }
 
 /** Decrypts a chunk. Throws if it was altered, moved, or the key is wrong. */
-export function decryptChunk(id: string, chunk: string, stored: Uint8Array): string {
+export function decryptChunk(
+  id: string,
+  chunk: string,
+  stored: Uint8Array,
+): string {
   const data = Buffer.from(stored);
   if (data.length < 1 + IV_BYTES + TAG_BYTES || data[0] !== VERSION) {
     // Not the log's id: it's what lets people read the log, and errors get logged.
@@ -193,5 +238,7 @@ export function decryptChunk(id: string, chunk: string, stored: Uint8Array): str
   const decipher = createDecipheriv("aes-256-gcm", logKey(id), iv);
   decipher.setAAD(associatedData(id, chunk));
   decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+  return Buffer.concat([decipher.update(body), decipher.final()]).toString(
+    "utf8",
+  );
 }

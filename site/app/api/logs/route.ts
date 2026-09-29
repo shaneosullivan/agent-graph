@@ -7,10 +7,16 @@ import {
   type Source,
   siteUrl,
 } from "@/lib/config";
-import { accountOfRequest, accountStatus, setWatchLog } from "@/lib/accounts";
-import { hashPassword, newId, PasswordTooLong, passwordFromHeader, writeToken } from "@/lib/crypto";
-import { IdTaken, createLog, takeScryptRun } from "@/lib/store";
-import { tooMany } from "@/lib/unlock";
+import {accountOfRequest, accountStatus, setWatchLog} from "@/lib/accounts";
+import {
+  hashPassword,
+  newId,
+  PasswordTooLong,
+  passwordFromHeader,
+  writeToken,
+} from "@/lib/crypto";
+import {IdTaken, createLog, takeScryptRun} from "@/lib/store";
+import {tooMany} from "@/lib/unlock";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,26 +43,39 @@ export async function POST(req: Request): Promise<Response> {
     return tooLarge();
   }
   const text = await bodyText(req, MAX_CHUNK_BYTES);
-  if (text === null) return tooLarge();
+  if (text === null) {
+    return tooLarge();
+  }
 
   const header = req.headers.get("x-agent-graph-source") as Source | null;
   const source: Source = header && SOURCES.includes(header) ? header : "paste";
 
-  const account = req.headers.has("authorization") ? await accountOfRequest(req) : null;
+  const account = req.headers.has("authorization")
+    ? await accountOfRequest(req)
+    : null;
   if (req.headers.has("authorization") && !account) {
-    return new Response("That login has ended. Log in again: agent-graph watch-remote asks you to.", {
-      status: 401,
-    });
+    return new Response(
+      "That login has ended. Log in again: agent-graph watch-remote asks you to.",
+      {
+        status: 401,
+      },
+    );
   }
   if (source === "watch" && !account) {
-    return new Response("Sharing live needs you to be logged in. Update agent-graph, and run it again.", {
-      status: 401,
-    });
+    return new Response(
+      "Sharing live needs you to be logged in. Update agent-graph, and run it again.",
+      {
+        status: 401,
+      },
+    );
   }
   if (account && req.headers.has("x-agent-graph-password")) {
-    return new Response("A share of your own is private to your account: it can't have a password.", {
-      status: 400,
-    });
+    return new Response(
+      "A share of your own is private to your account: it can't have a password.",
+      {
+        status: 400,
+      },
+    );
   }
 
   let password: string | null;
@@ -64,35 +83,58 @@ export async function POST(req: Request): Promise<Response> {
     password = passwordFromHeader(req);
   } catch (err) {
     if (err instanceof PasswordTooLong) {
-      return new Response(`A password may be at most ${MAX_PASSWORD_BYTES} bytes.`, { status: 400 });
+      return new Response(
+        `A password may be at most ${MAX_PASSWORD_BYTES} bytes.`,
+        {status: 400},
+      );
     }
-    return new Response("Malformed X-Agent-Graph-Password header.", { status: 400 });
+    return new Response("Malformed X-Agent-Graph-Password header.", {
+      status: 400,
+    });
   }
   // Hashing it is a scrypt run, which is limited per address.
   if (password) {
     const run = await takeScryptRun(clientAddress(req));
-    if ("wait" in run) return tooMany("Too many passwords from this address", run.wait);
+    if ("wait" in run) {
+      return tooMany("Too many passwords from this address", run.wait);
+    }
   }
   const pw = password ? await hashPassword(password) : undefined;
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const id = newId();
     try {
-      await createLog(id, { source, pw, ...(account ? { owner: account.uid } : {}) }, text);
+      await createLog(
+        id,
+        {source, pw, ...(account ? {owner: account.uid} : {})},
+        text,
+      );
     } catch (err) {
-      if (err instanceof IdTaken) continue;
+      if (err instanceof IdTaken) {
+        continue;
+      }
       throw err;
     }
-    if (account) await setWatchLog(account.uid, id);
+    if (account) {
+      await setWatchLog(account.uid, id);
+    }
     const url = account ? `${siteUrl(req)}/watch` : `${siteUrl(req)}/l/${id}`;
     return Response.json(
-      { id, url, writeToken: writeToken(id), ...(account ? { accountStatus: accountStatus(account) } : {}) },
-      { status: 201, headers: { "Cache-Control": "no-store" } },
+      {
+        id,
+        url,
+        writeToken: writeToken(id),
+        ...(account ? {accountStatus: accountStatus(account)} : {}),
+      },
+      {status: 201, headers: {"Cache-Control": "no-store"}},
     );
   }
-  return new Response("Couldn't allocate an id; try again.", { status: 503 });
+  return new Response("Couldn't allocate an id; try again.", {status: 503});
 }
 
 function tooLarge(): Response {
-  return new Response(`Each request may carry at most ${MAX_CHUNK_BYTES} bytes.`, { status: 413 });
+  return new Response(
+    `Each request may carry at most ${MAX_CHUNK_BYTES} bytes.`,
+    {status: 413},
+  );
 }

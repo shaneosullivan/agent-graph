@@ -1,4 +1,4 @@
-import { FieldPath, Timestamp } from "firebase-admin/firestore";
+import {FieldPath, Timestamp} from "firebase-admin/firestore";
 
 import {
   BYTES_PER_READ,
@@ -13,9 +13,9 @@ import {
   UNLOCKS_PER_LOG,
   UNLOCKS_PER_LOG_AND_ADDRESS,
 } from "./config";
-import { addressKey, safeEqual } from "./crypto";
-import { decryptChunk, encryptChunk, metaTag, storageId } from "./encryption";
-import { firestore } from "./firebase";
+import {addressKey, safeEqual} from "./crypto";
+import {decryptChunk, encryptChunk, metaTag, storageId} from "./encryption";
+import {firestore} from "./firebase";
 
 /**
  * How logs are kept in Firestore:
@@ -70,7 +70,11 @@ export function chunkKey(offset: number): string {
 export class IdTaken extends Error {}
 
 /** Creates log `id` with its first chunk, all in one commit. */
-export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text: string): Promise<void> {
+export async function createLog(
+  id: string,
+  meta: Omit<Meta, "createdAt">,
+  text: string,
+): Promise<void> {
   const log = logDoc(id);
   const batch = firestore().batch();
   // `create` fails if the id is already taken, rather than overwriting it.
@@ -78,8 +82,8 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
   // when present.)
   batch.create(log, {
     source: meta.source,
-    ...(meta.pw ? { pw: meta.pw } : {}),
-    ...(meta.owner ? { owner: meta.owner } : {}),
+    ...(meta.pw ? {pw: meta.pw} : {}),
+    ...(meta.owner ? {owner: meta.owner} : {}),
     createdAt: Timestamp.now(),
     mac: metaTag(id, meta),
   });
@@ -91,7 +95,9 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
     await batch.commit();
   } catch (err) {
     // gRPC ALREADY_EXISTS
-    if ((err as { code?: number }).code === 6) throw new IdTaken(id);
+    if ((err as {code?: number}).code === 6) {
+      throw new IdTaken(id);
+    }
     throw err;
   }
 }
@@ -99,7 +105,12 @@ export async function createLog(id: string, meta: Omit<Meta, "createdAt">, text:
 /** A chunk's document: its text, encrypted; its length, and where it ends; and when it was written. */
 function chunkData(id: string, key: string, text: string) {
   const n = Buffer.byteLength(text);
-  return { e: encryptChunk(id, key, text), n, end: Number(key) + n, t: Timestamp.now() };
+  return {
+    e: encryptChunk(id, key, text),
+    n,
+    end: Number(key) + n,
+    t: Timestamp.now(),
+  };
 }
 
 export class ChunkTaken extends Error {}
@@ -118,7 +129,9 @@ export class Misplaced extends Error {}
  */
 async function there(
   id: string,
-  get: (ref: FirebaseFirestore.DocumentReference) => Promise<FirebaseFirestore.DocumentSnapshot>,
+  get: (
+    ref: FirebaseFirestore.DocumentReference,
+  ) => Promise<FirebaseFirestore.DocumentSnapshot>,
 ): Promise<boolean> {
   return (await where(id, get)) !== null;
 }
@@ -130,10 +143,14 @@ async function there(
  */
 async function where(
   id: string,
-  get: (ref: FirebaseFirestore.DocumentReference) => Promise<FirebaseFirestore.DocumentSnapshot>,
+  get: (
+    ref: FirebaseFirestore.DocumentReference,
+  ) => Promise<FirebaseFirestore.DocumentSnapshot>,
 ): Promise<FirebaseFirestore.DocumentSnapshot | undefined | null> {
   const log = await get(logDoc(id));
-  if (log.exists) return log.get("deleting") ? null : log;
+  if (log.exists) {
+    return log.get("deleting") ? null : log;
+  }
   const old = await get(logs().doc(id));
   return old.exists && !old.get("deleting") ? undefined : null;
 }
@@ -154,7 +171,11 @@ async function where(
  * (Chunks stored before they said where they end don't: a log whose first
  * chunk is one of those isn't checked, until it's trimmed past them.)
  */
-export async function appendChunk(id: string, offset: number, text: string): Promise<void> {
+export async function appendChunk(
+  id: string,
+  offset: number,
+  text: string,
+): Promise<void> {
   const key = chunkKey(offset);
   const chunks = logDoc(id).collection("chunks");
   const doc = chunks.doc(key);
@@ -162,22 +183,33 @@ export async function appendChunk(id: string, offset: number, text: string): Pro
     // Only while the log's there (read with it, so a deletion as it's
     // written makes it try again, and fail): otherwise what's sent after
     // it's deleted would be kept for good.
-    await firestore().runTransaction(async (tx) => {
-      const found = await where(id, (ref) => tx.get(ref));
-      if (found === null) throw new LogGone(id);
+    await firestore().runTransaction(async tx => {
+      const found = await where(id, ref => tx.get(ref));
+      if (found === null) {
+        throw new LogGone(id);
+      }
       // (One still stored as it was before storage ids has chunks from
       // before that aren't here to follow on from.)
       if (found) {
-        const ends = offset > 0 ? await tx.get(chunks.where("end", "==", offset).limit(1).select()) : null;
+        const ends =
+          offset > 0
+            ? await tx.get(chunks.where("end", "==", offset).limit(1).select())
+            : null;
         if (!ends || ends.empty) {
-          const [first] = (await tx.get(chunks.orderBy(FieldPath.documentId()).limit(1).select("end"))).docs;
+          const [first] = (
+            await tx.get(
+              chunks.orderBy(FieldPath.documentId()).limit(1).select("end"),
+            )
+          ).docs;
           // With nothing stored yet, it goes at 0. Else it's the first
           // kept, again (a retry: storing it, below, fails, and it's
           // compared), or it doesn't follow on.
           const follows = first
             ? first.id === key || (offset > 0 && first.get("end") === undefined)
             : offset === 0;
-          if (!follows) throw new Misplaced(key);
+          if (!follows) {
+            throw new Misplaced(key);
+          }
         }
       }
       // When it was written: a log with none newer than a week is deleted.
@@ -185,9 +217,13 @@ export async function appendChunk(id: string, offset: number, text: string): Pro
     });
   } catch (err) {
     // gRPC ALREADY_EXISTS
-    if ((err as { code?: number }).code !== 6) throw err;
+    if ((err as {code?: number}).code !== 6) {
+      throw err;
+    }
     const stored = (await doc.get()).get("e");
-    if (!stored || !holds(id, key, stored, text)) throw new ChunkTaken(key);
+    if (!stored || !holds(id, key, stored, text)) {
+      throw new ChunkTaken(key);
+    }
   }
 }
 
@@ -196,7 +232,12 @@ export async function appendChunk(id: string, offset: number, text: string): Pro
  * refusing it tells the client to stop, where an error would have it retry
  * for good.
  */
-function holds(id: string, key: string, stored: Uint8Array, text: string): boolean {
+function holds(
+  id: string,
+  key: string,
+  stored: Uint8Array,
+  text: string,
+): boolean {
   try {
     return decryptChunk(id, key, stored) === text;
   } catch {
@@ -222,26 +263,39 @@ const TRIM_BATCH = 500;
  * how many went (those still there: two trims at once count each once).
  */
 export async function trimLog(id: string, before: number): Promise<number> {
-  if (!(await there(id, (ref) => ref.get()))) throw new LogGone(id);
+  if (!(await there(id, ref => ref.get()))) {
+    throw new LogGone(id);
+  }
   // Their keys, oldest first (Firestore can't scan keys the other way).
   const chunks = logDoc(id).collection("chunks");
-  const older = chunks.orderBy(FieldPath.documentId()).endBefore(chunkKey(before)).select();
-  const keys: string[] = [];
+  const older = chunks
+    .orderBy(FieldPath.documentId())
+    .endBefore(chunkKey(before))
+    .select();
+  const keys: Array<string> = [];
   for (;;) {
     const page = keys.length ? older.startAfter(keys[keys.length - 1]) : older;
     const snap = await page.limit(TRIM_BATCH).get();
-    keys.push(...snap.docs.map((doc) => doc.id));
-    if (snap.size < TRIM_BATCH) break;
+    keys.push(...snap.docs.map(doc => doc.id));
+    if (snap.size < TRIM_BATCH) {
+      break;
+    }
   }
   let deleted = 0;
   for (let end = keys.length; end > 0; end -= TRIM_BATCH) {
-    const refs = keys.slice(Math.max(0, end - TRIM_BATCH), end).map((key) => chunks.doc(key));
-    deleted += await firestore().runTransaction(async (tx) => {
-      const found = await where(id, (ref) => tx.get(ref));
-      if (found === null) throw new LogGone(id);
-      const snaps = await tx.getAll(...refs, { fieldMask: [] });
-      const stored = snaps.filter((snap) => snap.exists);
-      for (const snap of stored) tx.delete(snap.ref);
+    const refs = keys
+      .slice(Math.max(0, end - TRIM_BATCH), end)
+      .map(key => chunks.doc(key));
+    deleted += await firestore().runTransaction(async tx => {
+      const found = await where(id, ref => tx.get(ref));
+      if (found === null) {
+        throw new LogGone(id);
+      }
+      const snaps = await tx.getAll(...refs, {fieldMask: []});
+      const stored = snaps.filter(snap => snap.exists);
+      for (const snap of stored) {
+        tx.delete(snap.ref);
+      }
       return stored.length;
     });
   }
@@ -250,7 +304,12 @@ export async function trimLog(id: string, before: number): Promise<number> {
 
 /** Where log `id`'s first chunk (the oldest kept) starts, or null if it has none. */
 export async function firstChunkOffset(id: string): Promise<number | null> {
-  const snap = await logDoc(id).collection("chunks").orderBy(FieldPath.documentId()).limit(1).select().get();
+  const snap = await logDoc(id)
+    .collection("chunks")
+    .orderBy(FieldPath.documentId())
+    .limit(1)
+    .select()
+    .get();
   return snap.empty ? null : Number(snap.docs[0].id);
 }
 
@@ -259,7 +318,7 @@ export async function firstChunkOffset(id: string): Promise<number | null> {
 // Metadata doesn't change, but can go (a log not in use is deleted), so
 // what's kept is read again after a while, and forgotten by an instance
 // that deletes it.
-const metaCache = new Map<string, { meta: Meta; at: number }>();
+const metaCache = new Map<string, {meta: Meta; at: number}>();
 export const META_CACHE_MS = 10 * 60 * 1000;
 const META_CACHE_LIMIT = 5000;
 
@@ -269,26 +328,47 @@ export function forgetMeta(sid: string): void {
 }
 
 /** Log `id`'s metadata; null if there's no such log, or if it was changed. */
-export async function getMeta(id: string, now = Date.now()): Promise<Meta | null> {
+export async function getMeta(
+  id: string,
+  now = Date.now(),
+): Promise<Meta | null> {
   const cached = metaCache.get(storageId(id));
-  if (cached && now - cached.at <= META_CACHE_MS) return cached.meta;
+  if (cached && now - cached.at <= META_CACHE_MS) {
+    return cached.meta;
+  }
   const snap = await logDoc(id).get();
   let meta: Meta | null = null;
   // (One being deleted is gone.)
   if (snap.exists && !snap.get("deleting")) {
-    const { source, pw, owner, createdAt, mac } = snap.data() as Meta & { mac?: unknown };
-    if (typeof mac === "string" && safeEqual(mac, metaTag(id, { source, pw, owner }))) {
-      meta = { source, ...(pw ? { pw } : {}), ...(owner ? { owner } : {}), createdAt };
+    const {source, pw, owner, createdAt, mac} = snap.data() as Meta & {
+      mac?: unknown;
+    };
+    if (
+      typeof mac === "string" &&
+      safeEqual(mac, metaTag(id, {source, pw, owner}))
+    ) {
+      meta = {
+        source,
+        ...(pw ? {pw} : {}),
+        ...(owner ? {owner} : {}),
+        createdAt,
+      };
     } else {
       // Named by where it's stored: the log's id is what lets people read it.
-      console.error(`The metadata of logs/${storageId(id)} doesn't match its tag; treated as missing.`);
+      console.error(
+        `The metadata of logs/${storageId(id)} doesn't match its tag; treated as missing.`,
+      );
     }
   }
   // Don't cache "not found": the log may be created a moment later.
-  if (!meta) metaCache.delete(storageId(id));
+  if (!meta) {
+    metaCache.delete(storageId(id));
+  }
   if (meta) {
-    if (metaCache.size >= META_CACHE_LIMIT) metaCache.delete(metaCache.keys().next().value!);
-    metaCache.set(storageId(id), { meta, at: now });
+    if (metaCache.size >= META_CACHE_LIMIT) {
+      metaCache.delete(metaCache.keys().next().value!);
+    }
+    metaCache.set(storageId(id), {meta, at: now});
   }
   return meta;
 }
@@ -309,9 +389,16 @@ export async function getMeta(id: string, now = Date.now()): Promise<Meta | null
 export async function readChunks(
   id: string,
   after: string,
-): Promise<{ text: string; first: string | null; last: string | null; more: boolean }> {
-  const chunks = logDoc(id).collection("chunks").orderBy(FieldPath.documentId());
-  const texts: string[] = [];
+): Promise<{
+  text: string;
+  first: string | null;
+  last: string | null;
+  more: boolean;
+}> {
+  const chunks = logDoc(id)
+    .collection("chunks")
+    .orderBy(FieldPath.documentId());
+  const texts: Array<string> = [];
   let bytes = 0;
   let first: string | null = null;
   let last: string | null = null;
@@ -320,49 +407,72 @@ export async function readChunks(
   while (texts.length < CHUNKS_PER_READ) {
     const want = Math.min(CHUNKS_PER_QUERY, CHUNKS_PER_READ - texts.length);
     const cursor: string = last ?? after;
-    const snap = await (cursor ? chunks.startAfter(cursor) : chunks).limit(want).get();
+    const snap = await (cursor ? chunks.startAfter(cursor) : chunks)
+      .limit(want)
+      .get();
     for (const doc of snap.docs) {
-      if (next !== null && Number(doc.id) !== next) return { text: texts.join(""), first, last, more: true };
+      if (next !== null && Number(doc.id) !== next) {
+        return {text: texts.join(""), first, last, more: true};
+      }
       const text = decryptChunk(id, doc.id, doc.get("e"));
       texts.push(text);
       first ??= doc.id;
       last = doc.id;
       next = Number(doc.id) + Buffer.byteLength(text);
       bytes += Buffer.byteLength(text);
-      if (bytes >= BYTES_PER_READ) return { text: texts.join(""), first, last, more: true };
+      if (bytes >= BYTES_PER_READ) {
+        return {text: texts.join(""), first, last, more: true};
+      }
     }
-    if (snap.size < want) return { text: texts.join(""), first, last, more: false };
+    if (snap.size < want) {
+      return {text: texts.join(""), first, last, more: false};
+    }
   }
-  return { text: texts.join(""), first, last, more: true };
+  return {text: texts.join(""), first, last, more: true};
 }
 
 /** A guess counted by `takeUnlockAttempt`, to give back if it was right. */
-export type Reservation = { ref: FirebaseFirestore.DocumentReference; since: number }[];
+export type Reservation = Array<{
+  ref: FirebaseFirestore.DocumentReference;
+  since: number;
+}>;
 
 /**
  * A count, per window, of guesses (or scrypt runs), up to `limit`. A guess
  * that turns out right is given back to all but those that are `kept`.
  */
-type Bucket = { ref: FirebaseFirestore.DocumentReference; limit: number; kept?: boolean };
+type Bucket = {
+  ref: FirebaseFirestore.DocumentReference;
+  limit: number;
+  kept?: boolean;
+};
 
 /** The bucket counting `address`'s scrypt runs, whatever they're for. */
 function scryptBucket(address: string): Bucket {
   const ref = firestore()
     .collection("unlock-attempts")
     .doc(`scrypt-${addressKey(address)}`);
-  return { ref, limit: SCRYPT_RUNS_PER_ADDRESS, kept: true };
+  return {ref, limit: SCRYPT_RUNS_PER_ADDRESS, kept: true};
 }
 
 /** The buckets a guess at log `id` from `address` counts against. */
-function unlockBuckets(id: string, address: string | null): Bucket[] {
+function unlockBuckets(id: string, address: string | null): Array<Bucket> {
   const attempts = firestore().collection("unlock-attempts");
   const sid = storageId(id);
   // All keyed: the documents name neither the log nor the address.
-  const buckets: Bucket[] = [{ ref: attempts.doc(`log-${sid}`), limit: UNLOCKS_PER_LOG }];
+  const buckets: Array<Bucket> = [
+    {ref: attempts.doc(`log-${sid}`), limit: UNLOCKS_PER_LOG},
+  ];
   if (address) {
     buckets.push(
-      { ref: attempts.doc(`pair-${addressKey(address, sid)}`), limit: UNLOCKS_PER_LOG_AND_ADDRESS },
-      { ref: attempts.doc(`address-${addressKey(address)}`), limit: UNLOCKS_PER_ADDRESS },
+      {
+        ref: attempts.doc(`pair-${addressKey(address, sid)}`),
+        limit: UNLOCKS_PER_LOG_AND_ADDRESS,
+      },
+      {
+        ref: attempts.doc(`address-${addressKey(address)}`),
+        limit: UNLOCKS_PER_ADDRESS,
+      },
       // Checking a guess runs scrypt, right or wrong: counted at the log,
       // and in all.
       {
@@ -385,20 +495,29 @@ const CHECKING_MS = 10_000;
  * counted in just now (right guesses among those are about to be given
  * back, unless it's `kept`).
  */
-function counted(snaps: FirebaseFirestore.DocumentSnapshot[], buckets: Bucket[], now: number) {
+function counted(
+  snaps: Array<FirebaseFirestore.DocumentSnapshot>,
+  buckets: Array<Bucket>,
+  now: number,
+) {
   let wait = 0;
   const counts = snaps.map((snap, i) => {
     const since = (snap.get("since") as Timestamp | undefined)?.toMillis();
-    if (since === undefined || now - since >= UNLOCK_WINDOW_MS) return { n: 0, since: now };
+    if (since === undefined || now - since >= UNLOCK_WINDOW_MS) {
+      return {n: 0, since: now};
+    }
     const n = Number(snap.get("n")) || 0;
     if (n >= buckets[i].limit) {
       const at = (snap.get("at") as Timestamp | undefined)?.toMillis() ?? since;
       const checking = !buckets[i].kept && now - at < CHECKING_MS;
-      wait = Math.max(wait, checking ? UNLOCK_BUSY_SECONDS * 1000 : since + UNLOCK_WINDOW_MS - now);
+      wait = Math.max(
+        wait,
+        checking ? UNLOCK_BUSY_SECONDS * 1000 : since + UNLOCK_WINDOW_MS - now,
+      );
     }
-    return { n, since };
+    return {n, since};
   });
-  return { counts, wait: Math.ceil(wait / 1000) };
+  return {counts, wait: Math.ceil(wait / 1000)};
 }
 
 let warnedNoAddress = false;
@@ -409,18 +528,28 @@ let warnedNoAddress = false;
  * a transaction, so ones made at once can't get past a limit. Returns each
  * bucket's window, for giving it back.
  */
-async function take(buckets: Bucket[]): Promise<{ wait: number } | { since: number[] }> {
-  const refs = buckets.map((b) => b.ref);
+async function take(
+  buckets: Array<Bucket>,
+): Promise<{wait: number} | {since: Array<number>}> {
+  const refs = buckets.map(b => b.ref);
   // A flood meets full buckets: refused by a plain read, since a
   // transaction would only contend with the others.
-  const before = counted(await firestore().getAll(...refs), buckets, Date.now());
-  if (before.wait > 0) return { wait: before.wait };
+  const before = counted(
+    await firestore().getAll(...refs),
+    buckets,
+    Date.now(),
+  );
+  if (before.wait > 0) {
+    return {wait: before.wait};
+  }
   try {
-    return await firestore().runTransaction(async (tx) => {
+    return await firestore().runTransaction(async tx => {
       const now = Date.now();
-      const { counts, wait } = counted(await tx.getAll(...refs), buckets, now);
-      if (wait > 0) return { wait };
-      counts.forEach(({ n, since }, i) =>
+      const {counts, wait} = counted(await tx.getAll(...refs), buckets, now);
+      if (wait > 0) {
+        return {wait};
+      }
+      counts.forEach(({n, since}, i) =>
         tx.set(refs[i], {
           n: n + 1,
           since: Timestamp.fromMillis(since),
@@ -429,11 +558,13 @@ async function take(buckets: Bucket[]): Promise<{ wait: number } | { since: numb
           expireAt: Timestamp.fromMillis(since + UNLOCK_WINDOW_MS),
         }),
       );
-      return { since: counts.map(({ since }) => since) };
+      return {since: counts.map(({since}) => since)};
     });
   } catch (err) {
     // ABORTED: too many at once to count them all.
-    if ((err as { code?: number }).code === 10) return { wait: UNLOCK_BUSY_SECONDS };
+    if ((err as {code?: number}).code === 10) {
+      return {wait: UNLOCK_BUSY_SECONDS};
+    }
     throw err;
   }
 }
@@ -449,16 +580,22 @@ async function take(buckets: Bucket[]): Promise<{ wait: number } | { since: numb
 export async function takeUnlockAttempt(
   id: string,
   address: string | null,
-): Promise<{ wait: number } | { reservation: Reservation }> {
+): Promise<{wait: number} | {reservation: Reservation}> {
   if (!address && !warnedNoAddress) {
-    console.warn("A request came without an address; guesses are only limited per log.");
+    console.warn(
+      "A request came without an address; guesses are only limited per log.",
+    );
     warnedNoAddress = true;
   }
   const buckets = unlockBuckets(id, address);
   const taken = await take(buckets);
-  if ("wait" in taken) return taken;
+  if ("wait" in taken) {
+    return taken;
+  }
   return {
-    reservation: buckets.flatMap(({ ref, kept }, i) => (kept ? [] : [{ ref, since: taken.since[i] }])),
+    reservation: buckets.flatMap(({ref, kept}, i) =>
+      kept ? [] : [{ref, since: taken.since[i]}],
+    ),
   };
 }
 
@@ -470,8 +607,10 @@ export async function takeUnlockAttempt(
  */
 export async function takeScryptRun(
   address: string | null,
-): Promise<{ wait: number } | Record<string, never>> {
-  if (!address) return {};
+): Promise<{wait: number} | Record<string, never>> {
+  if (!address) {
+    return {};
+  }
   const taken = await take([scryptBucket(address)]);
   return "wait" in taken ? taken : {};
 }
@@ -480,17 +619,24 @@ export async function takeScryptRun(
  * Gives back a guess that was right, so only wrong ones use up the limits
  * (unless its window has since ended). If that fails, it stays counted.
  */
-export async function giveBackUnlockAttempt(reservation: Reservation): Promise<void> {
+export async function giveBackUnlockAttempt(
+  reservation: Reservation,
+): Promise<void> {
   try {
-    await firestore().runTransaction(async (tx) => {
-      const snaps = await tx.getAll(...reservation.map((r) => r.ref));
+    await firestore().runTransaction(async tx => {
+      const snaps = await tx.getAll(...reservation.map(r => r.ref));
       snaps.forEach((snap, i) => {
         const n = Number(snap.get("n")) || 0;
         const since = (snap.get("since") as Timestamp | undefined)?.toMillis();
-        if (since === reservation[i].since && n > 0) tx.update(reservation[i].ref, { n: n - 1 });
+        if (since === reservation[i].since && n > 0) {
+          tx.update(reservation[i].ref, {n: n - 1});
+        }
       });
     });
   } catch (err) {
-    console.error("Couldn't give back a right password guess; it counts as a wrong one.", err);
+    console.error(
+      "Couldn't give back a right password guess; it counts as a wrong one.",
+      err,
+    );
   }
 }

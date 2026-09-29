@@ -6,8 +6,8 @@ import {
   getApps,
   initializeApp,
 } from "firebase-admin/app";
-import { type Auth, getAuth } from "firebase-admin/auth";
-import { type Firestore, getFirestore } from "firebase-admin/firestore";
+import {type Auth, getAuth} from "firebase-admin/auth";
+import {type Firestore, getFirestore} from "firebase-admin/firestore";
 
 /**
  * The Firestore client, created once per server instance.
@@ -18,10 +18,12 @@ import { type Firestore, getFirestore } from "firebase-admin/firestore";
  */
 // Kept on globalThis: Next bundles pages and API routes separately, and they
 // must share one client (Firestore can only be configured once per app).
-const shared = globalThis as { agentGraphFirestore?: Firestore };
+const shared = globalThis as {agentGraphFirestore?: Firestore};
 
 export function firestore(): Firestore {
-  if (!shared.agentGraphFirestore) shared.agentGraphFirestore = getFirestore(app());
+  if (!shared.agentGraphFirestore) {
+    shared.agentGraphFirestore = getFirestore(app());
+  }
   return shared.agentGraphFirestore;
 }
 
@@ -38,13 +40,19 @@ function app(): App {
 }
 
 function options(): AppOptions {
-  if (process.env.FIRESTORE_EMULATOR_HOST || process.env.FIREBASE_AUTH_EMULATOR_HOST) {
-    return { projectId: process.env.FIREBASE_PROJECT_ID || "demo-agent-graph" };
+  if (
+    process.env.FIRESTORE_EMULATOR_HOST ||
+    process.env.FIREBASE_AUTH_EMULATOR_HOST
+  ) {
+    return {projectId: process.env.FIREBASE_PROJECT_ID || "demo-agent-graph"};
   }
   const key = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (key) {
     const account = JSON.parse(key);
-    return { credential: cert(account), projectId: account.project_id };
+    return {credential: cert(account), projectId: account.project_id};
   }
-  return { credential: applicationDefault(), projectId: process.env.FIREBASE_PROJECT_ID };
+  return {
+    credential: applicationDefault(),
+    projectId: process.env.FIREBASE_PROJECT_ID,
+  };
 }

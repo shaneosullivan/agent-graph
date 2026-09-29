@@ -1,12 +1,17 @@
 // Unit tests for accounts' pure helpers (lib/config.ts):  npm run test:unit
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import {test} from "node:test";
 
-const { safeNext } = await import("../lib/config.ts");
+const {safeNext} = await import("../lib/config.ts");
 
 test("after logging in, only a path on this site is gone to", () => {
-  for (const path of ["/watch", "/account", "/docs#watch-remote", "/l/AbCdEf123456?x=1"]) {
+  for (const path of [
+    "/watch",
+    "/account",
+    "/docs#watch-remote",
+    "/l/AbCdEf123456?x=1",
+  ]) {
     assert.equal(safeNext(path), path);
   }
   const elsewhere = [

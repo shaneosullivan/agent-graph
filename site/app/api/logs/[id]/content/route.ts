@@ -1,10 +1,10 @@
-import { cookies } from "next/headers";
+import {cookies} from "next/headers";
 
-import { currentUser } from "@/lib/auth";
-import { ID_PATTERN, viewCookieName } from "@/lib/config";
-import { safeEqual, viewToken } from "@/lib/crypto";
-import { storageId } from "@/lib/encryption";
-import { getMeta, readChunks } from "@/lib/store";
+import {currentUser} from "@/lib/auth";
+import {ID_PATTERN, viewCookieName} from "@/lib/config";
+import {safeEqual, viewToken} from "@/lib/crypto";
+import {storageId} from "@/lib/encryption";
+import {getMeta, readChunks} from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,21 +21,32 @@ export const dynamic = "force-dynamic";
  * Password-protected logs need the cookie set by /unlock; an account's live
  * share, its owner's session (lib/auth.ts).
  */
-export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
-  const { id } = await params;
-  if (!ID_PATTERN.test(id)) return new Response("Unknown log.", { status: 404 });
+export async function GET(
+  req: Request,
+  {params}: {params: Promise<{id: string}>},
+): Promise<Response> {
+  const {id} = await params;
+  if (!ID_PATTERN.test(id)) {
+    return new Response("Unknown log.", {status: 404});
+  }
   const after = new URL(req.url).searchParams.get("after") ?? "";
-  if (after && !/^\d{15}$/.test(after)) return new Response("Bad cursor.", { status: 400 });
+  if (after && !/^\d{15}$/.test(after)) {
+    return new Response("Bad cursor.", {status: 400});
+  }
 
   const meta = await getMeta(id);
-  if (!meta) return new Response("Unknown log.", { status: 404 });
+  if (!meta) {
+    return new Response("Unknown log.", {status: 404});
+  }
   if (meta.owner && (await currentUser())?.uid !== meta.owner) {
-    return new Response("Log in to the account whose share this is.", { status: 401 });
+    return new Response("Log in to the account whose share this is.", {
+      status: 401,
+    });
   }
   if (meta.pw) {
     const cookie = (await cookies()).get(viewCookieName(id))?.value;
     if (!safeEqual(cookie, viewToken(id, meta.pw))) {
-      return new Response("This log needs its password.", { status: 401 });
+      return new Response("This log needs its password.", {status: 401});
     }
   }
 
@@ -45,15 +56,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   } catch (err) {
     // Named by where it's stored: the log's id is what lets people read it.
     console.error(`reading logs/${storageId(id)}:`, err);
-    return new Response("This log couldn't be read.", { status: 500 });
+    return new Response("This log couldn't be read.", {status: 500});
   }
-  const { text, first, last, more } = chunks;
+  const {text, first, last, more} = chunks;
   const headers: Record<string, string> = {
     "Content-Type": "application/x-ndjson; charset=utf-8",
     "Cache-Control": "private, no-store",
   };
-  if (first) headers["X-First-Chunk"] = first;
-  if (last) headers["X-Last-Chunk"] = last;
-  if (more) headers["X-More"] = "1";
-  return new Response(text, { headers });
+  if (first) {
+    headers["X-First-Chunk"] = first;
+  }
+  if (last) {
+    headers["X-Last-Chunk"] = last;
+  }
+  if (more) {
+    headers["X-More"] = "1";
+  }
+  return new Response(text, {headers});
 }

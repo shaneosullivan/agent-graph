@@ -1,7 +1,7 @@
 "use client";
 
-import { type FirebaseApp, getApps, initializeApp } from "firebase/app";
-import { type Auth, connectAuthEmulator, getAuth } from "firebase/auth";
+import {type FirebaseApp, getApps, initializeApp} from "firebase/app";
+import {type Auth, connectAuthEmulator, getAuth} from "firebase/auth";
 
 /**
  * Firebase Authentication in the browser, for signing in (app/login). Its
@@ -21,7 +21,7 @@ export function clientAuth(): Auth {
   const auth = getAuth(app);
   const emulator = process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST;
   if (emulator && !auth.emulatorConfig) {
-    connectAuthEmulator(auth, `http://${emulator}`, { disableWarnings: true });
+    connectAuthEmulator(auth, `http://${emulator}`, {disableWarnings: true});
   }
   return auth;
 }

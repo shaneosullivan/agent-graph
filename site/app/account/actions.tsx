@@ -1,12 +1,12 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import {useRouter} from "next/navigation";
+import {useState} from "react";
 
-import type { Computer } from "@/lib/accounts";
+import type {Computer} from "@/lib/accounts";
 
 /** The computers agent-graph is logged in on, each with a way to log it out. */
-export function Computers({ computers }: { computers: Computer[] }) {
+export function Computers({computers}: {computers: Array<Computer>}) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -14,8 +14,10 @@ export function Computers({ computers }: { computers: Computer[] }) {
   async function remove(id: string) {
     setBusy(id);
     setError(null);
-    const res = await fetch(`/api/account/computers/${id}`, { method: "DELETE" });
-    if (!res.ok) setError(await res.text());
+    const res = await fetch(`/api/account/computers/${id}`, {method: "DELETE"});
+    if (!res.ok) {
+      setError(await res.text());
+    }
     setBusy(null);
     router.refresh();
   }
@@ -23,8 +25,8 @@ export function Computers({ computers }: { computers: Computer[] }) {
   if (!computers.length) {
     return (
       <p>
-        agent-graph isn&rsquo;t logged in on any computer. <code>agent-graph watch-remote</code> asks you to
-        log in the first time.
+        agent-graph isn&rsquo;t logged in on any computer.{" "}
+        <code>agent-graph watch-remote</code> asks you to log in the first time.
       </p>
     );
   }
@@ -40,7 +42,7 @@ export function Computers({ computers }: { computers: Computer[] }) {
     <>
       <p>agent-graph is logged in on these. Removing one logs it out there.</p>
       <ul className="computers">
-        {computers.map((c) => (
+        {computers.map(c => (
           <li key={c.id}>
             <span>
               <strong>{c.host || "A computer"}</strong>
@@ -53,8 +55,7 @@ export function Computers({ computers }: { computers: Computer[] }) {
               className="link-button"
               type="button"
               onClick={() => remove(c.id)}
-              disabled={busy === c.id}
-            >
+              disabled={busy === c.id}>
               {busy === c.id ? "Removing…" : "Remove"}
             </button>
           </li>
@@ -69,7 +70,7 @@ export function LogOut() {
   const [busy, setBusy] = useState(false);
   async function logOut() {
     setBusy(true);
-    await fetch("/api/session", { method: "DELETE" }).catch(() => {});
+    await fetch("/api/session", {method: "DELETE"}).catch(() => {});
     location.assign("/");
   }
   return (
@@ -78,8 +79,7 @@ export function LogOut() {
       type="button"
       onClick={logOut}
       disabled={busy}
-      style={{ marginTop: 24 }}
-    >
+      style={{marginTop: 24}}>
       {busy ? "Logging out…" : "Log out of this browser"}
     </button>
   );

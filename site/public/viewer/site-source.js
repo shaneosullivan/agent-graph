@@ -10,13 +10,15 @@
 // scripts/sync-viewer.mjs.
 
 (async () => {
-  const config = JSON.parse(document.getElementById("agent-graph-config").textContent);
+  const config = JSON.parse(
+    document.getElementById("agent-graph-config").textContent,
+  );
 
   // Requests to the worker, by id, until it replies.
   const worker = new Worker("/viewer/site-worker.js");
   const waiting = new Map();
   let asked = 0;
-  worker.onmessage = ({ data }) => {
+  worker.onmessage = ({data}) => {
     const request = waiting.get(data.id);
     if (!request) return;
     waiting.delete(data.id);
@@ -24,7 +26,7 @@
     else request.resolve(data);
   };
   // It couldn't start (its script didn't load, say): nothing it was asked will come.
-  worker.onerror = (e) => {
+  worker.onerror = e => {
     const error = new Error(e.message || "Couldn't start the worker");
     for (const request of waiting.values()) request.reject(error);
     waiting.clear();
@@ -32,25 +34,26 @@
   function ask(message) {
     return new Promise((resolve, reject) => {
       const id = asked++;
-      waiting.set(id, { resolve, reject });
-      worker.postMessage({ id, ...message });
+      waiting.set(id, {resolve, reject});
+      worker.postMessage({id, ...message});
     });
   }
 
   async function call(request) {
-    return (await ask({ op: "query", request })).result;
+    return (await ask({op: "query", request})).result;
   }
 
   async function reply(request) {
     const result = await call(request);
-    if (result && result.error) throw new Error(`${result.status} ${result.error}`);
+    if (result && result.error)
+      throw new Error(`${result.status} ${result.error}`);
     return result;
   }
 
   // Has the worker fetch the chunks we don't have yet. Returns whether any
   // events arrived.
   async function pull() {
-    const { added, reload } = await ask({ op: "pull", log: config.id });
+    const {added, reload} = await ask({op: "pull", log: config.id});
     if (reload) {
       location.reload(); // the password cookie expired; the page asks again
       return false;
@@ -69,10 +72,19 @@
     // so it offers nothing to open. The graph now carries its tree's
     // timeline.
     graph: async (until, root) =>
-      reply({ op: "graph", env: "site", until: until || null, root: root || null, now_ms: now() }),
+      reply({
+        op: "graph",
+        env: "site",
+        until: until || null,
+        root: root || null,
+        now_ms: now(),
+      }),
     info: async () => {
-      const info = await call({ op: "info" });
-      return { now_ms: config.live ? Date.now() : info.last_event_ms, where: null };
+      const info = await call({op: "info"});
+      return {
+        now_ms: config.live ? Date.now() : info.last_event_ms,
+        where: null,
+      };
     },
     subscribe(onChange, onStatus) {
       onStatus(true);
@@ -93,7 +105,12 @@
           onStatus(false);
           delay = 10000;
         }
-        setTimeout(tick, typeof document !== "undefined" && document.hidden ? Math.max(delay, 15000) : delay);
+        setTimeout(
+          tick,
+          typeof document !== "undefined" && document.hidden
+            ? Math.max(delay, 15000)
+            : delay,
+        );
       };
       setTimeout(tick, delay);
       document.addEventListener("visibilitychange", () => {
@@ -107,7 +124,7 @@
   const script = document.createElement("script");
   script.src = "/viewer/app.js";
   document.body.appendChild(script);
-})().catch((err) => {
+})().catch(err => {
   const note = document.createElement("p");
   note.className = "banner";
   note.textContent = `Couldn't load this log: ${err.message}`;

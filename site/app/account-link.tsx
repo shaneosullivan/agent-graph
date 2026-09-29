@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import {useSyncExternalStore} from "react";
 
 /**
  * "Log in", or "Account" once logged in, for the header. Whether the browser
@@ -19,13 +19,15 @@ export function AccountLink() {
     () => "/",
   );
   // Nothing until it's known, rather than the wrong one.
-  if (signedIn === null) return <span className="account-link" aria-hidden="true" />;
+  if (signedIn === null) {
+    return <span className="account-link" aria-hidden="true" />;
+  }
   return signedIn ? (
     <a className="account-link" href="/account">
       Account
     </a>
   ) : (
-    <a className="account-link" href={`/login?${new URLSearchParams({ next })}`}>
+    <a className="account-link" href={`/login?${new URLSearchParams({next})}`}>
       Log in
     </a>
   );

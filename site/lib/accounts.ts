@@ -1,10 +1,10 @@
-import { createHash, randomBytes } from "node:crypto";
+import {createHash, randomBytes} from "node:crypto";
 
-import { Timestamp } from "firebase-admin/firestore";
+import {Timestamp} from "firebase-admin/firestore";
 
-import { safeEqual } from "./crypto";
-import { openLogId, sealLogId } from "./encryption";
-import { firestore } from "./firebase";
+import {safeEqual} from "./crypto";
+import {openLogId, sealLogId} from "./encryption";
+import {firestore} from "./firebase";
 
 /**
  * What accounts keep, beyond Firebase Authentication's own records:
@@ -40,12 +40,13 @@ const users = () => firestore().collection("users");
 const tokens = () => firestore().collection("cli-tokens");
 const codes = () => firestore().collection("cli-codes");
 
-const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+const hash = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
 
 /** A PKCE challenge, or `state`: 43 characters of base64url (32 bytes). */
 export const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-export type Account = { uid: string; email: string | null };
+export type Account = {uid: string; email: string | null};
 
 /** Where an account stands, as the CLI is told when it starts a share. */
 export type AccountStatus = "active";
@@ -56,7 +57,10 @@ export function accountStatus(_account: Account): AccountStatus {
 }
 
 /** A one-time code for `account`, for the CLI whose challenge is `challenge`. */
-export async function newCliCode(account: Account, challenge: string): Promise<string> {
+export async function newCliCode(
+  account: Account,
+  challenge: string,
+): Promise<string> {
   const code = randomBytes(32).toString("base64url");
   await codes()
     .doc(hash(code))
@@ -75,21 +79,38 @@ export async function newCliCode(account: Account, challenge: string): Promise<s
  * is the challenge) and hasn't expired. A code is used once: it's deleted,
  * whether or not the verifier matches.
  */
-export async function redeemCliCode(code: string, verifier: string): Promise<Account | null> {
+export async function redeemCliCode(
+  code: string,
+  verifier: string,
+): Promise<Account | null> {
   const ref = codes().doc(hash(code));
-  const data = await firestore().runTransaction(async (tx) => {
+  const data = await firestore().runTransaction(async tx => {
     const snap = await tx.get(ref);
-    if (!snap.exists) return null;
+    if (!snap.exists) {
+      return null;
+    }
     tx.delete(ref);
-    return snap.data() as { uid: string; email: string | null; challenge: string; expireAt: Timestamp };
+    return snap.data() as {
+      uid: string;
+      email: string | null;
+      challenge: string;
+      expireAt: Timestamp;
+    };
   });
-  if (!data || data.expireAt.toMillis() < Date.now()) return null;
+  if (!data || data.expireAt.toMillis() < Date.now()) {
+    return null;
+  }
   const challenge = createHash("sha256").update(verifier).digest("base64url");
-  return safeEqual(challenge, data.challenge) ? { uid: data.uid, email: data.email } : null;
+  return safeEqual(challenge, data.challenge)
+    ? {uid: data.uid, email: data.email}
+    : null;
 }
 
 /** A new token for the CLI on computer `host`, logged in as `account`. */
-export async function newCliToken(account: Account, host: string): Promise<string> {
+export async function newCliToken(
+  account: Account,
+  host: string,
+): Promise<string> {
   const token = `agt_${randomBytes(32).toString("base64url")}`;
   const now = Timestamp.now();
   await tokens()
@@ -106,21 +127,31 @@ export async function newCliToken(account: Account, host: string): Promise<strin
 
 /** The account a CLI token is for, if it's one. */
 export async function accountOfToken(token: string): Promise<Account | null> {
-  if (!/^agt_[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  if (!/^agt_[A-Za-z0-9_-]{43}$/.test(token)) {
+    return null;
+  }
   const ref = tokens().doc(hash(token));
   const snap = await ref.get();
-  if (!snap.exists) return null;
-  const { uid, email, usedAt } = snap.data() as { uid: string; email: string | null; usedAt?: Timestamp };
-  if (!usedAt || Date.now() - usedAt.toMillis() > USED_AT_EVERY_MS) {
-    await ref.update({ usedAt: Timestamp.now() }).catch(() => {});
+  if (!snap.exists) {
+    return null;
   }
-  return { uid, email };
+  const {uid, email, usedAt} = snap.data() as {
+    uid: string;
+    email: string | null;
+    usedAt?: Timestamp;
+  };
+  if (!usedAt || Date.now() - usedAt.toMillis() > USED_AT_EVERY_MS) {
+    await ref.update({usedAt: Timestamp.now()}).catch(() => {});
+  }
+  return {uid, email};
 }
 
 /** The account a request's `Authorization: Bearer <CLI token>` is for, if any. */
 export async function accountOfRequest(req: Request): Promise<Account | null> {
   const header = req.headers.get("authorization") ?? "";
-  return header.startsWith("Bearer ") ? accountOfToken(header.slice(7).trim()) : null;
+  return header.startsWith("Bearer ")
+    ? accountOfToken(header.slice(7).trim())
+    : null;
 }
 
 /** Forgets a CLI token: that computer is logged out. */
@@ -128,13 +159,18 @@ export async function deleteCliToken(token: string): Promise<void> {
   await tokens().doc(hash(token)).delete();
 }
 
-export type Computer = { id: string; host: string; createdAt: number; usedAt: number };
+export type Computer = {
+  id: string;
+  host: string;
+  createdAt: number;
+  usedAt: number;
+};
 
 /** The computers `uid` is logged in on with the CLI, most recently used first. */
-export async function computersOf(uid: string): Promise<Computer[]> {
+export async function computersOf(uid: string): Promise<Array<Computer>> {
   const snap = await tokens().where("uid", "==", uid).get();
   return snap.docs
-    .map((doc) => {
+    .map(doc => {
       const d = doc.data();
       return {
         id: doc.id,
@@ -147,11 +183,18 @@ export async function computersOf(uid: string): Promise<Computer[]> {
 }
 
 /** Logs `uid` out of the CLI on one computer (`id`, from `computersOf`). */
-export async function removeComputer(uid: string, id: string): Promise<boolean> {
-  if (!/^[0-9a-f]{64}$/.test(id)) return false;
+export async function removeComputer(
+  uid: string,
+  id: string,
+): Promise<boolean> {
+  if (!/^[0-9a-f]{64}$/.test(id)) {
+    return false;
+  }
   const ref = tokens().doc(id);
   const snap = await ref.get();
-  if (!snap.exists || snap.get("uid") !== uid) return false;
+  if (!snap.exists || snap.get("uid") !== uid) {
+    return false;
+  }
   await ref.delete();
   return true;
 }
@@ -164,11 +207,14 @@ export async function removeComputer(uid: string, id: string): Promise<boolean> 
  */
 export async function recordLogin(account: Account): Promise<void> {
   const ref = users().doc(account.uid);
-  await firestore().runTransaction(async (tx) => {
+  await firestore().runTransaction(async tx => {
     const now = Timestamp.now();
     const snap = await tx.get(ref);
-    if (snap.exists) tx.update(ref, { email: account.email, lastLoginAt: now });
-    else tx.set(ref, { email: account.email, createdAt: now, lastLoginAt: now });
+    if (snap.exists) {
+      tx.update(ref, {email: account.email, lastLoginAt: now});
+    } else {
+      tx.set(ref, {email: account.email, createdAt: now, lastLoginAt: now});
+    }
   });
 }
 
@@ -176,7 +222,10 @@ export async function recordLogin(account: Account): Promise<void> {
 export async function setWatchLog(uid: string, id: string): Promise<void> {
   await users()
     .doc(uid)
-    .set({ watch: sealLogId(uid, id), lastWatchAt: Timestamp.now() }, { merge: true });
+    .set(
+      {watch: sealLogId(uid, id), lastWatchAt: Timestamp.now()},
+      {merge: true},
+    );
 }
 
 /** The log /watch shows `uid`: their latest live share, if they have one. */

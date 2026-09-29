@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Formats the site's staged files with Prettier before each commit, as
-# `npm run format` would (the site's .prettierrc and .prettierignore), and
-# stages the result. Git runs it once `core.hooksPath` is .githooks, which
-# `npm install` in site/ sets (its `prepare` script).
+# Lints the site's staged files with ESLint, fixing what it can, and formats
+# them with Prettier before each commit, as `npm run format` would (the
+# site's eslint.config.mjs, .prettierrc and .prettierignore), and stages the
+# result. A lint error ESLint can't fix stops the commit. Git runs it once
+# `core.hooksPath` is .githooks, which `npm install` in site/ sets (its
+# `prepare` script).
 #
-# A file with changes that aren't staged is only checked, not formatted:
-# staging it again would commit those changes too. If it needs formatting,
-# the commit stops, and says so.
+# A file with changes that aren't staged is only checked, not fixed:
+# staging it again would commit those changes too. If it needs fixing, the
+# commit stops, and says so.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -24,6 +26,11 @@ if [ ! -x "$prettier" ]; then
   exit 0
 fi
 prettier=node_modules/.bin/prettier
+eslint=node_modules/.bin/eslint
+if [ ! -x "site/$eslint" ]; then
+  echo "pre-commit: ESLint isn't installed, so the site's files weren't linted (cd site && npm install). CI checks them." >&2
+  eslint=
+fi
 
 # From site/, so its .prettierignore applies (it's read from where
 # Prettier runs).
@@ -34,7 +41,25 @@ for f in "${files[@]}"; do
   if git diff --quiet -- "$f"; then whole+=("$f"); else partial+=("$f"); fi
 done
 
+# The files ESLint lints (eslint.config.mjs), of those.
+linted() {
+  local f
+  for f in "$@"; do
+    case "$f" in *.ts | *.tsx) printf '%s\n' "$f" ;; esac
+  done
+}
+
 if [ ${#whole[@]} -gt 0 ]; then
+  if [ -n "$eslint" ]; then
+    lint=()
+    while IFS= read -r f; do lint+=("$f"); done < <(linted "${whole[@]}")
+    # --no-warn-ignored: a staged file the config ignores isn't an error.
+    if [ ${#lint[@]} -gt 0 ] && ! "$eslint" --fix --no-warn-ignored -- "${lint[@]}"; then
+      git add -- "${whole[@]}"
+      echo "pre-commit: fix the lint errors above, stage them, and commit again." >&2
+      exit 1
+    fi
+  fi
   "$prettier" --write --ignore-unknown --log-level warn -- "${whole[@]}"
   git add -- "${whole[@]}"
 fi
@@ -48,11 +73,14 @@ if [ ${#partial[@]} -gt 0 ]; then
     staged="$(git show ":./$f")"
     if [ "$(printf '%s\n' "$staged" | "$prettier" --stdin-filepath "$f")" != "$staged" ]; then
       unformatted+=("site/$f")
+    elif [ -n "$eslint" ] && [ -n "$(linted "$f")" ] &&
+      ! printf '%s\n' "$staged" | "$eslint" --no-warn-ignored --stdin --stdin-filename "$f" >&2; then
+      unformatted+=("site/$f")
     fi
   done
 fi
 if [ ${#unformatted[@]} -gt 0 ]; then
-  echo "pre-commit: these need formatting, and have changes that aren't staged, so they weren't formatted for you:" >&2
+  echo "pre-commit: these need formatting or lint fixes, and have changes that aren't staged, so they weren't fixed for you:" >&2
   printf '  %s\n' "${unformatted[@]}" >&2
   echo "Run \`npm run format\` in site/, stage what you want to commit, and commit again." >&2
   exit 1

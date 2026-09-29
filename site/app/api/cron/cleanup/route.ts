@@ -1,4 +1,4 @@
-import { cronAllowed, deleteIdleLogs } from "@/lib/cleanup";
+import {cronAllowed, deleteIdleLogs} from "@/lib/cleanup";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +15,8 @@ const BUDGET_MS = 45_000;
  * time carries on next time.
  */
 export async function GET(req: Request): Promise<Response> {
-  if (!cronAllowed(req)) return new Response("Not allowed.", { status: 401 });
-  return Response.json(await deleteIdleLogs({ budgetMs: BUDGET_MS }));
+  if (!cronAllowed(req)) {
+    return new Response("Not allowed.", {status: 401});
+  }
+  return Response.json(await deleteIdleLogs({budgetMs: BUDGET_MS}));
 }
