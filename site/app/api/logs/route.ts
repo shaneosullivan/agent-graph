@@ -17,7 +17,6 @@ import {
   passwordFromHeader,
   writeToken,
 } from "@/lib/crypto";
-import {logMasterKey} from "@/lib/encryption";
 import {IdTaken, createLog, takeScryptRun} from "@/lib/store";
 import {tooMany} from "@/lib/unlock";
 
@@ -44,9 +43,6 @@ export const dynamic = "force-dynamic";
  * address has run scrypt too often lately (lib/config.ts).
  */
 export async function POST(req: Request): Promise<Response> {
-  // What master key this deployment has (never the key): its fingerprint,
-  // to compare with the one meant for it (lib/encryption.ts).
-  logMasterKey();
   if (Number(req.headers.get("content-length") ?? 0) > MAX_CHUNK_BYTES) {
     return tooLarge();
   }
