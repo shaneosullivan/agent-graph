@@ -38,7 +38,7 @@ A live share (`agent-graph watch-remote`) belongs to an account, and only its ow
   - After that, only once it subscribes (`active`), monthly or yearly, on its account page, with Stripe Checkout. `STRIPE_MODE` says whether that's Stripe's test mode or live.
   - Starting or carrying on with a share checks where the account stands (`402` if it has to subscribe), and stamps the log with when that runs out (`until`). Appends after that are refused with `402`, with no extra database read, and the CLI starts the share again, which checks again.
   - When a share is refused, `watch-remote` opens `/account` and asks `GET /api/cli/account` every 5 s until the account can share.
-  - Stripe's webhook (`/api/stripe/webhook`) keeps `users/{uid}` up to date: `status`, `stripeCustomer`, and `subscription` (its Stripe status, its plan, and when its paid period ends).
+  - Stripe's webhooks keep `users/{uid}` up to date (`/api/stripe/webhook` for live mode, `/api/stripe/webhook-test` for test mode, each recording only while the site's in its mode): `status`, `stripeCustomer`, and `subscription` (its Stripe status, its plan, and when its paid period ends).
 - **Pages:** `/login`, `/account` (who's logged in, their subscription, the latest share, the computers logged in, each with a way to log it out) and `/watch` (the latest share, in the viewer; logged out, it goes to `/login?next=/watch`).
 
 ## The API

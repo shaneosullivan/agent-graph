@@ -85,10 +85,19 @@ Stripe tells the site when a subscription starts, renews, fails to be paid or en
    - `customer.subscription.deleted`
    - `customer.subscription.paused`
    - `customer.subscription.resumed`
-4. Destination type **Webhook endpoint**, URL `https://agentgraph.chofter.com/api/stripe/webhook`.
+4. Destination type **Webhook endpoint**, and the URL for the mode:
+   - live mode: `https://agentgraph.chofter.com/api/stripe/webhook`
+   - a sandbox: `https://agentgraph.chofter.com/api/stripe/webhook-test`
 5. Create it, open it, and reveal the **Signing secret** (`whsec_…`). The live one is `STRIPE_WEBHOOK_SECRET`, and the sandbox's is `STRIPE_TEST_WEBHOOK_SECRET`.
 
-Both modes' webhooks can point at the same address. The site checks each event's signature with the current mode's secret only, so the other mode's events are refused with 400. Stripe retries them for a few days, then stops. To avoid that, point the sandbox's webhook at a Preview deployment instead (step 7).
+Each endpoint takes only its own mode's events:
+
+- `/api/stripe/webhook` checks signatures with `STRIPE_WEBHOOK_SECRET`, and refuses test mode events.
+- `/api/stripe/webhook-test` checks them with `STRIPE_TEST_WEBHOOK_SECRET`, and refuses live ones.
+- Each records what it's sent only while `STRIPE_MODE` is its mode. So a sandbox subscription never makes an account active in production.
+- Otherwise it replies 200, so Stripe doesn't send the event again, and ignores it. Its reply says `"recorded": false`.
+
+So both webhooks can stay set up, whichever mode the site's in, as long as both modes' secret keys and signing secrets are set. An endpoint whose mode's aren't set replies 404, and Stripe retries it for a few days.
 
 ## 6. Subscription settings
 
@@ -125,7 +134,9 @@ Then redeploy: the variables are read when requests come in, but Vercel applies 
 A simple arrangement:
 
 - **Production** environment: `STRIPE_MODE=production`, with the live values.
-- **Preview** environment: `STRIPE_MODE=test`, with the sandbox values. Point the sandbox's webhook at a Preview deployment's address, and set `NEXT_PUBLIC_SITE_URL` to that address under Preview too: Stripe sends the browser back to it after Checkout and the portal.
+- **Preview** environment: `STRIPE_MODE=test`, with the sandbox values. Point the sandbox's webhook at a Preview deployment's `/api/stripe/webhook-test`, and set `NEXT_PUBLIC_SITE_URL` to that address under Preview too: Stripe sends the browser back to it after Checkout and the portal.
+
+Or try test mode on the production site itself: set `STRIPE_MODE=test` there for a while. The sandbox's webhook already points at it, at `/api/stripe/webhook-test`.
 
 In test mode the account page says so, and gives the test card to pay with.
 
@@ -135,7 +146,7 @@ With `STRIPE_MODE=test` and the sandbox values set (on a Preview deployment, or 
 
 1. **Locally**, forward Stripe's events to your machine with the [Stripe CLI](https://docs.stripe.com/stripe-cli):
    ```bash
-   stripe listen --forward-to localhost:3000/api/stripe/webhook
+   stripe listen --forward-to localhost:3000/api/stripe/webhook-test
    ```
    It prints a `whsec_…` for this session: use that as `STRIPE_TEST_WEBHOOK_SECRET` locally.
 2. Log in on the site, and open **Account**. It should say test mode, that sharing live is free until a week from now, and then both prices.

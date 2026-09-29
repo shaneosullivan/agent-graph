@@ -15,6 +15,10 @@ export STRIPE_TEST_SECRET_KEY="${STRIPE_TEST_SECRET_KEY:-sk_test_ci_only}"
 export STRIPE_TEST_WEBHOOK_SECRET="${STRIPE_TEST_WEBHOOK_SECRET:-whsec_ci_only}"
 export STRIPE_TEST_PRICE_MONTHLY="${STRIPE_TEST_PRICE_MONTHLY:-price_ci_monthly}"
 export STRIPE_TEST_PRICE_YEARLY="${STRIPE_TEST_PRICE_YEARLY:-price_ci_yearly}"
+# Live mode's keys too, so its webhook is tested (the site stays in test
+# mode, so it only acknowledges what it's sent).
+export STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-sk_live_ci_only}"
+export STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-whsec_ci_live_only}"
 export STRIPE_MONTHLY_LABEL="${STRIPE_MONTHLY_LABEL:-\$5 a month}"
 export STRIPE_YEARLY_LABEL="${STRIPE_YEARLY_LABEL:-\$50 a year}"
 export FREE_TRIAL_DAYS="${FREE_TRIAL_DAYS:-7}"

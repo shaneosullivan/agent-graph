@@ -13,6 +13,8 @@ import {
   type Plan,
   planOf,
   standing,
+  type StripeMode,
+  stripeEnv,
 } from "./billing";
 
 /**
@@ -20,31 +22,37 @@ import {
  *
  * - The account page's Subscribe buttons, monthly and yearly, make a
  *   Checkout Session (`checkout`) for that plan's price, and send the
- *   browser to Stripe's page for it. It lists no payment methods, so Stripe offers
- *   those turned on in its Dashboard: cards, Link, Apple Pay, Google Pay…
+ *   browser to Stripe's page for it. It lists no payment methods, so Stripe
+ *   offers those turned on in its Dashboard: cards, Link, Apple Pay, Google
+ *   Pay…
  *   Each account has one Stripe customer, made the first time; the
  *   subscription carries the account's uid (`metadata.uid`).
  * - Stripe sends the browser back to /account?checkout={session id}, which
  *   records the subscription straight away (`finishCheckout`). Stripe tells
- *   the webhook (app/api/stripe/webhook) of it too, and of every change
- *   after: renewed, a payment failed, canceled… (`syncSubscription`).
+ *   the webhook of it too, and of every change after: renewed, a payment
+ *   failed, canceled… (`webhook`). Each of Stripe's modes has its own:
+ *   app/api/stripe/webhook for live mode, and webhook-test for test mode.
  * - Manage billing opens Stripe's customer portal (`portal`), to change the
  *   card or cancel.
  */
 
-let client: {key: string; stripe: Stripe} | null = null;
+const clients = new Map<string, Stripe>();
+
+/** Stripe's client for secret key `key`. */
+function client(key: string): Stripe {
+  let made = clients.get(key);
+  if (!made) {
+    made = new Stripe(key);
+    clients.set(key, made);
+  }
+  return made;
+}
 
 /** Stripe's client, with STRIPE_MODE's secret key; null if Stripe isn't set up. */
 export function stripe(
   billing: Billing | null = billingConfig(),
 ): Stripe | null {
-  if (!billing) {
-    return null;
-  }
-  if (client?.key !== billing.secretKey) {
-    client = {key: billing.secretKey, stripe: new Stripe(billing.secretKey)};
-  }
-  return client.stripe;
+  return billing ? client(billing.secretKey) : null;
 }
 
 /** Account `account`'s Stripe customer, made the first time. */
@@ -159,11 +167,89 @@ async function recordSubscription(
   return true;
 }
 
+/** The events the webhooks are sent (set on each in Stripe's Dashboard). */
+const SUBSCRIPTION_EVENTS = new Set([
+  "customer.subscription.created",
+  "customer.subscription.updated",
+  "customer.subscription.deleted",
+  "customer.subscription.paused",
+  "customer.subscription.resumed",
+]);
+
+/**
+ * Stripe's webhook for its `mode`: an event, signed with that mode's
+ * endpoint secret (STRIPE_WEBHOOK_SECRET, or STRIPE_TEST_WEBHOOK_SECRET in
+ * test mode), and from that mode (a live event only to live mode's, a test
+ * one only to test mode's). A subscription's made, renewed, fails to be
+ * paid for, or ends, and the account's brought up to date:
+ * `checkout.session.completed` and the `customer.subscription.*` events.
+ *
+ * It's recorded only while the site's in that mode (STRIPE_MODE): a
+ * sandbox's subscription never makes an account active in production. An
+ * event for the other mode, or of another kind, is acknowledged, and
+ * ignored, so Stripe doesn't send it again.
+ *
+ * 404 if the mode's secret key or endpoint secret isn't set; 400 if the
+ * signature's wrong, or the event's from the other mode; 200 once it's
+ * recorded (or ignored). Anything else, and Stripe sends it again.
+ */
+export async function webhook(
+  req: Request,
+  mode: StripeMode,
+): Promise<Response> {
+  const names = stripeEnv(mode);
+  const key = process.env[names.secretKey]?.trim();
+  const secret = process.env[names.webhookSecret]?.trim();
+  if (!key || !secret) {
+    return new Response(`Stripe's ${mode} mode isn't set up here.`, {
+      status: 404,
+    });
+  }
+  const signature = req.headers.get("stripe-signature");
+  if (!signature) {
+    return new Response("Missing Stripe-Signature.", {status: 400});
+  }
+  let event: Stripe.Event;
+  try {
+    // The body as sent: the signature is of its bytes.
+    event = await client(key).webhooks.constructEventAsync(
+      await req.text(),
+      signature,
+      secret,
+    );
+  } catch {
+    return new Response("Bad signature.", {status: 400});
+  }
+  if (event.livemode !== (mode === "production")) {
+    return new Response(
+      mode === "production"
+        ? "A test mode event: send it to /api/stripe/webhook-test."
+        : "A live mode event: send it to /api/stripe/webhook.",
+      {status: 400},
+    );
+  }
+  if (billingConfig()?.mode !== mode) {
+    return Response.json({received: true, recorded: false});
+  }
+
+  let subscription: string | null = null;
+  if (event.type === "checkout.session.completed") {
+    const sub = event.data.object.subscription;
+    subscription = typeof sub === "string" ? sub : (sub?.id ?? null);
+  } else if (SUBSCRIPTION_EVENTS.has(event.type)) {
+    subscription = (event.data.object as Stripe.Subscription).id;
+  }
+  if (subscription) {
+    await syncSubscription(subscription);
+  }
+  return Response.json({received: true, recorded: subscription !== null});
+}
+
 /**
  * Records subscription `id` as Stripe has it now, not as an event said it
  * was: Stripe's events can come out of order, or more than once.
  */
-export async function syncSubscription(id: string): Promise<boolean> {
+async function syncSubscription(id: string): Promise<boolean> {
   const billing = billingConfig();
   const s = stripe(billing);
   return billing && s

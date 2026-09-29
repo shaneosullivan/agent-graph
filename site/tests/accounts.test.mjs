@@ -10,7 +10,7 @@
 // (scripts/ci-api-test.sh sets them); nothing here talks to Stripe itself.
 
 import assert from "node:assert/strict";
-import {createHash, randomBytes} from "node:crypto";
+import {createHash, createHmac, randomBytes} from "node:crypto";
 import {test} from "node:test";
 
 const BASE = (process.env.BASE_URL || "http://localhost:3000").replace(
@@ -523,27 +523,86 @@ test(
   },
 );
 
-test("Stripe's webhook takes only what Stripe signed", async () => {
-  const hook = headers =>
-    fetch(`${BASE}/api/stripe/webhook`, {
+/**
+ * Sends Stripe's webhook for `mode` an event, signed as Stripe signs them
+ * (an HMAC-SHA256 of `<time>.<body>`) with `secret`, if there's one.
+ */
+function toWebhook(mode, {secret, livemode, type = "invoice.paid"}) {
+  const body = JSON.stringify({
+    id: `evt_${secret ? "signed" : "unsigned"}`,
+    object: "event",
+    type,
+    livemode,
+    data: {object: {}},
+  });
+  const t = Math.floor(Date.now() / 1000);
+  const v1 = secret
+    ? createHmac("sha256", secret).update(`${t}.${body}`).digest("hex")
+    : null;
+  return fetch(
+    `${BASE}/api/stripe/${mode === "test" ? "webhook-test" : "webhook"}`,
+    {
       method: "POST",
-      headers: {"Content-Type": "application/json", ...headers},
-      body: JSON.stringify({type: "customer.subscription.updated"}),
-    });
-  if (!BILLING) {
-    assert.equal((await hook({})).status, 404, "Stripe isn't set up");
-    return;
-  }
-  assert.equal((await hook({})).status, 400, "unsigned");
-  assert.equal(
-    (
-      await hook({
-        "Stripe-Signature": `t=${Math.floor(Date.now() / 1000)},v1=00`,
-      })
-    ).status,
-    400,
-    "signed by someone else",
+      headers: {
+        "Content-Type": "application/json",
+        ...(v1 ? {"Stripe-Signature": `t=${t},v1=${v1}`} : {}),
+      },
+      body,
+    },
   );
+}
+
+test("each of Stripe's webhooks takes only what its own mode signed", async () => {
+  const secrets = {
+    test: process.env.STRIPE_TEST_WEBHOOK_SECRET,
+    production: process.env.STRIPE_WEBHOOK_SECRET,
+  };
+  // The mode the site's in (scripts/ci-api-test.sh: test) records what it's
+  // sent; the other only acknowledges it.
+  const current = process.env.STRIPE_MODE;
+  for (const mode of ["test", "production"]) {
+    const livemode = mode === "production";
+    const other = mode === "test" ? "production" : "test";
+    const secret = secrets[mode];
+    if (!secret) {
+      const res = await toWebhook(mode, {secret: "whsec_x", livemode});
+      assert.equal(res.status, 404, `${mode}: not set up`);
+      continue;
+    }
+    assert.equal(
+      (await toWebhook(mode, {livemode})).status,
+      400,
+      `${mode}: unsigned`,
+    );
+    assert.equal(
+      (
+        await toWebhook(mode, {
+          secret: secrets[other] ?? "whsec_other",
+          livemode,
+        })
+      ).status,
+      400,
+      `${mode}: signed with the other mode's secret`,
+    );
+    assert.equal(
+      (await toWebhook(mode, {secret, livemode: !livemode})).status,
+      400,
+      `${mode}: an event from the other mode`,
+    );
+    const res = await toWebhook(mode, {secret, livemode});
+    assert.equal(res.status, 200, `${mode}: its own`);
+    assert.deepEqual(await res.json(), {received: true, recorded: false});
+    if (mode !== current) {
+      // Even a subscription's event isn't recorded, in the other mode.
+      const sub = await toWebhook(mode, {
+        secret,
+        livemode,
+        type: "customer.subscription.updated",
+      });
+      assert.equal(sub.status, 200);
+      assert.deepEqual(await sub.json(), {received: true, recorded: false});
+    }
+  }
 });
 
 test(
