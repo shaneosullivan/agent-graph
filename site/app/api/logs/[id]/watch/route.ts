@@ -1,7 +1,8 @@
-import {accountOfRequest, accountStatus, setWatchLog} from "@/lib/accounts";
+import {accountOfRequest, setWatchLog, standingOf} from "@/lib/accounts";
+import {mustSubscribe, standingReply} from "@/lib/billing";
 import {ID_PATTERN, siteUrl} from "@/lib/config";
 import {safeEqual, writeToken} from "@/lib/crypto";
-import {getMeta} from "@/lib/store";
+import {getMeta, setUntil} from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,9 +11,11 @@ export const dynamic = "force-dynamic";
  * Makes an account's live share the one /watch shows them again: POST
  * /api/logs/{id}/watch, when `agent-graph watch-remote` carries on with it,
  * with `Authorization: Bearer <CLI token>` and the log's write token in
- * `X-Agent-Graph-Write-Token`. Replies { url, accountStatus }: /watch, and
- * where the account stands (lib/accounts.ts). 404 if it isn't a
- * share of theirs, or is gone.
+ * `X-Agent-Graph-Write-Token`. Replies { url, accountStatus, freeUntil }:
+ * /watch, and where the account stands (lib/billing.ts). Appends to it are
+ * allowed again till the account's time is next up: after a renewal, say.
+ * 402 if it has to subscribe first. 404 if it isn't a share of theirs, or
+ * is gone.
  */
 export async function POST(
   req: Request,
@@ -40,9 +43,14 @@ export async function POST(
   if (!meta || meta.owner !== account.uid) {
     return new Response("Not a share of yours.", {status: 404});
   }
+  const standing = await standingOf(account.uid);
+  if (!standing.canShare) {
+    return mustSubscribe(siteUrl(req));
+  }
+  await setUntil(id, standing.until);
   await setWatchLog(account.uid, id);
   return Response.json(
-    {url: `${siteUrl(req)}/watch`, accountStatus: accountStatus(account)},
+    {url: `${siteUrl(req)}/watch`, ...standingReply(standing)},
     {headers: {"Cache-Control": "no-store"}},
   );
 }

@@ -77,7 +77,7 @@ To see all of these at once, open the [example logs](examples/README.md).
 agent-graph watch-remote
 ```
 
-This shares the graph to your account on the site and keeps it updated as your agents work, until you stop it. See it at [agentgraph.chofter.com/watch](https://agentgraph.chofter.com/watch), logged in: it's the same viewer as `view`, and only you can see it. The first time, it opens your browser to log in (with Google, or an email and password), and keeps the login for next time. You can also paste or upload a log at [agentgraph.chofter.com](https://agentgraph.chofter.com), and share its link with anyone.
+This shares the graph to your account on the site and keeps it updated as your agents work, until you stop it. See it at [agentgraph.chofter.com/watch](https://agentgraph.chofter.com/watch), logged in: it's the same viewer as `view`, and only you can see it. The first time, it opens your browser to log in (with Google, or an email and password), and keeps the login for next time. Sharing live is free for your account's first week; after that, it opens your account page to subscribe, and carries on once you have. You can also paste or upload a log at [agentgraph.chofter.com](https://agentgraph.chofter.com), and share its link with anyone.
 
 Run it again later and it carries on with the same share, without sending what the site already has. `--new` starts a new one.
 

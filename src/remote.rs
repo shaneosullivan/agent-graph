@@ -61,6 +61,9 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// How often, at most, to work out again which files a shared session's
 /// tree spans (only when a file outside it has changed).
 const RECHECK: Duration = Duration::from_secs(3);
+/// How often to ask the site whether the account's subscribed, while
+/// waiting for it to.
+const SUBSCRIBE_POLL: Duration = Duration::from_secs(5);
 
 pub struct Options {
     pub url: String,
@@ -118,7 +121,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     // A login the site has forgotten (logged out on the account page, say)
     // is done again, once.
     let mut logged_in_again = false;
-    let (log, mut stream, mut sent, trim, carried_on, status) = loop {
+    let (log, mut stream, mut sent, trim, carried_on, standing) = loop {
         // Only a share of this account's is carried on with.
         let saved = saved
             .clone()
@@ -131,13 +134,10 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                 account = crate::account::login(root, &base, &client)?;
                 logged_in_again = true;
             }
+            Err(SendError::Unpaid(e)) => wait_to_subscribe(&client, &base, &account.token, &e)?,
             Err(e) => return Err(e.message()),
         }
     };
-    // Every account can share, for now; statuses to come are handled here.
-    match status {
-        AccountStatus::Active | AccountStatus::Unknown => {}
-    }
     let mut share = SavedShare {
         site: base.clone(),
         target: only.clone(),
@@ -163,6 +163,17 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         "{how} {what}, live, to {}: only you can see it, logged in there. Press Ctrl+C to stop.",
         account.who()
     );
+    match standing.account_status {
+        AccountStatus::Unpaid => {
+            if let Some(until) = standing.free_until {
+                eprintln!(
+                    "It's free till {}; to keep sharing after that, subscribe at {base}/account",
+                    day(until)
+                );
+            }
+        }
+        AccountStatus::Active | AccountStatus::Unknown => {}
+    }
 
     let mut backoff = Duration::ZERO;
     let mut reading_failed = false;
@@ -198,6 +209,17 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                         eprintln!("Reconnected; caught up.");
                         backoff = Duration::ZERO;
                     }
+                }
+                // The account's time is up: once it's subscribed, the share's
+                // started again (which the site checks), and carries on.
+                Err(SendError::Unpaid(e)) => {
+                    retrying = Some(n);
+                    wait_to_subscribe(&client, &base, &account.token, &e)?;
+                    match client.claim(&log, &account.token) {
+                        Ok(_) | Err(SendError::Retry(_) | SendError::Unpaid(_)) => {}
+                        Err(e) => return Err(e.message()),
+                    }
+                    break;
                 }
                 // (A share's appends carry its own key, not the login.)
                 Err(SendError::Fatal(e) | SendError::Expired(e) | SendError::LoggedOut(e)) => {
@@ -239,7 +261,36 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
 /// The log, what's still to send, how much the site has, where the site
 /// can delete before (if it can), whether it carried on with a share, and
 /// where the account stands.
-type Started = (Created, Stream, u64, Option<u64>, bool, AccountStatus);
+type Started = (Created, Stream, u64, Option<u64>, bool, Standing);
+
+/// Opens the account page, for the user to subscribe (the site said
+/// `why`), and waits till they have: the site's asked every
+/// `SUBSCRIBE_POLL`. Ctrl+C stops it, as ever.
+fn wait_to_subscribe(client: &Client, base: &str, token: &str, why: &str) -> Result<(), String> {
+    let url = format!("{base}/account");
+    eprintln!("{why}\nOpening your account page, to subscribe:\n  {url}");
+    eprintln!("(If it doesn't open, open that address yourself.) Waiting till you have…");
+    if std::env::var_os("AGENT_GRAPH_NO_BROWSER").is_none() {
+        crate::view::open_browser(&url);
+    }
+    loop {
+        std::thread::sleep(SUBSCRIBE_POLL);
+        match client.account(token) {
+            Ok(true) => {
+                eprintln!("Subscribed, thank you: sharing again.");
+                return Ok(());
+            }
+            Ok(false) | Err(SendError::Retry(_)) => {}
+            Err(e) => return Err(e.message()),
+        }
+    }
+}
+
+/// A day, from ms since 1970: "2026-10-06".
+fn day(ms: u64) -> String {
+    let at = std::time::UNIX_EPOCH + Duration::from_millis(ms);
+    humantime::format_rfc3339_seconds(at).to_string()[..10].to_string()
+}
 
 /// Carries on with the `saved` share, if it can, else makes a new one, as
 /// the account whose login `token` is. The site is told first that it's the
@@ -270,7 +321,7 @@ fn start_share(
             Err(SendError::Retry(e)) => {
                 return Err(SendError::Retry(format!("couldn't reach the site: {e}")));
             }
-            Err(e @ SendError::LoggedOut(_)) => return Err(e),
+            Err(e @ (SendError::LoggedOut(_) | SendError::Unpaid(_))) => return Err(e),
             // Gone, not theirs, or not where it was left (a run stopped
             // between sending and saving how far it got): a new one, then.
             Err(SendError::Fatal(e) | SendError::Expired(e)) => {
@@ -426,7 +477,7 @@ impl Trims {
                 self.at = Some(Instant::now() + self.backoff);
             }
             // It keeps everything; sharing carries on.
-            Err(SendError::Fatal(e) | SendError::LoggedOut(e)) => {
+            Err(SendError::Fatal(e) | SendError::LoggedOut(e) | SendError::Unpaid(e)) => {
                 eprintln!(
                     "The site can't trim the log ({e}), so it'll keep everything sent from here on."
                 );
@@ -1141,6 +1192,16 @@ pub struct Created {
     pub write_token: String,
 }
 
+/// Where the account stands, as the site says with a share it starts.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Standing {
+    pub account_status: AccountStatus,
+    /// When its free days end (ms since 1970), while it's unpaid.
+    #[serde(default)]
+    pub free_until: Option<u64>,
+}
+
 pub enum SendError {
     /// Worth trying again: the network, or the site having a bad moment.
     Retry(String),
@@ -1151,6 +1212,8 @@ pub enum SendError {
     /// The site doesn't know this computer's login (any more): logged out on
     /// the account page, say.
     LoggedOut(String),
+    /// The account has to subscribe to share live (its free days are over).
+    Unpaid(String),
 }
 
 impl SendError {
@@ -1160,7 +1223,8 @@ impl SendError {
             SendError::Retry(m)
             | SendError::Fatal(m)
             | SendError::Expired(m)
-            | SendError::LoggedOut(m) => m,
+            | SendError::LoggedOut(m)
+            | SendError::Unpaid(m) => m,
         }
     }
 }
@@ -1200,7 +1264,7 @@ impl Client {
 
     /// Makes a share, the account's whose login `token` is. The share, and
     /// where the account stands.
-    pub fn create(&self, body: &[u8], token: &str) -> Result<(Created, AccountStatus), SendError> {
+    pub fn create(&self, body: &[u8], token: &str) -> Result<(Created, Standing), SendError> {
         let mut res = self
             .agent
             .post(format!("{}/api/logs", self.base))
@@ -1216,15 +1280,17 @@ impl Client {
         struct Reply {
             #[serde(flatten)]
             log: Created,
-            account_status: AccountStatus,
+            #[serde(flatten)]
+            standing: Standing,
         }
         match status {
             200 | 201 => serde_json::from_str::<Reply>(&text)
-                .map(|r| (r.log, r.account_status))
+                .map(|r| (r.log, r.standing))
                 .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
             401 => Err(SendError::LoggedOut(
                 "The site doesn't know this computer's login any more: log in again.".into(),
             )),
+            402 => Err(SendError::Unpaid(text.trim().to_string())),
             s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
             s => Err(SendError::Fatal(format!(
                 "the site refused to create the log ({s}): {}",
@@ -1236,7 +1302,7 @@ impl Client {
     /// Tells the site a share of the account's is its latest (the one /watch
     /// shows): carrying on with it. Its link (/watch), and where the account
     /// stands.
-    pub fn claim(&self, log: &Created, token: &str) -> Result<(String, AccountStatus), SendError> {
+    pub fn claim(&self, log: &Created, token: &str) -> Result<(String, Standing), SendError> {
         let mut res = self
             .agent
             .post(format!("{}/api/logs/{}/watch", self.base, log.id))
@@ -1247,14 +1313,15 @@ impl Client {
         let status = res.status().as_u16();
         let text = res.body_mut().read_to_string().unwrap_or_default();
         #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
         struct Claimed {
             url: String,
-            account_status: AccountStatus,
+            #[serde(flatten)]
+            standing: Standing,
         }
         match status {
+            402 => Err(SendError::Unpaid(text.trim().to_string())),
             200 => serde_json::from_str::<Claimed>(&text)
-                .map(|c| (c.url, c.account_status))
+                .map(|c| (c.url, c.standing))
                 .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
             401 if !text.contains("write token") => Err(SendError::LoggedOut(
                 "The site doesn't know this computer's login any more: log in again.".into(),
@@ -1300,6 +1367,37 @@ impl Client {
                 .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
             s => Err(SendError::Fatal(format!(
                 "the site refused the login ({s}): {}",
+                text.trim()
+            ))),
+        }
+    }
+
+    /// Whether the account whose login `token` is can share live now: asked
+    /// while waiting for it to subscribe.
+    pub fn account(&self, token: &str) -> Result<bool, SendError> {
+        let mut res = self
+            .agent
+            .get(format!("{}/api/cli/account", self.base))
+            .header("Authorization", format!("Bearer {token}"))
+            .call()
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        let status = res.status().as_u16();
+        let text = res.body_mut().read_to_string().unwrap_or_default();
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Account {
+            can_share: bool,
+        }
+        match status {
+            200 => serde_json::from_str::<Account>(&text)
+                .map(|a| a.can_share)
+                .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
+            401 => Err(SendError::LoggedOut(
+                "The site doesn't know this computer's login any more: run watch-remote again, to log in again.".into(),
+            )),
+            s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
+            s => Err(SendError::Fatal(format!(
+                "the site refused it ({s}): {}",
                 text.trim()
             ))),
         }
@@ -1358,6 +1456,10 @@ impl Client {
         match res.status().as_u16() {
             200 | 201 | 204 => Ok(()),
             s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
+            402 => {
+                let text = res.body_mut().read_to_string().unwrap_or_default();
+                Err(SendError::Unpaid(text.trim().to_string()))
+            }
             s => {
                 let text = res.body_mut().read_to_string().unwrap_or_default();
                 Err(SendError::Fatal(format!(

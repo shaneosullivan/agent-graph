@@ -4,6 +4,10 @@
 //   npm run emulators            # in one terminal
 //   FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 npm run dev   # in another
 //   BASE_URL=http://localhost:3000 npm run test:api
+//
+// Paying for live shares (lib/billing.ts) is tested when STRIPE_MODE and
+// its settings are set, for the site and the tests alike
+// (scripts/ci-api-test.sh sets them); nothing here talks to Stripe itself.
 
 import assert from "node:assert/strict";
 import {createHash, randomBytes} from "node:crypto";
@@ -99,7 +103,7 @@ async function session(idToken) {
 
 /** A browser logged in as a new account: its cookies, for a Cookie header. */
 async function loggedIn() {
-  const {email, idToken} = await signUp();
+  const {email, uid, idToken} = await signUp();
   const res = await fetch(`${BASE}/api/session`, {
     method: "POST",
     headers: {"Content-Type": "application/json", ...FROM_SITE},
@@ -110,7 +114,42 @@ async function loggedIn() {
     .getSetCookie()
     .map(c => c.split(";")[0])
     .join("; ");
-  return {email, cookie};
+  return {email, uid, cookie};
+}
+
+/** Sets fields of account `uid`'s document in Firestore (the emulator). */
+async function setUser(uid, fields) {
+  const value = v =>
+    v instanceof Date
+      ? {timestampValue: v.toISOString()}
+      : typeof v === "string"
+        ? {stringValue: v}
+        : {
+            mapValue: {
+              fields: Object.fromEntries(
+                Object.entries(v).map(([k, x]) => [k, value(x)]),
+              ),
+            },
+          };
+  const mask = Object.keys(fields)
+    .map(k => `updateMask.fieldPaths=${k}`)
+    .join("&");
+  const res = await fetch(
+    `http://${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents/users/${uid}?${mask}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: "Bearer owner",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fields: Object.fromEntries(
+          Object.entries(fields).map(([k, v]) => [k, value(v)]),
+        ),
+      }),
+    },
+  );
+  assert.equal(res.status, 200, await res.clone().text());
 }
 
 /** What the login page does for the CLI: a one-time code for its challenge. */
@@ -362,4 +401,179 @@ test("an account's document: made at its first login, then kept up to date", asy
   const shared = await userDoc(uid);
   assert.ok(shared.lastWatchAt >= cli.lastLoginAt, "shared live");
   assert.ok(shared.watch, "and which share");
+});
+
+// ---------- paying for live shares (lib/billing.ts) ----------
+
+// (Set with every setting its mode needs: scripts/ci-api-test.sh.)
+const BILLING = Boolean(process.env.STRIPE_MODE);
+const FREE_DAYS = Number(process.env.FREE_TRIAL_DAYS || 7);
+const DAY = 24 * 60 * 60 * 1000;
+const paid = {
+  status: "active",
+  subscription: {periodEnd: new Date(Date.now() + 30 * DAY)},
+};
+
+const claim = (id, token, key) =>
+  fetch(`${BASE}/api/logs/${id}/watch`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-Agent-Graph-Write-Token": key,
+    },
+  });
+
+const append = (id, key, offset, body) =>
+  fetch(`${BASE}/api/logs/${id}/append?offset=${offset}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-ndjson",
+      Authorization: `Bearer ${key}`,
+    },
+    body,
+  });
+
+const standing = async token =>
+  (
+    await fetch(`${BASE}/api/cli/account`, {
+      headers: {Authorization: `Bearer ${token}`},
+    })
+  ).json();
+
+test("an account's made unpaid, and told where it stands with a share", async () => {
+  const {uid, token, email} = await withCli();
+  assert.equal((await userDoc(uid)).status, "unpaid");
+  const res = await share(token);
+  assert.equal(res.status, 201);
+  const reply = await res.json();
+  const now = await standing(token);
+  assert.equal(now.email, email);
+  assert.equal(now.canShare, true);
+  if (BILLING) {
+    const made = (await userDoc(uid)).createdAt;
+    assert.equal(reply.accountStatus, "unpaid");
+    assert.equal(reply.freeUntil, made + FREE_DAYS * DAY);
+    assert.equal(now.accountStatus, "unpaid");
+  } else {
+    assert.equal(reply.accountStatus, "active", "the site's free");
+    assert.equal(reply.freeUntil, null);
+  }
+  const out = await fetch(`${BASE}/api/cli/account`, {
+    headers: {Authorization: `Bearer agt_${secret()}`},
+  });
+  assert.equal(out.status, 401, "not a login");
+});
+
+test(
+  "once its free days are over, an account subscribes to share live",
+  {skip: !BILLING && "Stripe's settings aren't set"},
+  async () => {
+    const {uid, token} = await withCli();
+    const {id, writeToken} = await (await share(token)).json();
+
+    await setUser(uid, {
+      createdAt: new Date(Date.now() - (FREE_DAYS + 1) * DAY),
+    });
+    const refused = await share(token);
+    assert.equal(refused.status, 402);
+    assert.match(await refused.text(), /\/account/, "says where to subscribe");
+    assert.equal((await claim(id, token, writeToken)).status, 402);
+    const now = await standing(token);
+    assert.equal(now.accountStatus, "unpaid");
+    assert.equal(now.canShare, false);
+
+    await setUser(uid, paid);
+    const res = await share(token);
+    assert.equal(res.status, 201);
+    const reply = await res.json();
+    assert.equal(reply.accountStatus, "active");
+    assert.equal(reply.freeUntil, null);
+    assert.equal((await claim(id, token, writeToken)).status, 200);
+    assert.equal((await standing(token)).canShare, true);
+  },
+);
+
+test(
+  "a share's appends stop when its account's time is up, till it's started again",
+  {skip: !BILLING && "Stripe's settings aren't set"},
+  async () => {
+    const {uid, token} = await withCli();
+    // Its free days end in a moment.
+    await setUser(uid, {
+      createdAt: new Date(Date.now() - FREE_DAYS * DAY + 3000),
+    });
+    const {id, writeToken} = await (await share(token)).json();
+    let offset = Buffer.byteLength(line(1));
+    const next = async n => {
+      const res = await append(id, writeToken, offset, line(n));
+      if (res.status === 204) {
+        offset += Buffer.byteLength(line(n));
+      }
+      return res.status;
+    };
+    assert.equal(await next(2), 204, "still free");
+    await new Promise(r => setTimeout(r, 3500));
+    assert.equal(await next(3), 402, "time's up");
+    assert.equal((await claim(id, token, writeToken)).status, 402, "not paid");
+
+    await setUser(uid, paid);
+    assert.equal(await next(3), 402, "not till it's started again");
+    assert.equal((await claim(id, token, writeToken)).status, 200);
+    assert.equal(await next(3), 204, "paid: it carries on");
+  },
+);
+
+test("Stripe's webhook takes only what Stripe signed", async () => {
+  const hook = headers =>
+    fetch(`${BASE}/api/stripe/webhook`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", ...headers},
+      body: JSON.stringify({type: "customer.subscription.updated"}),
+    });
+  if (!BILLING) {
+    assert.equal((await hook({})).status, 404, "Stripe isn't set up");
+    return;
+  }
+  assert.equal((await hook({})).status, 400, "unsigned");
+  assert.equal(
+    (
+      await hook({
+        "Stripe-Signature": `t=${Math.floor(Date.now() / 1000)},v1=00`,
+      })
+    ).status,
+    400,
+    "signed by someone else",
+  );
+});
+
+test(
+  "subscribing is to a plan, monthly or yearly",
+  {skip: !BILLING && "Stripe's settings aren't set"},
+  async () => {
+    const {cookie} = await loggedIn();
+    for (const body of ["", "{}", JSON.stringify({plan: "weekly"})]) {
+      const res = await fetch(`${BASE}/api/account/subscribe`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
+          ...FROM_SITE,
+        },
+        body,
+      });
+      assert.equal(res.status, 400, body);
+    }
+  },
+);
+
+test("subscribing needs a browser logged in, on the site's own pages", async () => {
+  for (const path of ["/api/account/subscribe", "/api/account/billing"]) {
+    const res = await fetch(`${BASE}${path}`, {method: "POST"});
+    assert.equal(res.status, 403, `${path}, from elsewhere`);
+    const out = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: FROM_SITE,
+    });
+    assert.equal(out.status, 401, `${path}, logged out`);
+  }
 });

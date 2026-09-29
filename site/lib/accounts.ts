@@ -2,6 +2,13 @@ import {createHash, randomBytes} from "node:crypto";
 
 import {Timestamp} from "firebase-admin/firestore";
 
+import {
+  billingConfig,
+  type Paying,
+  type Plan,
+  type Standing,
+  standing,
+} from "./billing";
 import {safeEqual} from "./crypto";
 import {openLogId, sealLogId} from "./encryption";
 import {firestore} from "./firebase";
@@ -9,7 +16,8 @@ import {firestore} from "./firebase";
 /**
  * What accounts keep, beyond Firebase Authentication's own records:
  *
- *   users/{uid}             { email, createdAt, lastLoginAt, lastWatchAt?, watch?: <sealed log id> }
+ *   users/{uid}             { email, createdAt, lastLoginAt, lastWatchAt?, watch?: <sealed log id>,
+ *                             status, stripeCustomer?, subscription?: { id, status, plan, periodEnd, cancelAt } }
  *   cli-tokens/{sha256}     { uid, email, host, createdAt, usedAt }
  *   cli-codes/{sha256}      { uid, email, challenge, expireAt }
  *
@@ -17,6 +25,9 @@ import {firestore} from "./firebase";
  * signs up with Firebase, in the browser: `recordLogin`), and says when it
  * last logged in (in a browser, or the CLI on a computer) and last shared
  * live (`lastWatchAt`), and which share that was (`watch`: /watch shows it).
+ * It's made `unpaid`; once it subscribes, it's `active` for as long as it's
+ * paid for (`subscription`, from Stripe: lib/stripe.ts). Where it stands,
+ * and whether it can share live, is lib/billing.ts's to say.
  *
  * `agent-graph watch-remote` logs in through the browser: it opens
  * /login?cli=<port>&state=…&challenge=…, and once the user is logged in the
@@ -48,12 +59,111 @@ export const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export type Account = {uid: string; email: string | null};
 
-/** Where an account stands, as the CLI is told when it starts a share. */
-export type AccountStatus = "active";
+/** Where account `uid` stands now: whether it can share live, and until when. */
+export async function standingOf(uid: string): Promise<Standing> {
+  const billing = billingConfig();
+  if (!billing) {
+    return standing(null, null, Date.now());
+  }
+  return standing(billing, await payingOf(uid), Date.now());
+}
 
-/** Where `account` stands. Every account is active, for now. */
-export function accountStatus(_account: Account): AccountStatus {
-  return "active";
+/** What account `uid`'s document says about paying; null if it has none. */
+export async function payingOf(uid: string): Promise<Paying | null> {
+  const snap = await users().doc(uid).get();
+  if (!snap.exists) {
+    return null;
+  }
+  const d = snap.data() as {
+    status?: Paying["status"];
+    createdAt?: Timestamp;
+    subscription?: {periodEnd?: Timestamp};
+  };
+  return {
+    status: d.status,
+    createdAt: d.createdAt?.toMillis(),
+    periodEnd: d.subscription?.periodEnd?.toMillis(),
+  };
+}
+
+/** Account `uid`'s Stripe customer, if it has one yet. */
+export async function stripeCustomerOf(uid: string): Promise<string | null> {
+  const snap = await users().doc(uid).get();
+  return (snap.get("stripeCustomer") as string | undefined) ?? null;
+}
+
+export async function setStripeCustomer(
+  uid: string,
+  customer: string,
+): Promise<void> {
+  await users().doc(uid).set({stripeCustomer: customer}, {merge: true});
+}
+
+export type Subscription = {
+  id: string;
+  /** Stripe's own status for it: active, trialing, past_due, canceled, … */
+  status: string;
+  /** Which plan it's on; null if its price isn't one of STRIPE_MODE's now. */
+  plan: Plan | null;
+  /** When the period paid for (or its trial) ends, in ms. */
+  periodEnd: number | null;
+  /** When it's set to end (canceled, at the period's end), in ms. */
+  cancelAt: number | null;
+};
+
+/**
+ * Records account `uid`'s subscription, as Stripe has it: it's `active`
+ * while Stripe has it active (or in a trial), and `unpaid` otherwise.
+ */
+export async function setSubscription(
+  uid: string,
+  customer: string,
+  sub: Subscription,
+): Promise<void> {
+  const paid = sub.status === "active" || sub.status === "trialing";
+  const ts = (ms: number | null) =>
+    ms === null ? null : Timestamp.fromMillis(ms);
+  await users()
+    .doc(uid)
+    .set(
+      {
+        status: paid ? "active" : "unpaid",
+        stripeCustomer: customer,
+        subscription: {
+          id: sub.id,
+          status: sub.status,
+          plan: sub.plan,
+          periodEnd: ts(sub.periodEnd),
+          cancelAt: ts(sub.cancelAt),
+        },
+      },
+      {merge: true},
+    );
+}
+
+/** Account `uid`'s subscription, as last recorded, if it's had one. */
+export async function subscriptionOf(
+  uid: string,
+): Promise<Subscription | null> {
+  const snap = await users().doc(uid).get();
+  const sub = snap.get("subscription") as
+    | {
+        id: string;
+        status: string;
+        plan?: Plan | null;
+        periodEnd: Timestamp | null;
+        cancelAt: Timestamp | null;
+      }
+    | undefined;
+  return sub
+    ? {
+        id: sub.id,
+        status: sub.status,
+        plan: sub.plan ?? null,
+        periodEnd: sub.periodEnd?.toMillis() ?? null,
+        cancelAt: sub.cancelAt?.toMillis() ?? null,
+      }
+    : null;
 }
 
 /** A one-time code for `account`, for the CLI whose challenge is `challenge`. */
@@ -201,9 +311,9 @@ export async function removeComputer(
 
 /**
  * Records that `account` logged in, just now (in a browser, or the CLI on a
- * computer): its document is made the first time, with its email; later,
- * its email (which can change) and when it last logged in are brought up
- * to date.
+ * computer): its document is made the first time, with its email, and
+ * `unpaid` (lib/billing.ts); later, its email (which can change) and when it
+ * last logged in are brought up to date.
  */
 export async function recordLogin(account: Account): Promise<void> {
   const ref = users().doc(account.uid);
@@ -213,7 +323,12 @@ export async function recordLogin(account: Account): Promise<void> {
     if (snap.exists) {
       tx.update(ref, {email: account.email, lastLoginAt: now});
     } else {
-      tx.set(ref, {email: account.email, createdAt: now, lastLoginAt: now});
+      tx.set(ref, {
+        email: account.email,
+        createdAt: now,
+        lastLoginAt: now,
+        status: "unpaid",
+      });
     }
   });
 }

@@ -731,6 +731,10 @@ body {
 .site .notice {
   color: var(--good);
 }
+.site .test-mode {
+  font-size: 14px;
+  color: var(--muted);
+}
 .site .computers {
   list-style: none;
   margin: 0;

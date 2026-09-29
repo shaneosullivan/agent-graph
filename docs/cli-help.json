@@ -271,6 +271,8 @@
         { "text": "What's shared: every session on the machine agent-graph runs on, or just one with --session (`--session current` for the one this runs in). Agent Graph records task names and agent descriptions, not prompts or tool output (unless you've set AGENT_GRAPH_CAPTURE_BODIES=1). The site stores it encrypted." },
         { "heading": "Logging in" },
         { "text": "The first time, it opens your browser at the site's login page: log in with Google, or an email and password (or create an account), and agent-graph is told when you're done. Its login is kept in ~/.agent-graph/account.json, readable only by you, for next time. `--logout` ends it (on the site too), and you can log a computer out from the site's account page. If it can't open a browser, it prints the address to open yourself." },
+        { "heading": "Subscribing" },
+        { "text": "Where the site charges for sharing live, a new account can share for its first week (or however long the site allows) without paying. After that, it opens your account page in the browser for you to subscribe, and waits: once you have, it carries on sharing by itself. A run that's sharing when the time runs out does the same." },
         { "heading": "Who can see it" },
         { "text": "Only you, logged in to the site: /watch shows your latest live share. Nobody else can open it. Your login is only sent over HTTPS, or to your own machine." },
         { "heading": "Who can change it" },

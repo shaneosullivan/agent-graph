@@ -7,7 +7,8 @@ import {
   type Source,
   siteUrl,
 } from "@/lib/config";
-import {accountOfRequest, accountStatus, setWatchLog} from "@/lib/accounts";
+import {accountOfRequest, setWatchLog, standingOf} from "@/lib/accounts";
+import {mustSubscribe, standingReply} from "@/lib/billing";
 import {
   hashPassword,
   newId,
@@ -33,8 +34,10 @@ export const dynamic = "force-dynamic";
  *   (`agent-graph watch-remote`, logged in: lib/accounts.ts), which only
  *   that account can view, at /watch. A live share (source `watch`) must
  *   have one; it can't have a password as well.
- * Reply (201): { id, url, writeToken }, and, for an account's share,
- * accountStatus (lib/accounts.ts). Send further chunks to
+ * Reply (201): { id, url, writeToken }, and, for an account's share, where
+ * it stands: { accountStatus, freeUntil } (lib/billing.ts). 402 if it has
+ * to subscribe first; appends to it are refused with 402 once it has to
+ * (and it's started again: /api/logs/{id}/watch). Send further chunks to
  * /api/logs/{id}/append with the write token. 429 (with Retry-After) if the
  * address has run scrypt too often lately (lib/config.ts).
  */
@@ -101,6 +104,11 @@ export async function POST(req: Request): Promise<Response> {
   }
   const pw = password ? await hashPassword(password) : undefined;
 
+  const standing = account ? await standingOf(account.uid) : null;
+  if (standing && !standing.canShare) {
+    return mustSubscribe(siteUrl(req));
+  }
+
   for (let attempt = 0; attempt < 3; attempt++) {
     const id = newId();
     try {
@@ -108,6 +116,7 @@ export async function POST(req: Request): Promise<Response> {
         id,
         {source, pw, ...(account ? {owner: account.uid} : {})},
         text,
+        standing?.until ?? null,
       );
     } catch (err) {
       if (err instanceof IdTaken) {
@@ -124,7 +133,7 @@ export async function POST(req: Request): Promise<Response> {
         id,
         url,
         writeToken: writeToken(id),
-        ...(account ? {accountStatus: accountStatus(account)} : {}),
+        ...(standing ? standingReply(standing) : {}),
       },
       {status: 201, headers: {"Cache-Control": "no-store"}},
     );

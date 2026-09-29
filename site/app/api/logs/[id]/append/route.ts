@@ -4,7 +4,9 @@ import {
   ID_PATTERN,
   MAX_CHUNK_BYTES,
   MAX_LOG_BYTES,
+  siteUrl,
 } from "@/lib/config";
+import {mustSubscribe} from "@/lib/billing";
 import {canWrite} from "@/lib/crypto";
 import {
   appendChunk,
@@ -12,6 +14,7 @@ import {
   firstChunkOffset,
   LogGone,
   Misplaced,
+  Unpaid,
 } from "@/lib/store";
 
 export const runtime = "nodejs";
@@ -35,6 +38,10 @@ export const dynamic = "force-dynamic";
  *   there: 410 if it's been deleted, lib/cleanup.ts) and the chunk before
  *   it (read, that this one starts where it ends: 409 if not). Chunks never
  *   overlap, so the span checked above bounds what a log stores.
+ *
+ * An account's live share stops taking chunks when the account's time is
+ * up (the log's `until`: lib/billing.ts): 402, and the CLI starts it again,
+ * which checks where the account stands, and moves `until` on if it's paid.
  *
  * A chunk never changes once stored (viewers don't read one twice): the same
  * bytes again (a retry) are accepted, different ones (or any, where the stored
@@ -84,6 +91,9 @@ export async function POST(
   } catch (err) {
     if (err instanceof LogGone) {
       return gone();
+    }
+    if (err instanceof Unpaid) {
+      return mustSubscribe(siteUrl(req));
     }
     if (err instanceof Misplaced) {
       return new Response("That isn't where the log's last chunk ends.", {

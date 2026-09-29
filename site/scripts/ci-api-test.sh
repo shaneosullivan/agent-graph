@@ -8,6 +8,17 @@ set -e
 # The cleanup cron refuses to run without its secret.
 export CRON_SECRET="${CRON_SECRET:-ci-only-cron-secret}"
 
+# Stripe's settings, in test mode, so paying for live shares is tested
+# (tests/accounts.test.mjs). Nothing's sent to Stripe: they only have to be set.
+export STRIPE_MODE="${STRIPE_MODE:-test}"
+export STRIPE_TEST_SECRET_KEY="${STRIPE_TEST_SECRET_KEY:-sk_test_ci_only}"
+export STRIPE_TEST_WEBHOOK_SECRET="${STRIPE_TEST_WEBHOOK_SECRET:-whsec_ci_only}"
+export STRIPE_TEST_PRICE_MONTHLY="${STRIPE_TEST_PRICE_MONTHLY:-price_ci_monthly}"
+export STRIPE_TEST_PRICE_YEARLY="${STRIPE_TEST_PRICE_YEARLY:-price_ci_yearly}"
+export STRIPE_MONTHLY_LABEL="${STRIPE_MONTHLY_LABEL:-\$5 a month}"
+export STRIPE_YEARLY_LABEL="${STRIPE_YEARLY_LABEL:-\$50 a year}"
+export FREE_TRIAL_DAYS="${FREE_TRIAL_DAYS:-7}"
+
 npx next start -p 3000 &
 server=$!
 trap 'kill $server 2>/dev/null' EXIT

@@ -84,3 +84,64 @@ export function LogOut() {
     </button>
   );
 }
+
+/**
+ * A button that asks the site for one of Stripe's pages (Checkout, or the
+ * customer portal: lib/stripe.ts), and goes there.
+ */
+export function StripeButton({
+  path,
+  body,
+  secondary,
+  children,
+}: {
+  path: string;
+  body?: object;
+  secondary?: boolean;
+  children: React.ReactNode;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function go() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(path, {
+        method: "POST",
+        ...(body
+          ? {
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify(body),
+            }
+          : {}),
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      location.assign((await res.json()).url);
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "That didn't work. Try again.",
+      );
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <button
+        className={secondary ? "button secondary" : "button"}
+        type="button"
+        onClick={go}
+        disabled={busy}>
+        {busy ? "Opening Stripe…" : children}
+      </button>
+      {error ? (
+        <span className="error" style={{display: "block"}}>
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}

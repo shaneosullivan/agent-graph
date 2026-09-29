@@ -1,4 +1,4 @@
-import {FieldPath, Timestamp} from "firebase-admin/firestore";
+import {FieldPath, FieldValue, Timestamp} from "firebase-admin/firestore";
 
 import {
   BYTES_PER_READ,
@@ -20,7 +20,7 @@ import {firestore} from "./firebase";
 /**
  * How logs are kept in Firestore:
  *
- *   logs/{sid}                 { source, pw?, owner?, createdAt, mac }
+ *   logs/{sid}                 { source, pw?, owner?, until?, createdAt, mac }
  *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, n: <its length>, end: <offset + n>, t: <when written> }
  *   unlock-attempts/{bucket}   { n, since, at, expireAt }  (password guesses, and scrypt runs)
  *
@@ -46,6 +46,10 @@ import {firestore} from "./firebase";
  * what a log stores is the span from its first chunk to its last, which is
  * what `MAX_LOG_BYTES` limits. (Logs made before this may have a `stored`
  * count; it's no longer kept.)
+ *
+ * An account's live share has `until`, when appends to it stop (`Unpaid`),
+ * unless the account starts it again first (`setUntil`; lib/billing.ts).
+ * It isn't in `mac`: it changes, and only says when to stop.
  */
 
 export type Meta = {
@@ -69,11 +73,15 @@ export function chunkKey(offset: number): string {
 
 export class IdTaken extends Error {}
 
-/** Creates log `id` with its first chunk, all in one commit. */
+/**
+ * Creates log `id` with its first chunk, all in one commit; appends to it
+ * stop at `until` (ms), if it's given.
+ */
 export async function createLog(
   id: string,
   meta: Omit<Meta, "createdAt">,
   text: string,
+  until: number | null = null,
 ): Promise<void> {
   const log = logDoc(id);
   const batch = firestore().batch();
@@ -84,6 +92,7 @@ export async function createLog(
     source: meta.source,
     ...(meta.pw ? {pw: meta.pw} : {}),
     ...(meta.owner ? {owner: meta.owner} : {}),
+    ...(until !== null ? {until: Timestamp.fromMillis(until)} : {}),
     createdAt: Timestamp.now(),
     mac: metaTag(id, meta),
   });
@@ -121,6 +130,19 @@ export class LogGone extends Error {}
 /** The chunk doesn't start where the log's last one ends. */
 export class Misplaced extends Error {}
 
+/** Appends to a live share stop once its account's time's up (lib/billing.ts). */
+export class Unpaid extends Error {}
+
+/** When appends to log `id` stop (ms), or null for never, from now on. */
+export async function setUntil(
+  id: string,
+  until: number | null,
+): Promise<void> {
+  await logDoc(id).update({
+    until: until === null ? FieldValue.delete() : Timestamp.fromMillis(until),
+  });
+}
+
 /**
  * Whether log `id` is there to add to: stored, and not being deleted
  * (lib/cleanup.ts marks one first), or, until it's moved, stored as it was
@@ -157,8 +179,8 @@ async function where(
 
 /**
  * Encrypts and stores one chunk at `offset`, if the log's still there
- * (`LogGone` if not), and it follows on from what's there (`Misplaced` if
- * not): a chunk ends where it starts, or, if none does, it's the log's
+ * (`LogGone` if not), its `until` hasn't passed (`Unpaid` if it has), and
+ * it follows on from what's there (`Misplaced` if not): a chunk ends where it starts, or, if none does, it's the log's
  * first (at 0, with nothing stored yet) or a retry of the first one kept.
  * So chunks never overlap, nor leave gaps but where a log's start was
  * trimmed, and what a log stores is the span from its first chunk to its
@@ -187,6 +209,10 @@ export async function appendChunk(
       const found = await where(id, ref => tx.get(ref));
       if (found === null) {
         throw new LogGone(id);
+      }
+      const until = found?.get("until") as Timestamp | undefined;
+      if (until && until.toMillis() < Date.now()) {
+        throw new Unpaid(id);
       }
       // (One still stored as it was before storage ids has chunks from
       // before that aren't here to follow on from.)

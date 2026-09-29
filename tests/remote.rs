@@ -1117,3 +1117,115 @@ fn logging_out() {
     assert_eq!(told.headers["authorization"], "Bearer agt_test");
     assert!(!home.path().join("account.json").exists());
 }
+
+/// An account whose free days are over: the site refuses to start the share
+/// (402) till it's subscribed, and later refuses an append (402) once its
+/// time's up again; each time, watch-remote opens the account page, asks
+/// till the account can share, then carries on.
+#[test]
+fn waits_for_the_account_to_subscribe() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, requests) = mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut creates, mut appends) = (0, 0);
+        for stream in listener.incoming().flatten() {
+            let request = read_request(&stream);
+            let reply = |status: &str, body: &str| {
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            let unpaid = || reply("402 Payment Required", "Subscribe, at the account page");
+            let text = if request.path == "/api/logs" {
+                creates += 1;
+                if creates == 1 {
+                    unpaid()
+                } else {
+                    reply(
+                        "201 Created",
+                        r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key","accountStatus":"active","freeUntil":null}"#,
+                    )
+                }
+            } else if request.path == "/api/cli/account" {
+                reply(
+                    "200 OK",
+                    r#"{"email":"me@example.com","accountStatus":"active","freeUntil":null,"canShare":true}"#,
+                )
+            } else if request.path.ends_with("/watch") {
+                reply(
+                    "200 OK",
+                    r#"{"url":"https://site.example/watch","accountStatus":"active","freeUntil":null}"#,
+                )
+            } else {
+                appends += 1;
+                if appends == 1 {
+                    unpaid()
+                } else {
+                    "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_string()
+                }
+            };
+            (&stream).write_all(text.as_bytes()).unwrap();
+            if tx.send(request).is_err() {
+                return;
+            }
+        }
+    });
+
+    let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let file = events.join("x-s.jsonl");
+    std::fs::write(&file, line(1)).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", &format!("--url=http://127.0.0.1:{port}")])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .env("AGENT_GRAPH_NO_BROWSER", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let said = std::thread::spawn(move || {
+        let mut all = String::new();
+        BufReader::new(stderr).read_to_string(&mut all).ok();
+        all
+    });
+
+    let next = || requests.recv_timeout(Duration::from_secs(15)).unwrap().path;
+    assert_eq!(next(), "/api/logs", "refused: it has to subscribe");
+    assert_eq!(next(), "/api/cli/account", "asked till it has");
+    assert_eq!(next(), "/api/logs", "then started");
+
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&file)
+        .unwrap();
+    log.write_all(line(2).as_bytes()).unwrap();
+    assert!(
+        next().starts_with("/api/logs/abc123def456/append"),
+        "refused: time's up"
+    );
+    assert_eq!(next(), "/api/cli/account", "asked till it's paid");
+    assert_eq!(next(), "/api/logs/abc123def456/watch", "started again");
+    assert!(
+        next().starts_with("/api/logs/abc123def456/append"),
+        "and carried on"
+    );
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let said = said.join().unwrap();
+    assert_eq!(
+        said.matches("Opening your account page").count(),
+        2,
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!("http://127.0.0.1:{port}/account")),
+        "{said}"
+    );
+}

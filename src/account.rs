@@ -38,11 +38,13 @@ pub struct Account {
 }
 
 /// Where an account stands, as the site says when a share's started with
-/// its login. Only active, for now.
+/// its login: an account that hasn't subscribed can share live for its
+/// first days, and then not till it does (the site's `lib/billing.ts`).
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum AccountStatus {
     Active,
+    Unpaid,
     /// One this version doesn't know: the site's newer.
     #[serde(other)]
     Unknown,
@@ -323,6 +325,7 @@ mod tests {
     fn account_statuses() {
         let parse = |s: &str| serde_json::from_str::<AccountStatus>(s).unwrap();
         assert_eq!(parse(r#""active""#), AccountStatus::Active);
+        assert_eq!(parse(r#""unpaid""#), AccountStatus::Unpaid);
         assert_eq!(parse(r#""something-new""#), AccountStatus::Unknown);
     }
 
