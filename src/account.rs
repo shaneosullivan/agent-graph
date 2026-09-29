@@ -37,6 +37,17 @@ pub struct Account {
     pub email: Option<String>,
 }
 
+/// Where an account stands, as the site says when a share's started with
+/// its login. Only active, for now.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountStatus {
+    Active,
+    /// One this version doesn't know: the site's newer.
+    #[serde(other)]
+    Unknown,
+}
+
 impl Account {
     /// Who it is, for messages.
     pub fn who(&self) -> &str {
@@ -306,6 +317,13 @@ mod tests {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         );
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn account_statuses() {
+        let parse = |s: &str| serde_json::from_str::<AccountStatus>(s).unwrap();
+        assert_eq!(parse(r#""active""#), AccountStatus::Active);
+        assert_eq!(parse(r#""something-new""#), AccountStatus::Unknown);
     }
 
     #[test]

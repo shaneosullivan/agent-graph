@@ -7,7 +7,7 @@ import {
   type Source,
   siteUrl,
 } from "@/lib/config";
-import { accountOfRequest, setWatchLog } from "@/lib/accounts";
+import { accountOfRequest, accountStatus, setWatchLog } from "@/lib/accounts";
 import { hashPassword, newId, PasswordTooLong, passwordFromHeader, writeToken } from "@/lib/crypto";
 import { IdTaken, createLog, takeScryptRun } from "@/lib/store";
 import { tooMany } from "@/lib/unlock";
@@ -27,7 +27,8 @@ export const dynamic = "force-dynamic";
  *   (`agent-graph watch-remote`, logged in: lib/accounts.ts), which only
  *   that account can view, at /watch. A live share (source `watch`) must
  *   have one; it can't have a password as well.
- * Reply (201): { id, url, writeToken }. Send further chunks to
+ * Reply (201): { id, url, writeToken }, and, for an account's share,
+ * accountStatus (lib/accounts.ts). Send further chunks to
  * /api/logs/{id}/append with the write token. 429 (with Retry-After) if the
  * address has run scrypt too often lately (lib/config.ts).
  */
@@ -85,7 +86,7 @@ export async function POST(req: Request): Promise<Response> {
     if (account) await setWatchLog(account.uid, id);
     const url = account ? `${siteUrl(req)}/watch` : `${siteUrl(req)}/l/${id}`;
     return Response.json(
-      { id, url, writeToken: writeToken(id) },
+      { id, url, writeToken: writeToken(id), ...(account ? { accountStatus: accountStatus(account) } : {}) },
       { status: 201, headers: { "Cache-Control": "no-store" } },
     );
   }

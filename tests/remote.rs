@@ -32,7 +32,7 @@ fn mock_site() -> (u16, mpsc::Receiver<Request>) {
             let reply = if request.path == "/api/logs" {
                 json(
                     "201 Created",
-                    r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key"}"#,
+                    r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key","accountStatus":"active"}"#,
                 )
             } else if request.path == "/api/cli/token" {
                 json(
@@ -505,7 +505,7 @@ fn scripted_site() -> (u16, mpsc::Receiver<Request>, mpsc::Sender<u16>) {
         for stream in listener.incoming().flatten() {
             let request = read_request(&stream);
             let reply = if request.path == "/api/logs" {
-                let body = r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key"}"#;
+                let body = r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key","accountStatus":"active"}"#;
                 if tx.send(request).is_err() {
                     return;
                 }
@@ -521,7 +521,7 @@ fn scripted_site() -> (u16, mpsc::Receiver<Request>, mpsc::Sender<u16>) {
                 }
                 let Ok(status) = reply_rx.recv() else { return };
                 let body = if status == 200 && claim {
-                    r#"{"url":"https://site.example/watch"}"#
+                    r#"{"url":"https://site.example/watch","accountStatus":"active"}"#
                 } else {
                     ""
                 };

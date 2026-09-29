@@ -47,6 +47,14 @@ export const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export type Account = { uid: string; email: string | null };
 
+/** Where an account stands, as the CLI is told when it starts a share. */
+export type AccountStatus = "active";
+
+/** Where `account` stands. Every account is active, for now. */
+export function accountStatus(_account: Account): AccountStatus {
+  return "active";
+}
+
 /** A one-time code for `account`, for the CLI whose challenge is `challenge`. */
 export async function newCliCode(account: Account, challenge: string): Promise<string> {
   const code = randomBytes(32).toString("base64url");

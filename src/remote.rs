@@ -43,6 +43,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::account::AccountStatus;
 use crate::event::Envelope;
 use crate::keyframe;
 use crate::reducer::{self, KEYFRAME_PART, Replay};
@@ -117,7 +118,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     // A login the site has forgotten (logged out on the account page, say)
     // is done again, once.
     let mut logged_in_again = false;
-    let (log, mut stream, mut sent, trim, carried_on) = loop {
+    let (log, mut stream, mut sent, trim, carried_on, status) = loop {
         // Only a share of this account's is carried on with.
         let saved = saved
             .clone()
@@ -133,6 +134,10 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
             Err(e) => return Err(e.message()),
         }
     };
+    // Every account can share, for now; statuses to come are handled here.
+    match status {
+        AccountStatus::Active | AccountStatus::Unknown => {}
+    }
     let mut share = SavedShare {
         site: base.clone(),
         target: only.clone(),
@@ -232,8 +237,9 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
 }
 
 /// The log, what's still to send, how much the site has, where the site
-/// can delete before (if it can), and whether it carried on with a share.
-type Started = (Created, Stream, u64, Option<u64>, bool);
+/// can delete before (if it can), whether it carried on with a share, and
+/// where the account stands.
+type Started = (Created, Stream, u64, Option<u64>, bool, AccountStatus);
 
 /// Carries on with the `saved` share, if it can, else makes a new one, as
 /// the account whose login `token` is. The site is told first that it's the
@@ -246,19 +252,21 @@ fn start_share(
 ) -> Result<Started, SendError> {
     if let Some(saved) = saved {
         let mut log = saved.log();
-        let carried = client.claim(&log, token).and_then(|url| {
+        let carried = client.claim(&log, token).and_then(|(url, status)| {
             log.url = url;
             let mut stream = Stream::resume(raw.clone(), keyframe::EVERY);
             if stream.pending.is_empty() {
-                return Ok((stream, saved.offset, None));
+                return Ok((stream, saved.offset, None, status));
             }
             let n = stream.next_len(MAX_CHUNK);
             client.append(&log, saved.offset, &stream.pending[..n])?;
             let trim = stream.sent(n, saved.offset);
-            Ok((stream, saved.offset + n as u64, trim))
+            Ok((stream, saved.offset + n as u64, trim, status))
         });
         match carried {
-            Ok((stream, sent, trim)) => return Ok((log, stream, sent, trim, true)),
+            Ok((stream, sent, trim, status)) => {
+                return Ok((log, stream, sent, trim, true, status));
+            }
             Err(SendError::Retry(e)) => {
                 return Err(SendError::Retry(format!("couldn't reach the site: {e}")));
             }
@@ -272,9 +280,9 @@ fn start_share(
     }
     let mut stream = Stream::start(raw, keyframe::EVERY);
     let first = stream.next_len(MAX_CHUNK);
-    let log = client.create(&stream.pending[..first], token)?;
+    let (log, status) = client.create(&stream.pending[..first], token)?;
     stream.sent(first, 0);
-    Ok((log, stream, first as u64, None, false))
+    Ok((log, stream, first as u64, None, false, status))
 }
 
 /// Which account a share is kept for: its email, or its token (a login with
@@ -1190,8 +1198,9 @@ impl Client {
         }
     }
 
-    /// Makes a share, the account's whose login `token` is.
-    pub fn create(&self, body: &[u8], token: &str) -> Result<Created, SendError> {
+    /// Makes a share, the account's whose login `token` is. The share, and
+    /// where the account stands.
+    pub fn create(&self, body: &[u8], token: &str) -> Result<(Created, AccountStatus), SendError> {
         let mut res = self
             .agent
             .post(format!("{}/api/logs", self.base))
@@ -1202,8 +1211,16 @@ impl Client {
             .map_err(|e| SendError::Retry(e.to_string()))?;
         let status = res.status().as_u16();
         let text = res.body_mut().read_to_string().unwrap_or_default();
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Reply {
+            #[serde(flatten)]
+            log: Created,
+            account_status: AccountStatus,
+        }
         match status {
-            200 | 201 => serde_json::from_str(&text)
+            200 | 201 => serde_json::from_str::<Reply>(&text)
+                .map(|r| (r.log, r.account_status))
                 .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
             401 => Err(SendError::LoggedOut(
                 "The site doesn't know this computer's login any more: log in again.".into(),
@@ -1217,8 +1234,9 @@ impl Client {
     }
 
     /// Tells the site a share of the account's is its latest (the one /watch
-    /// shows): carrying on with it. Its link: /watch.
-    pub fn claim(&self, log: &Created, token: &str) -> Result<String, SendError> {
+    /// shows): carrying on with it. Its link (/watch), and where the account
+    /// stands.
+    pub fn claim(&self, log: &Created, token: &str) -> Result<(String, AccountStatus), SendError> {
         let mut res = self
             .agent
             .post(format!("{}/api/logs/{}/watch", self.base, log.id))
@@ -1229,12 +1247,14 @@ impl Client {
         let status = res.status().as_u16();
         let text = res.body_mut().read_to_string().unwrap_or_default();
         #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
         struct Claimed {
             url: String,
+            account_status: AccountStatus,
         }
         match status {
             200 => serde_json::from_str::<Claimed>(&text)
-                .map(|c| c.url)
+                .map(|c| (c.url, c.account_status))
                 .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
             401 if !text.contains("write token") => Err(SendError::LoggedOut(
                 "The site doesn't know this computer's login any more: log in again.".into(),

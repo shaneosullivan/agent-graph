@@ -1,4 +1,4 @@
-import { accountOfRequest, setWatchLog } from "@/lib/accounts";
+import { accountOfRequest, accountStatus, setWatchLog } from "@/lib/accounts";
 import { ID_PATTERN, siteUrl } from "@/lib/config";
 import { safeEqual, writeToken } from "@/lib/crypto";
 import { getMeta } from "@/lib/store";
@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
  * Makes an account's live share the one /watch shows them again: POST
  * /api/logs/{id}/watch, when `agent-graph watch-remote` carries on with it,
  * with `Authorization: Bearer <CLI token>` and the log's write token in
- * `X-Agent-Graph-Write-Token`. Replies { url }: /watch. 404 if it isn't a
+ * `X-Agent-Graph-Write-Token`. Replies { url, accountStatus }: /watch, and
+ * where the account stands (lib/accounts.ts). 404 if it isn't a
  * share of theirs, or is gone.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
@@ -28,5 +29,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const meta = await getMeta(id);
   if (!meta || meta.owner !== account.uid) return new Response("Not a share of yours.", { status: 404 });
   await setWatchLog(account.uid, id);
-  return Response.json({ url: `${siteUrl(req)}/watch` }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json(
+    { url: `${siteUrl(req)}/watch`, accountStatus: accountStatus(account) },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
