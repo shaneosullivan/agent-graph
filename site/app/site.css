@@ -66,6 +66,7 @@ body {
 }
 .site a {
   color: var(--accent);
+  cursor: pointer;
 }
 .site code,
 .site pre {
