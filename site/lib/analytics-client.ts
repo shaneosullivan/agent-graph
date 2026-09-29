@@ -17,7 +17,8 @@ export function enableAnalytics(): void {
 
 export type Report =
   | {event: "pageview"; newDay?: true; newMonth?: true}
-  | {event: "download"; target: string};
+  | {event: "download"; target: string}
+  | {event: "download"; copied: string};
 
 /** Reports `report`, if reporting's on. */
 export function track(report: Report): void {

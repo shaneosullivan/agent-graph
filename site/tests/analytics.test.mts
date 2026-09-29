@@ -27,7 +27,7 @@ test("a page view counts the visitor for the day and the month it's new in", () 
   ]);
 });
 
-test("a download counts for its target, and only a real one", () => {
+test("a download counts for its target or copied command, and only a real one", () => {
   for (const target of TARGETS) {
     assert.deepEqual(countsOf({event: "download", target}), {
       day: [`download:${target}`],
@@ -39,6 +39,13 @@ test("a download counts for its target, and only a real one", () => {
     null,
   );
   assert.equal(countsOf({event: "download"}), null);
+  for (const copied of ["homebrew", "install-script", "claude-code"]) {
+    assert.deepEqual(countsOf({event: "download", copied}), {
+      day: [`download:copy:${copied}`],
+      month: [`download:copy:${copied}`],
+    });
+  }
+  assert.equal(countsOf({event: "download", copied: "rm -rf"}), null);
   for (const junk of [null, "pageview", 3, [], {event: "signup"}, {}]) {
     assert.equal(countsOf(junk), null, JSON.stringify(junk));
   }

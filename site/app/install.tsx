@@ -2,20 +2,32 @@
 
 import {useState, useSyncExternalStore} from "react";
 
-import type {Target} from "@/lib/analytics-core";
+import type {Copied, Target} from "@/lib/analytics-core";
 import {track} from "@/lib/analytics-client";
 import {BREW_COMMAND, INSTALL_COMMAND, latestRelease} from "@/lib/release";
+
+import {CopyCommand} from "./copy-command";
 
 type Os = "mac" | "linux" | "windows" | "npm";
 
 const release = latestRelease();
 
+/** A command to copy, and what copying it counts as (/admin). */
+type Command = {command: string; copied: Copied};
+
+const BREW: Command = {command: BREW_COMMAND, copied: "homebrew"};
+const SCRIPT: Command = {command: INSTALL_COMMAND, copied: "install-script"};
+const SETUP: Command = {
+  command: "agent-graph install claude-code",
+  copied: "claude-code",
+};
+
 type Way = {
   label: string;
   /** Not out yet: the tab says so, and nothing else. */
   soon?: string;
-  install?: string;
-  or?: {note: string; command: string};
+  install?: Command;
+  or?: {note: string} & Command;
   /** The program itself, for each processor: counted when clicked (/admin). */
   downloads?: Array<{label: string; target: Target}>;
 };
@@ -24,8 +36,8 @@ const ways: Record<Os, Way> = {
   mac: release
     ? {
         label: "macOS",
-        install: BREW_COMMAND,
-        or: {note: "Or, without Homebrew:", command: INSTALL_COMMAND},
+        install: BREW,
+        or: {note: "Or, without Homebrew:", ...SCRIPT},
         downloads: [
           {label: "Apple silicon", target: "aarch64-apple-darwin"},
           {label: "Intel", target: "x86_64-apple-darwin"},
@@ -35,11 +47,8 @@ const ways: Record<Os, Way> = {
   linux: release
     ? {
         label: "Linux",
-        install: INSTALL_COMMAND,
-        or: {
-          note: "Or with Homebrew:",
-          command: BREW_COMMAND,
-        },
+        install: SCRIPT,
+        or: {note: "Or with Homebrew:", ...BREW},
         downloads: [
           {label: "x86_64", target: "x86_64-unknown-linux-musl"},
           {label: "ARM64", target: "aarch64-unknown-linux-musl"},
@@ -55,6 +64,16 @@ const ways: Record<Os, Way> = {
     soon: "Coming soon: agent-graph from npm (npm install -g agent-graph).",
   },
 };
+
+/** A command to copy, whose copies count as downloads (/admin). */
+function Copyable({command, copied}: Command) {
+  return (
+    <CopyCommand
+      command={command}
+      onCopy={() => track({event: "download", copied})}
+    />
+  );
+}
 
 function detectOs(): Os {
   const ua = navigator.userAgent;
@@ -109,11 +128,11 @@ export function Install() {
                 {release.version.includes("-") ? " (beta)" : ""}
               </span>
             ) : null}
-            :<code className="command">{way.install}</code>
+            :{way.install && <Copyable {...way.install} />}
             {way.or && (
               <>
                 <span className="install-or">{way.or.note}</span>
-                <code className="command">{way.or.command}</code>
+                <Copyable {...way.or} />
               </>
             )}
             {way.downloads && (
@@ -143,7 +162,7 @@ export function Install() {
           </li>
           <li>
             Start recording Claude Code sessions:
-            <code className="command">agent-graph install claude-code</code>
+            <Copyable {...SETUP} />
           </li>
         </ol>
       )}

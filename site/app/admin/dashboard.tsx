@@ -2,8 +2,8 @@
 
 import {useLayoutEffect, useRef, useState} from "react";
 
-import type {Counter, Target} from "@/lib/analytics-core";
-import {TARGETS} from "@/lib/analytics-core";
+import type {Copied, Counter, Target} from "@/lib/analytics-core";
+import {COPIED, TARGETS} from "@/lib/analytics-core";
 
 /**
  * /admin's charts (app/admin/page.tsx gets the counts): the figures that
@@ -46,8 +46,27 @@ const TARGET_LABEL: Record<Target, string> = {
   "x86_64-pc-windows-msvc": "Windows · x64",
 };
 
+/** What each copied command is (app/install.tsx): a copy's a download too. */
+const COPIED_LABEL: Record<Copied, string> = {
+  homebrew: "Homebrew command copied",
+  "install-script": "Install script command copied",
+  "claude-code": "Claude Code setup command copied",
+};
+
+/** Every kind of download: a button's target, or a command copied. */
+const KINDS: Array<{counter: Counter; label: string}> = [
+  ...TARGETS.map(t => ({
+    counter: `download:${t}` as const,
+    label: TARGET_LABEL[t],
+  })),
+  ...COPIED.map(c => ({
+    counter: `download:copy:${c}` as const,
+    label: COPIED_LABEL[c],
+  })),
+];
+
 const downloads = (p: Period) =>
-  TARGETS.reduce((n, t) => n + p.counts[`download:${t}`], 0);
+  KINDS.reduce((n, k) => n + p.counts[k.counter], 0);
 
 export function Dashboard({
   days,
@@ -160,7 +179,7 @@ export function Dashboard({
         kind="stacked"
         empty={{
           title: `No downloads in ${span}`,
-          body: "A download is counted when someone clicks a download button in the install section of the home page.",
+          body: "A download is counted when someone clicks a download button, or copies a command, in the install section of the home page.",
         }}
         off={off}
       />
@@ -521,7 +540,10 @@ function column(x: number, y: number, w: number, h: number, round: boolean) {
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 }
 
-/** Downloads by target over the range: a bar each, most first, its value at its tip. */
+/**
+ * Downloads by kind over the range (each button's target, and each command
+ * copied): a bar each, most first, its value at its tip.
+ */
 function TargetsCard({
   rows,
   span,
@@ -531,16 +553,18 @@ function TargetsCard({
   span: string;
   off: string | null;
 }) {
-  const totals = TARGETS.map(t => ({
-    target: t,
-    n: rows.reduce((n, p) => n + p.counts[`download:${t}`], 0),
+  const totals = KINDS.map(k => ({
+    ...k,
+    n: rows.reduce((n, p) => n + p.counts[k.counter], 0),
   })).sort((a, b) => b.n - a.n);
   const max = Math.max(0, ...totals.map(t => t.n));
   return (
-    <section className="card admin-chart" aria-label="Downloads by target">
+    <section className="card admin-chart" aria-label="Downloads by kind">
       <div className="card-body">
-        <h2>Downloads by target</h2>
-        <p className="admin-note">Which program was downloaded, {span}.</p>
+        <h2>Downloads by kind</h2>
+        <p className="admin-note">
+          Which program was downloaded, or which command copied, {span}.
+        </p>
         {max === 0 ? (
           <div className="admin-empty admin-empty-inline">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -549,14 +573,14 @@ function TargetsCard({
             <strong>No downloads in {span}</strong>
             <span>
               {off ??
-                "Each target's clicks show here: macOS, Linux and Windows, on ARM and x86."}
+                "Each download button's clicks, and each install command's copies, show here."}
             </span>
           </div>
         ) : (
           <ul className="admin-bars">
-            {totals.map(({target, n}) => (
-              <li key={target} title={`${TARGET_LABEL[target]}: ${number(n)}`}>
-                <span className="admin-bar-label">{TARGET_LABEL[target]}</span>
+            {totals.map(({counter, label, n}) => (
+              <li key={counter} title={`${label}: ${number(n)}`}>
+                <span className="admin-bar-label">{label}</span>
                 <span className="admin-bar-track">
                   {n > 0 ? (
                     <span

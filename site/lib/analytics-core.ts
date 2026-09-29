@@ -7,6 +7,7 @@
  *   pageview                 a page shown (the browser says so: app/analytics.tsx)
  *   visitor                  a browser's first page that day, or month (see below)
  *   download:<target>        a download button clicked (app/install.tsx), per target
+ *   download:copy:<command>  an install command copied (its copy button), per command
  *   watch                    a live share started, or carried on with (`agent-graph watch-remote`)
  *   watch.new                of those, a new share
  *   signup                   an account made (its first login)
@@ -29,6 +30,13 @@ export const TARGETS = [
 ] as const;
 export type Target = (typeof TARGETS)[number];
 
+/**
+ * The commands the install section shows, with a button to copy each
+ * (app/copy-command.tsx): a copy counts as a download of its own kind.
+ */
+export const COPIED = ["homebrew", "install-script", "claude-code"] as const;
+export type Copied = (typeof COPIED)[number];
+
 /** Every counter there can be. */
 export const COUNTERS = [
   "pageview",
@@ -37,6 +45,7 @@ export const COUNTERS = [
   "watch.new",
   "signup",
   ...TARGETS.map(t => `download:${t}` as const),
+  ...COPIED.map(c => `download:copy:${c}` as const),
 ] as const;
 export type Counter = (typeof COUNTERS)[number];
 
@@ -58,6 +67,7 @@ export function periods(at: Date): {day: string; month: string} {
  *
  *   {event: "pageview", newDay?: true, newMonth?: true}
  *   {event: "download", target: <one of TARGETS>}
+ *   {event: "download", copied: <one of COPIED>}
  *
  * A page view counts the visitor too, for the day and the month it's their
  * first in. Anything else counts nothing.
@@ -77,6 +87,10 @@ export function countsOf(
   }
   if (r.event === "download" && TARGETS.includes(r.target as Target)) {
     const counter = `download:${r.target as Target}` as const;
+    return {day: [counter], month: [counter]};
+  }
+  if (r.event === "download" && COPIED.includes(r.copied as Copied)) {
+    const counter = `download:copy:${r.copied as Copied}` as const;
     return {day: [counter], month: [counter]};
   }
   return null;

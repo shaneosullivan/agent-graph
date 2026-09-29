@@ -215,6 +215,57 @@ body {
   white-space: pre;
 }
 
+/* A command with a button that copies it (app/copy-command.tsx): at the
+   top right of one of several lines, centred on the right of one line. */
+.site .command-box {
+  display: block;
+  position: relative;
+  margin: 12px 0;
+}
+.site .install-steps .command-box {
+  margin: 6px 0 0;
+}
+.site .command-box .command {
+  margin: 0;
+  padding-right: 44px;
+}
+.site .copy-command {
+  position: absolute;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+  opacity: 0.6;
+}
+.site .command-box.multi .copy-command {
+  top: 6px;
+}
+.site .command-box.single .copy-command {
+  top: 50%;
+  transform: translateY(-50%);
+}
+.site .copy-command:hover,
+.site .copy-command:focus-visible {
+  opacity: 1;
+  background: var(--panel-2);
+}
+.site .copy-command img {
+  width: 16px;
+  height: 16px;
+}
+/* The icons are black: white in a dark theme. */
+@media (prefers-color-scheme: dark) {
+  .site .copy-command img {
+    filter: invert(1);
+  }
+}
+
 .site .paste {
   width: 100%;
   min-height: 260px;
