@@ -6,6 +6,8 @@
 
 # Secrets: the Firebase service account key
 /config/
+# Your own settings for scripts (scripts/notarize-mac.sh: your Apple account)
+/.env.local
 
 # What a viewer or share run on the example logs records beside them
 /examples/logs/view-*.json

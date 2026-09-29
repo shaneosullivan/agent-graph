@@ -90,6 +90,8 @@ codesign -dvv agent-graph
 
 and to check it's notarized, download its tarball from the Release page with a browser, unpack it, and run it: macOS asks only whether to open something downloaded from the internet, instead of refusing to.
 
+To do the same on your own Mac, outside a release (say, to hand someone a binary), `scripts/notarize-mac.sh` builds both macOS targets, signs each with the Developer ID and the hardened runtime, has Apple notarize it, and checks the result with `syspolicy_check`. It needs a Developer ID certificate in your Keychain, and notarization credentials stored in a Keychain profile. It takes your account's details from the environment (`APPLE_TEAM_ID`, `NOTARY_PROFILE`, and `APPLE_ID` and `NOTARY_PASSWORD` to store the credentials the first time); `--help` lists them. The binaries go to `target/notarized/`.
+
 ## Windows
 
 The Windows binaries aren't signed yet. winget and the PowerShell installer install them without a prompt, but a copy downloaded with a browser gets a SmartScreen warning the first time it runs, and Defender may be more suspicious of it. To sign them later, dist supports Azure Trusted Signing and SSL.com (`dist-workspace.toml`, `azure-windows-sign` or `ssldotcom-windows-sign`).
