@@ -12,8 +12,8 @@ scripts/release.sh 0.1.0-beta.1
 
 It checks everything it needs first (a clean `main` that matches `origin/main`, the bucket, the tap, the notarization credentials), then:
 
-1. sets the version in `Cargo.toml` (with `Cargo.lock`, and the viewer's WebAssembly, which records it), commits it as "Release <version>" and pushes it;
-2. waits for Chofter CI to build that commit and downloads its builds (`scripts/fetch-ci-builds.sh`), checking each is that version;
+1. sets the version in `Cargo.toml` (with `Cargo.lock`), commits it as "Release <version>" and pushes it. Nothing is built on the Mac;
+2. waits for Chofter CI's run of that commit to finish, and downloads its builds (`scripts/fetch-ci-builds.sh`), checking each is that version. They have to be that commit's, since the version is compiled in, so this waits for a whole CI run;
 3. signs and notarizes the macOS builds (`scripts/notarize-mac.sh --bin …`);
 4. packs each build with the LICENSE as `agent-graph-<target>.tar.gz`, uploads it to `$RELEASE_BUCKET/releases/<version>/mac` or `…/linux`, and downloads it again from its public URL to check it;
 5. writes [`site/release.json`](../site/release.json) (the version, commit, and each archive's URL and SHA-256), and commits and pushes it. The site's download buttons and `/install.sh` read it, so they switch to the new release once Vercel has deployed that commit;

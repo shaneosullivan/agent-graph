@@ -96,6 +96,11 @@ function crates() {
       l
         .replace(/\x1b\[[0-9;]*m/g, "")
         .replace(/ \([^)]*\)/g, "")
+        // This repository's own crates without their versions: what's in
+        // them is in `files`, and a release's version bump doesn't change
+        // what the WebAssembly's built from (it compiles nothing that
+        // reads the version).
+        .replace(/^(agent-graph(?:-wasm)?) v\S+/, "$1")
         .trim(),
     );
   return [...new Set(lines.filter(Boolean))].sort();

@@ -4,10 +4,12 @@
 #
 # Cuts a release of agent-graph for macOS and Linux, from this Mac:
 #
-#   1. Sets the version (Cargo.toml, Cargo.lock and the viewer's
-#      WebAssembly, which records it), commits it and pushes it.
-#   2. Waits for Chofter CI to build that commit, and downloads its builds
-#      (scripts/fetch-ci-builds.sh: on the build machine's network).
+#   1. Sets the version (Cargo.toml and Cargo.lock), commits it and pushes
+#      it. Nothing is built on this Mac.
+#   2. Waits for Chofter CI's run of that commit to finish (at once, if it
+#      has), and downloads the builds it made (scripts/fetch-ci-builds.sh:
+#      on the build machine's network). The builds have to be of that
+#      commit, so they're the version being released.
 #   3. Signs and notarizes the macOS builds (scripts/notarize-mac.sh).
 #   4. Packs each build as agent-graph-<target>.tar.gz and uploads it to
 #      $RELEASE_BUCKET, in releases/<version>/mac or releases/<version>/linux,
@@ -76,7 +78,7 @@ LINUX_TARGETS=(aarch64-unknown-linux-musl x86_64-unknown-linux-musl)
 
 case "${1:-}" in
   -h | --help | "")
-    sed -n '3,38p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'
     [ -n "${1:-}" ] && exit 0 || exit 1
     ;;
 esac
@@ -169,11 +171,9 @@ else
   step "1. Version: $current → $VERSION"
   # The package's version: the first `version =` line, [package]'s.
   sed -i '' "1,/^version = /s/^version = \".*\"$/version = \"$VERSION\"/" Cargo.toml
-  # Cargo.lock records it; so does the viewer's WebAssembly, which CI
-  # checks is built from what's committed.
+  # Cargo.lock records it too. Nothing's built here: CI builds it (step 2).
   cargo metadata --format-version 1 >/dev/null
-  npm --prefix site run build-wasm
-  git add Cargo.toml Cargo.lock site/public/viewer
+  git add Cargo.toml Cargo.lock
   git commit --quiet -m "Release $VERSION"
   git push --quiet origin main
   echo "✓ Committed and pushed $(git rev-parse --short HEAD)"

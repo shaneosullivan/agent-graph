@@ -21,8 +21,8 @@
   ],
   "crates": [
     "adler2 v2.0.1",
-    "agent-graph v0.1.0",
-    "agent-graph-wasm v0.1.0",
+    "agent-graph",
+    "agent-graph-wasm",
     "base64 v0.23.1 alloc,default,simd-unsafe,std",
     "equivalent v1.0.2",
     "hashbrown v0.17.1",
