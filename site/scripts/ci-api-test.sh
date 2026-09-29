@@ -26,12 +26,25 @@ export FREE_TRIAL_DAYS="${FREE_TRIAL_DAYS:-7}"
 # An admin, who can see /admin (tests/accounts.test.mjs makes the account).
 export ADMIN_EMAILS="${ADMIN_EMAILS:-admin@agent-graph.test}"
 
-npx next start -p 3000 &
+# A cancelled run can leave its server running (on Windows, cancelling
+# doesn't stop it): stop any, under CI.
+node scripts/stop-stale-servers.mjs
+
+# A port nothing's using, never a fixed one (3000 is too common), so
+# nothing else can answer the tests in its place.
+port="${PORT:-$(node -e 'const s = require("net").createServer().listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); })')}"
+
+# next itself, not through npx, so stopping it stops the server.
+node node_modules/next/dist/bin/next start -p "$port" &
 server=$!
 trap 'kill $server 2>/dev/null' EXIT
 
 tries=0
-until curl -sf -o /dev/null http://localhost:3000; do
+until curl -sf -o /dev/null "http://localhost:$port"; do
+  if ! kill -0 "$server" 2>/dev/null; then
+    echo "The site stopped before it answered (is port $port in use?)." >&2
+    exit 1
+  fi
   tries=$((tries + 1))
   if [ "$tries" -ge 60 ]; then
     echo "The site didn't start within a minute." >&2
@@ -40,5 +53,5 @@ until curl -sf -o /dev/null http://localhost:3000; do
   sleep 1
 done
 
-BASE_URL=http://localhost:3000 npm run test:api
+BASE_URL="http://localhost:$port" npm run test:api
 npm run test:store

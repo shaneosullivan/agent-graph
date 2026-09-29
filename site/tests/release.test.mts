@@ -45,6 +45,13 @@ test("release.json is a release, or the one before the first", () => {
   }
 });
 
+// The install script is for macOS and Linux (it says so, and stops, on
+// Windows), and Windows' tar takes C: for a host.
+const unix = {
+  skip:
+    process.platform === "win32" && "the install script is for macOS and Linux",
+};
+
 /** A release of a stand-in program, archived as release.sh archives one. */
 function fakeRelease(dir: string, sha256?: string) {
   const program = join(dir, "agent-graph");
@@ -63,7 +70,7 @@ function fakeRelease(dir: string, sha256?: string) {
   };
 }
 
-test("the install script installs the release for this machine", () => {
+test("the install script installs the release for this machine", unix, () => {
   const dir = mkdtempSync(join(tmpdir(), "ag-release-"));
   const into = join(dir, "bin");
   const run = spawnSync("sh", ["-c", installScript(fakeRelease(dir))], {
@@ -81,21 +88,28 @@ test("the install script installs the release for this machine", () => {
   );
 });
 
-test("the install script refuses a download that isn't the release's", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ag-release-"));
-  const into = join(dir, "bin");
-  const run = spawnSync(
-    "sh",
-    ["-c", installScript(fakeRelease(dir, "0".repeat(64)))],
-    {
-      encoding: "utf8",
-      env: {...process.env, AGENT_GRAPH_INSTALL_DIR: into},
-    },
-  );
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /SHA-256 isn't the release's: not installed/);
-  assert.equal(spawnSync("test", ["-e", join(into, "agent-graph")]).status, 1);
-});
+test(
+  "the install script refuses a download that isn't the release's",
+  unix,
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), "ag-release-"));
+    const into = join(dir, "bin");
+    const run = spawnSync(
+      "sh",
+      ["-c", installScript(fakeRelease(dir, "0".repeat(64)))],
+      {
+        encoding: "utf8",
+        env: {...process.env, AGENT_GRAPH_INSTALL_DIR: into},
+      },
+    );
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /SHA-256 isn't the release's: not installed/);
+    assert.equal(
+      spawnSync("test", ["-e", join(into, "agent-graph")]).status,
+      1,
+    );
+  },
+);
 
 test("a quote in a URL can't break out of the script", () => {
   const script = installScript({

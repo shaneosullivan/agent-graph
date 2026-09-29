@@ -2,7 +2,7 @@
 # The slow checks: the site's production build, then its API and store tests
 # against the built site and the Firestore emulator, then a build of every
 # release target (scripts/build-local.sh), handed out on Chofter CI (below).
-# Needs Java 21 and ports 3000 and 8080; the Firebase CLI is used from PATH,
+# Needs Java 21 and port 8080 (the site takes a free port); the Firebase CLI is used from PATH,
 # or fetched with npx.
 # Run scripts/ci-setup.sh first.
 set -euo pipefail
