@@ -1229,3 +1229,71 @@ test("R56: a refresh is one request: the graph now, with its tree's timeline", a
   assert.deepEqual(graphs().slice(2), ["/api/graph?root=x%3Ab"]);
   assert.equal(banner.hidden, true, banner.textContent);
 });
+
+test("the list groups sessions by folder, which fold away", async t => {
+  const a = node("x:a", {cwd: "/w/app", title: "Fix the login bug"});
+  const b = node("x:b", {cwd: "/w/lib", title: "Tidy up"});
+  const c = node("x:c", {
+    cwd: "/w/app",
+    title: "Write the tests",
+    children: ["x:c/d"],
+  });
+  const d = node("x:c/d", {
+    parent: "x:c",
+    state: "input_required",
+    attention: "May I?",
+  });
+  const e = node("x:e", {cwd: "/other/app", title: "Elsewhere"});
+  const window = loadViewer(
+    t,
+    {graph: async () => graph([a, b, c, d, e])},
+    {hash: "#x:a"},
+  );
+  const v = window.__viewer;
+  const doc = window.document;
+  await until(() => doc.querySelectorAll("#session-list .session").length);
+
+  const heads = () => [...doc.querySelectorAll("#session-list .folder-head")];
+  // Each folder where its newest session is; two ending alike say more.
+  assert.deepEqual(
+    heads().map(f => [
+      f.querySelector(".folder-name").textContent,
+      f.querySelector(".folder-count").textContent,
+      f.title,
+    ]),
+    [
+      ["w/app", "2", "/w/app"],
+      ["lib", "1", "/w/lib"],
+      ["other/app", "1", "/other/app"],
+    ],
+  );
+  const inApp = () =>
+    [...heads()[0].parentElement.querySelectorAll(".session")].map(s => [
+      s.querySelector(".s-name").textContent,
+      s.querySelector(".s-title").title,
+    ]);
+  // Named without the folder, and the whole name on hover.
+  assert.deepEqual(inApp(), [
+    ["Fix the login bug", "Fix the login bug"],
+    ["Write the tests", "Write the tests"],
+  ]);
+
+  // Folded away: its sessions go, but one needing you still shows.
+  heads()[0].click();
+  assert.equal(heads()[0].getAttribute("aria-expanded"), "false");
+  assert.deepEqual(inApp(), []);
+  assert.ok(heads()[0].querySelector(".folder-attention"));
+  assert.deepEqual(
+    JSON.parse(window.localStorage.getItem("agentGraphCollapsedFolders")),
+    ["/w/app"],
+    "remembered",
+  );
+  assert.equal(doc.querySelectorAll("#session-list .session").length, 2);
+
+  // Stepping to the session that needs you opens its folder.
+  doc.querySelectorAll("#attention .icon-btn")[1].click();
+  assert.equal(v.S.attentionAt, "x:c");
+  assert.equal(heads()[0].getAttribute("aria-expanded"), "true");
+  assert.equal(inApp().length, 2);
+  assert.ok(!heads()[0].querySelector(".folder-attention"));
+});

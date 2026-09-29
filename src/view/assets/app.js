@@ -26,6 +26,7 @@ const S = {
   showAll: false,
   showDone: savedShowDone(), // show finished sessions and agents
   hiddenApps: savedHiddenApps(), // apps whose sessions the list leaves out (see `renderAppFilter`)
+  collapsed: savedCollapsed(), // folders whose sessions the list folds away (see `folderGroups`)
   connected: false,
   info: null,
   cache: new Map(), // event id -> graph at that stop, least recently shown first (a new map on each refresh)
@@ -651,6 +652,26 @@ function appFilterOn() {
   return S.hiddenApps.size > 0 && appsInUse().length > 1;
 }
 
+function savedCollapsed() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('agentGraphCollapsedFolders') || '[]');
+    return new Set(Array.isArray(saved) ? saved.filter((f) => typeof f === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Folds folder `cwd`'s sessions away in the list, or opens them again. */
+function toggleFolder(cwd) {
+  if (!S.collapsed.delete(cwd)) S.collapsed.add(cwd);
+  try {
+    localStorage.setItem('agentGraphCollapsedFolders', JSON.stringify([...S.collapsed]));
+  } catch {
+    // Not remembered, then; it still applies now.
+  }
+  renderSessions();
+}
+
 function savedHiddenApps() {
   try {
     const saved = JSON.parse(localStorage.getItem('agentGraphHiddenApps') || '[]');
@@ -793,9 +814,37 @@ function renderSessions() {
   renderAttention();
 }
 
-/** The listed sessions that need you, in the list's order. */
+/**
+ * The listed sessions by the folder they ran in (`cwd`, '' where none was
+ * recorded): each folder where its newest session would be, with its
+ * sessions newest first, and named by its last part, or its last two where
+ * another listed folder ends the same.
+ */
+function folderGroups() {
+  const groups = new Map();
+  for (const id of visibleRoots()) {
+    const cwd = (S.live.sessions[id] && S.live.sessions[id].cwd) || '';
+    if (!groups.has(cwd)) groups.set(cwd, []);
+    groups.get(cwd).push(id);
+  }
+  const parts = (cwd) => cwd.split(/[\\/]/).filter(Boolean);
+  const last = new Map();
+  for (const cwd of groups.keys()) {
+    const name = parts(cwd).pop() || '';
+    last.set(name, (last.get(name) || 0) + 1);
+  }
+  return [...groups].map(([cwd, ids]) => {
+    const p = parts(cwd);
+    const name = !cwd ? 'No folder' : last.get(p[p.length - 1]) > 1 ? p.slice(-2).join('/') : p[p.length - 1];
+    return { cwd, name, ids };
+  });
+}
+
+/** The listed sessions that need you, in the list's order, folded away or not. */
 function attentionIds() {
-  return visibleRoots().filter((id) => S.live.sessions[id] && S.live.sessions[id].needs_you);
+  return folderGroups()
+    .flatMap((g) => g.ids)
+    .filter((id) => S.live.sessions[id] && S.live.sessions[id].needs_you);
 }
 
 /**
@@ -837,6 +886,9 @@ function stepAttention(dir) {
   let at = ids.indexOf(S.attentionAt);
   at = at < 0 ? (dir > 0 ? 0 : ids.length - 1) : (at + dir + ids.length) % ids.length;
   S.attentionAt = ids[at];
+  // Its folder's opened, if it's folded away.
+  const cwd = S.live.sessions[ids[at]].cwd || '';
+  if (S.collapsed.has(cwd)) toggleFolder(cwd);
   renderSessions();
   const item = [...document.querySelectorAll('#session-list .session')].find((e) => e.dataset.id === ids[at]);
   if (!item) return;
@@ -860,50 +912,96 @@ function svgIcon(d) {
   return svg;
 }
 
+/**
+ * The list: a heading for each folder, which folds its sessions away or
+ * opens them again, and its sessions under it, named without the folder
+ * (see `listName`).
+ */
 function sessionItems() {
   if (!S.live) return [];
-  const roots = visibleRoots();
-  if (!roots.length) {
+  const groups = folderGroups();
+  if (!groups.length) {
     const count = S.live.roots.length;
     if (count && appFilterOn()) return [h('li', { class: 'empty-note' }, 'No sessions to show from the apps chosen.')];
     const what = S.showDone ? 'older session' : 'older or completed session';
     return [h('li', { class: 'empty-note' }, count ? `${plural(count, what)} hidden.` : 'No sessions yet.')];
   }
-  return roots.map((id) => {
-    // What's going on in the session's tree, worked out where the graph is.
-    const root = S.live.sessions[id];
-    const { agents, needs_you: needsYou, deadlocked, stuck, busy } = root;
-    const dotState = needsYou ? 'input_required' : busy && root.state === 'idle' ? 'working' : root.state;
-    const done = root.tasks - root.open_tasks;
-    const meta = [root.provider, agents ? plural(agents, 'agent') : null, root.tasks ? `tasks ${done}/${root.tasks}` : null]
-      .filter(Boolean)
-      .join(' · ');
+  return groups.map(({ cwd, name, ids }) => {
+    const open = !S.collapsed.has(cwd);
+    const needing = ids.filter((id) => S.live.sessions[id].needs_you).length;
     return h(
       'li',
-      null,
+      { class: 'folder' },
       h(
         'button',
         {
-          // `spotlight`: the one the attention counter stepped to (see `stepAttention`).
-          class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}${needsYou && id === S.attentionAt ? ' spotlight' : ''}`,
-          'data-id': id,
-          'aria-current': id === S.root ? 'true' : null,
-          onclick: () => selectRoot(id),
+          class: 'folder-head',
+          'data-id': cwd,
+          'aria-expanded': String(open),
+          title: cwd || 'Sessions with no folder recorded',
+          onclick: () => toggleFolder(cwd),
         },
-        h('span', { class: `dot ${dotState}` }),
-        h('span', { class: 's-title', title: root.cwd || id }, appIcon(root.provider), h('span', { class: 's-name' }, nodeName(root))),
-        h('span', { class: 's-when' }, ago(root.last_event_at)),
-        needsYou
-          ? h('span', { class: 's-sub attention' }, `Needs you: ${needsYou.attention || nodeName(needsYou)}`)
-          : deadlocked
-            ? h('span', { class: 's-sub problem' }, 'Deadlocked: waiting on a session that waits on it')
-            : stuck
-              ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck.id === id ? 'no activity' : nodeName(stuck)}`)
-              : h('span', { class: 's-sub' }, root.headline || STATE_LABEL[root.state]),
-        h('span', { class: 's-meta' }, meta),
+        svgIcon('M6 4l4 4-4 4'),
+        h('span', { class: 'folder-name' }, name),
+        // Folded away, a session in it that needs you still shows.
+        !open && needing
+          ? h('span', { class: 'folder-attention', title: needing === 1 ? 'A session needs you' : `${needing} sessions need you` })
+          : null,
+        h('span', { class: 'folder-count', 'aria-label': plural(ids.length, 'session') }, String(ids.length)),
       ),
+      open ? h('ul', { class: 'folder-sessions' }, ids.map(sessionItem)) : null,
     );
   });
+}
+
+/** A session in the list, under its folder: its name there, and its state. */
+function sessionItem(id) {
+  // What's going on in the session's tree, worked out where the graph is.
+  const root = S.live.sessions[id];
+  const { agents, needs_you: needsYou, deadlocked, stuck, busy } = root;
+  const dotState = needsYou ? 'input_required' : busy && root.state === 'idle' ? 'working' : root.state;
+  const done = root.tasks - root.open_tasks;
+  const meta = [root.provider, agents ? plural(agents, 'agent') : null, root.tasks ? `tasks ${done}/${root.tasks}` : null]
+    .filter(Boolean)
+    .join(' · ');
+  const name = listName(root);
+  return h(
+    'li',
+    null,
+    h(
+      'button',
+      {
+        // `spotlight`: the one the attention counter stepped to (see `stepAttention`).
+        class: `session${id === S.root ? ' selected' : ''}${needsYou ? ' needs-you' : ''}${needsYou && id === S.attentionAt ? ' spotlight' : ''}`,
+        'data-id': id,
+        'aria-current': id === S.root ? 'true' : null,
+        onclick: () => selectRoot(id),
+      },
+      h('span', { class: `dot ${dotState}` }),
+      // The whole name on hover, where the list has cut it short.
+      h('span', { class: 's-title', title: name }, appIcon(root.provider), h('span', { class: 's-name' }, name)),
+      h('span', { class: 's-when' }, ago(root.last_event_at)),
+      needsYou
+        ? h('span', { class: 's-sub attention' }, `Needs you: ${needsYou.attention || nodeName(needsYou)}`)
+        : deadlocked
+          ? h('span', { class: 's-sub problem' }, 'Deadlocked: waiting on a session that waits on it')
+          : stuck
+            ? h('span', { class: 's-sub problem' }, `Looks stuck: ${stuck.id === id ? 'no activity' : nodeName(stuck)}`)
+            : h('span', { class: 's-sub' }, root.headline || STATE_LABEL[root.state]),
+      h('span', { class: 's-meta' }, meta),
+    ),
+  );
+}
+
+/**
+ * A session's name in the list, under its folder's heading: `nodeName`
+ * without the folder it puts first. One with no title, and nothing else to
+ * go by, is named by its id, as its folder's already said.
+ */
+function listName(node) {
+  if (node.title) return node.title;
+  if (node.purpose || node.parent) return nodeName(node);
+  return `Session ${short(node.id)}`;
 }
 
 function renderMain() {
