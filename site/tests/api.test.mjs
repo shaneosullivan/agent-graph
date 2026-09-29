@@ -650,3 +650,18 @@ test(
     assert.equal((await content(log.id)).text, event(1) + event(2));
   },
 );
+
+test("the live build's version, never cached, and a service worker that isn't", async () => {
+  const res = await fetch(`${BASE}/version.json?t=${Date.now()}`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("cache-control") ?? "", /no-store/);
+  const {version} = await res.json();
+  assert.ok(typeof version === "string" && version.length > 0, version);
+
+  const sw = await fetch(`${BASE}/sw.js`);
+  assert.equal(sw.status, 200);
+  assert.match(sw.headers.get("cache-control") ?? "", /no-cache/);
+  const code = await sw.text();
+  // It caches nothing: no cache is ever opened or written to.
+  assert.doesNotMatch(code, /caches\.open|cache\.put|cache\.add/);
+});

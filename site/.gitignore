@@ -10,3 +10,4 @@ firestore-debug.log
 
 # Copied from ../docs/cli-help.json by scripts/copy-help.mjs
 /lib/cli-help.json
+/public/version.json

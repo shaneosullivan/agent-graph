@@ -10,7 +10,9 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: "Agent Graph",
     description:
       "A live, step-through view of your AI coding agents: which session started which agents, who's waiting on whom, and what needs you.",
+    id: "/",
     start_url: "/",
+    scope: "/",
     display: "standalone",
     background_color: "#f6f6f3",
     theme_color: "#f6f6f3",

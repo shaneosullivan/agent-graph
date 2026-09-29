@@ -3,6 +3,7 @@ import type {Metadata, Viewport} from "next";
 import {analyticsDisabled} from "@/lib/analytics-core";
 
 import {Analytics} from "./analytics";
+import {AppUpdates} from "./app-updates";
 
 const DESCRIPTION =
   "Share a live, step-through view of your AI coding agents: which session started which agents, who's waiting on whom, what's stuck, and what needs you.";
@@ -23,6 +24,8 @@ export const metadata: Metadata = {
     description: DESCRIPTION,
   },
   twitter: {card: "summary_large_image"},
+  // Installed on an iPhone or iPad's home screen, it opens as an app.
+  appleWebApp: {capable: true, title: "Agent Graph", statusBarStyle: "default"},
 };
 
 export const viewport: Viewport = {
@@ -40,6 +43,7 @@ export default function RootLayout({children}: {children: React.ReactNode}) {
     <html lang="en">
       <body>
         {children}
+        <AppUpdates />
         {analyticsDisabled() ? null : <Analytics />}
       </body>
     </html>

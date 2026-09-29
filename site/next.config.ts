@@ -1,6 +1,24 @@
+import {readFileSync} from "node:fs";
+
 import type {NextConfig} from "next";
 
+/**
+ * This build's id, from public/version.json (scripts/write-version.mjs, run
+ * before each build), compiled into its pages (lib/app-version.ts), so an
+ * open page can tell when the file names a newer one. None if it's not
+ * there: the pages then never check.
+ */
+function buildId(): string {
+  try {
+    const file = new URL("./public/version.json", import.meta.url);
+    return JSON.parse(readFileSync(file, "utf8")).version ?? "";
+  } catch {
+    return "";
+  }
+}
+
 const nextConfig: NextConfig = {
+  env: {NEXT_PUBLIC_BUILD_ID: buildId()},
   // Logs are only read and written through the API, never exposed directly.
   poweredByHeader: false,
   async headers() {
@@ -11,6 +29,20 @@ const nextConfig: NextConfig = {
           {key: "X-Content-Type-Options", value: "nosniff"},
           {key: "X-Frame-Options", value: "DENY"},
           {key: "Referrer-Policy", value: "no-referrer"},
+        ],
+      },
+      {
+        // The live build's id: never cached (app/app-updates.tsx).
+        source: "/version.json",
+        headers: [{key: "Cache-Control", value: "no-store, max-age=0"}],
+      },
+      {
+        // The service worker: always fetched fresh, so a new one's seen at
+        // once (public/sw.js).
+        source: "/sw.js",
+        headers: [
+          {key: "Cache-Control", value: "no-cache, no-store, must-revalidate"},
+          {key: "Content-Type", value: "application/javascript; charset=utf-8"},
         ],
       },
       {
