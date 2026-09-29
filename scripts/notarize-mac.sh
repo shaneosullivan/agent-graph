@@ -295,12 +295,17 @@ for target in "${TARGETS[@]}"; do
   fi
   echo "✓ Notarized (submission $id)"
 
-  # What Gatekeeper will make of a downloaded copy: it asks Apple for the
-  # ticket, as a Mac would the first time the copy runs.
-  if command -v syspolicy_check >/dev/null 2>&1; then
-    syspolicy_check distribution "$bin"
-    echo "✓ Ready for distribution"
+  # What Gatekeeper makes of it: it asks Apple for the ticket, as a Mac
+  # does the first time a downloaded copy runs. (Not syspolicy_check
+  # distribution, which wants a stapled ticket: a bare binary can't have
+  # one.)
+  assessment=$(spctl --assess -vv --type install "$bin" 2>&1) || true
+  if ! grep -q 'source=Notarized Developer ID' <<<"$assessment"; then
+    echo "$assessment" >&2
+    echo "ERROR: Gatekeeper doesn't see $name as notarized." >&2
+    exit 1
   fi
+  echo "✓ Gatekeeper: notarized Developer ID"
 done
 
 # =============================================================================
