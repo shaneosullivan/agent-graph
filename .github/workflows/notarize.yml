@@ -10,7 +10,8 @@
 #   APPLE_ID                     the Apple ID of the developer account
 #   APPLE_APP_SPECIFIC_PASSWORD  an app-specific password for it
 #                                (appleid.apple.com → Sign-In and Security)
-# and the CODESIGN_* secrets dist signs with (see README.md, Releasing).
+# and the CODESIGN_* secrets dist signs with (see README.md, Releasing). The
+# team is CODESIGN_IDENTITY's, in the parentheses that end it.
 
 name: Notarize
 
@@ -24,9 +25,20 @@ on:
 jobs:
   notarize:
     runs-on: macos-14
-    env:
-      TEAM_ID: TEAMID
     steps:
+      - name: Find the team
+        shell: bash
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        run: |
+          set -euo pipefail
+          team=$(sed -n 's/.*(\([A-Z0-9]*\))$/\1/p' <<<"$CODESIGN_IDENTITY")
+          if [ -z "$team" ]; then
+            echo "CODESIGN_IDENTITY doesn't end with a team, as 'Developer ID Application: Name (TEAMID)' does." >&2
+            exit 1
+          fi
+          echo "::add-mask::$team"
+          echo "TEAM_ID=$team" >> "$GITHUB_ENV"
       - name: Fetch the macOS builds
         uses: actions/download-artifact@v8
         with:
