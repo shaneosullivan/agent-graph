@@ -26,12 +26,23 @@ export FREE_TRIAL_DAYS="${FREE_TRIAL_DAYS:-7}"
 # An admin, who can see /admin (tests/accounts.test.mjs makes the account).
 export ADMIN_EMAILS="${ADMIN_EMAILS:-admin@agent-graph.test}"
 
-npx next start -p 3000 &
+# A free port, not a fixed one: the runner is shared, and if something else
+# already answers on the port, the tests would run against it, not this site.
+port="$(node -e 'const s=require("net").createServer();s.listen(0,()=>{console.log(s.address().port);s.close()})')"
+
+# Next's own bin, not `npx next`: $! is then the server itself, so the trap
+# stops it. Through npx it's a wrapper, and on Windows killing that leaves the
+# server running, holding its port after the run.
+node node_modules/next/dist/bin/next start -p "$port" &
 server=$!
 trap 'kill $server 2>/dev/null' EXIT
 
 tries=0
-until curl -sf -o /dev/null http://localhost:3000; do
+until curl -sf -o /dev/null "http://localhost:$port"; do
+  if ! kill -0 "$server" 2>/dev/null; then
+    echo "The site exited before it answered on port $port." >&2
+    exit 1
+  fi
   tries=$((tries + 1))
   if [ "$tries" -ge 60 ]; then
     echo "The site didn't start within a minute." >&2
@@ -40,5 +51,5 @@ until curl -sf -o /dev/null http://localhost:3000; do
   sleep 1
 done
 
-BASE_URL=http://localhost:3000 npm run test:api
+BASE_URL="http://localhost:$port" npm run test:api
 npm run test:store
