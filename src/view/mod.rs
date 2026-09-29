@@ -74,15 +74,33 @@ pub struct Options {
 pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
     let listeners = match bind(opts.port) {
         Ok(listeners) => listeners,
-        // The viewer's already running there: its link will do.
+        // A viewer's already running there. It's replaced, since it may be
+        // an older version; only a viewer of these events, which takes the
+        // key it recorded, is ever stopped (see `running`).
         Err(e) => {
-            let key = running::find(events_dir, opts.port).ok_or(e)?;
-            let url = link(opts.port, &key);
-            println!("Agent Graph viewer (already running): {url}");
-            if opts.open {
-                open_browser(&url);
+            let old = running::find(events_dir, opts.port).ok_or(e)?;
+            let Some(pid) = old.pid else {
+                // No process to stop in its record: its link will do.
+                let url = link(opts.port, &old.key);
+                println!("Agent Graph viewer (already running): {url}");
+                if opts.open {
+                    open_browser(&url);
+                }
+                return Ok(());
+            };
+            println!(
+                "Stopping the viewer already running on port {} (process {pid}), to start this one.",
+                opts.port
+            );
+            running::stop(pid, false)?;
+            match bind_when_free(opts.port) {
+                Ok(listeners) => listeners,
+                // Still there: made to stop, this time.
+                Err(_) => {
+                    running::stop(pid, true)?;
+                    bind_when_free(opts.port)?
+                }
             }
-            return Ok(());
         }
     };
     let port = listeners[0].local_addr().map_err(|e| e.to_string())?.port();
@@ -100,6 +118,19 @@ pub fn run(events_dir: &Path, opts: Options) -> Result<(), String> {
     }
     loop {
         thread::park();
+    }
+}
+
+/// `bind`, retried for a few seconds while the port's freed (by the viewer
+/// that was just stopped there).
+fn bind_when_free(port: u16) -> Result<Vec<TcpListener>, String> {
+    let start = std::time::Instant::now();
+    loop {
+        match bind(port) {
+            Ok(listeners) => return Ok(listeners),
+            Err(e) if start.elapsed() > Duration::from_secs(3) => return Err(e),
+            Err(_) => thread::sleep(Duration::from_millis(100)),
+        }
     }
 }
 

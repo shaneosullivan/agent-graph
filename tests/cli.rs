@@ -1517,3 +1517,97 @@ fn walkdir(dir: &Path) -> Vec<std::path::PathBuf> {
     }
     all
 }
+
+// ---------- view: a second viewer replaces the first ----------
+
+/// Starts `agent-graph view` on `port` for `home`, and waits for it to print
+/// its link. The child, and every line it printed.
+fn start_viewer(home: &Path, port: u16) -> (std::process::Child, Vec<String>) {
+    use std::io::{BufRead, BufReader};
+    let mut child = bin()
+        .args(["view", "--port", &port.to_string()])
+        .env("AGENT_GRAPH_HOME", home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = Vec::new();
+    for line in BufReader::new(child.stdout.take().unwrap()).lines() {
+        let line = line.unwrap();
+        let done = line.starts_with("Agent Graph viewer");
+        lines.push(line);
+        if done {
+            break;
+        }
+    }
+    (child, lines)
+}
+
+/// A port nothing's listening on.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+#[test]
+fn a_new_viewer_replaces_the_one_already_on_its_port() {
+    let home = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let (mut first, lines) = start_viewer(home.path(), port);
+    assert!(
+        lines.iter().any(|l| l.starts_with("Agent Graph viewer: ")),
+        "{lines:?}"
+    );
+    let first_link = lines.last().unwrap().clone();
+
+    // Another viewer on the port: it stops the first, and serves in its place.
+    let (mut second, lines) = start_viewer(home.path(), port);
+    assert!(
+        lines.iter().any(|l| l.starts_with(&format!(
+            "Stopping the viewer already running on port {port} (process {})",
+            first.id()
+        ))),
+        "{lines:?}"
+    );
+    let second_link = lines.last().unwrap().clone();
+    assert!(second_link.starts_with("Agent Graph viewer: "), "{lines:?}");
+    assert_ne!(second_link, first_link, "a new viewer, with its own key");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while first.try_wait().unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first viewer's still running"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // The second is the one on the port now.
+    assert!(second.try_wait().unwrap().is_none());
+    assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_err());
+    second.kill().unwrap();
+    second.wait().unwrap();
+}
+
+#[test]
+fn a_viewer_never_stops_another_program_on_its_port() {
+    let home = tempfile::tempdir().unwrap();
+    let other = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = other.local_addr().unwrap().port();
+    let out = bin()
+        .args(["view", "--port", &port.to_string()])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(&format!("can't listen on port {port}")),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Still listening.
+    other.set_nonblocking(true).unwrap();
+    let _ = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+}

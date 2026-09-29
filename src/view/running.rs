@@ -1,10 +1,11 @@
 //! A viewer that's already running, so starting another on its port can
-//! point to it instead of failing. Each run's key is random (see the module
-//! docs above), so the running viewer records its port and key in the data
-//! folder (`view-<port>.json`, readable only by its owner), and a second
-//! `view` reads it. It only trusts the record once the viewer on that port
-//! has accepted the key and says it reads the same events: a stale record
-//! (from a viewer that's gone) or another program on the port is refused.
+//! take its place (it may be an older version) instead of failing. Each
+//! run's key is random (see the module docs above), so the running viewer
+//! records its port, key and process in the data folder (`view-<port>.json`,
+//! readable only by its owner), and a second `view` reads it. It only
+//! trusts the record once the viewer on that port has accepted the key and
+//! says it reads the same events: a stale record (from a viewer that's
+//! gone) or another program on the port is refused, and so never stopped.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -49,9 +50,17 @@ pub fn record(events_dir: &Path, port: u16, key: &str) -> std::io::Result<()> {
     written
 }
 
-/// The key of the viewer running on `port` and reading `events_dir`, if
-/// there is one and it takes the key recorded for it.
-pub fn find(events_dir: &Path, port: u16) -> Option<String> {
+/// The viewer running on `port` and reading `events_dir`, as recorded.
+#[derive(Debug, PartialEq)]
+pub struct Running {
+    pub key: String,
+    /// Its process: the one that wrote the record, with the key it took.
+    pub pid: Option<u32>,
+}
+
+/// The viewer running on `port` and reading `events_dir`, if there is one
+/// and it takes the key recorded for it.
+pub fn find(events_dir: &Path, port: u16) -> Option<Running> {
     let text = std::fs::read_to_string(record_path(events_dir, port)).ok()?;
     let record: serde_json::Value = serde_json::from_str(&text).ok()?;
     let key = record.get("key")?.as_str()?;
@@ -59,7 +68,71 @@ pub fn find(events_dir: &Path, port: u16) -> Option<String> {
     if key.is_empty() || !key.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    (reads(port, key)? == events_dir.display().to_string()).then(|| key.to_string())
+    if reads(port, key)? != events_dir.display().to_string() {
+        return None;
+    }
+    // Keys are made fresh by each run, so the process on the port that took
+    // this one is the one that recorded it, with this pid.
+    let pid = record
+        .get("pid")
+        .and_then(|p| p.as_u64())
+        .and_then(|p| u32::try_from(p).ok())
+        .filter(|&p| p != 0 && p != std::process::id());
+    Some(Running {
+        key: key.to_string(),
+        pid,
+    })
+}
+
+/// Stops process `pid` (a viewer `find` found): asks it to on Unix, or,
+/// with `force`, makes it. Whether it's gone is for the caller to see, by
+/// its port coming free (a stopped process can linger until its parent
+/// collects it).
+pub fn stop(pid: u32, force: bool) -> Result<(), String> {
+    imp::stop(pid, force)
+}
+
+#[cfg(unix)]
+mod imp {
+    pub fn stop(pid: u32, force: bool) -> Result<(), String> {
+        let pid = libc::pid_t::try_from(pid).map_err(|_| format!("no process {pid}"))?;
+        let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+        // SAFETY: kill only sends a signal; pid is a positive process id.
+        if unsafe { libc::kill(pid, signal) } == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        // Gone already.
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        Err(format!("couldn't stop process {pid}: {err}"))
+    }
+}
+
+#[cfg(windows)]
+mod imp {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+
+    /// Windows has no asking: it's made to either way.
+    pub fn stop(pid: u32, _force: bool) -> Result<(), String> {
+        // SAFETY: the handle is checked, then closed.
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if handle.is_null() {
+                // Gone already (or not ours to stop: then its port stays taken).
+                return Ok(());
+            }
+            let stopped = TerminateProcess(handle, 1) != 0;
+            CloseHandle(handle);
+            if stopped {
+                Ok(())
+            } else {
+                Err(format!("couldn't stop process {pid}"))
+            }
+        }
+    }
 }
 
 /// Asks the viewer on `port` which events it reads, with `key`. `None` if
@@ -103,7 +176,14 @@ mod tests {
 
         assert_eq!(find(&events, port), None, "no record yet");
         record(&events, port, &key).unwrap();
-        assert_eq!(find(&events, port), Some(key.clone()));
+        // Its pid is this test's own, which is never one to stop.
+        assert_eq!(
+            find(&events, port),
+            Some(Running {
+                key: key.clone(),
+                pid: None
+            })
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

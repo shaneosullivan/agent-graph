@@ -186,7 +186,7 @@
       "summary": "Watch the graph live in your browser, with a timeline to step through",
       "description": [
         { "text": "Watch the graph live in your browser, and step back through its history." },
-        { "text": "Serves a web page on port 7777 (or --port) until you stop it with Ctrl+C, and prints its link (http://127.0.0.1:7777/?key=…), which carries a key made for this run: only someone with the link can use it, so other accounts on the machine agent-graph runs on can't. It's only reachable from that machine, and it refuses requests made by other websites. --open opens the link in your browser." },
+        { "text": "Serves a web page on port 7777 (or --port) until you stop it with Ctrl+C, and prints its link (http://127.0.0.1:7777/?key=…), which carries a key made for this run: only someone with the link can use it, so other accounts on the machine agent-graph runs on can't. It's only reachable from that machine, and it refuses requests made by other websites. --open opens the link in your browser. If a viewer is already running on the port (one from an older version, say), it's stopped and this one takes its place; anything else on the port is left alone." },
         { "heading": "The page has" },
         {
           "table": [
