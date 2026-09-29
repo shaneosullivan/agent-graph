@@ -27,13 +27,13 @@ It pushes no tag: a version tag starts dist's `release.yml`, which would try to 
 
 **Settings** (in `.env.local`; `.env.example` lists them): `RELEASE_BUCKET` (`gs://…`), `HOMEBREW_TAP` (`owner/homebrew-<name>`), optionally `GCLOUD_ACCOUNT`, and the notarization settings. gcloud must be logged in as an account that can write to the bucket, and gh as one that can push to the tap.
 
-**Installing it.** `brew install shaneosullivan/tap/agent-graph`, or on either platform `curl -fsSL https://agentgraph.chofter.com/install.sh | sh`. That script is made from `site/release.json` (`site/lib/release.ts`): it picks the build for the machine, checks its SHA-256, and puts it in `$AGENT_GRAPH_INSTALL_DIR`, `$XDG_BIN_HOME` or `~/.local/bin`.
+**Installing it.** With Homebrew, from the [Chofter tap](https://github.com/chofter/homebrew-tap), which Homebrew has to be told to trust first: `brew tap chofter/tap`, `brew trust chofter/tap`, `brew install chofter/tap/agent-graph`. Or on either platform `curl -fsSL https://agentgraph.chofter.com/install.sh | sh`. That script is made from `site/release.json` (`site/lib/release.ts`): it picks the build for the machine, checks its SHA-256, and puts it in `$AGENT_GRAPH_INSTALL_DIR`, `$XDG_BIN_HOME` or `~/.local/bin`.
 
 ## What people install with
 
 | Platform | Command | Where it comes from |
 |---|---|---|
-| macOS (also Linux) | `brew install shaneosullivan/tap/agent-graph` | The formula in [`shaneosullivan/homebrew-tap`](https://github.com/shaneosullivan/homebrew-tap), which each release updates |
+| macOS (also Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install chofter/tap/agent-graph` | The formula in [`chofter/homebrew-tap`](https://github.com/chofter/homebrew-tap), which each release updates |
 | macOS and Linux | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.sh \| sh` | The shell installer on the GitHub Release |
 | Windows | `winget install ShaneOSullivan.AgentGraph` | [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs), through a pull request each release opens |
 | Windows | `powershell -ExecutionPolicy Bypass -c "irm https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.ps1 \| iex"` | The PowerShell installer on the GitHub Release |
@@ -146,7 +146,7 @@ Scoop's shims and npm's global folder don't change between versions, so they nee
 ## One-time setup
 
 1. **Make this repository public.** A private repository's Releases can't be downloaded by anyone else, and every installer, the formula and the npm package download from them. (GitHub's ARM Linux runner, which `aarch64-unknown-linux-musl` builds on, may also not be available to a private repository.)
-2. **Create [`shaneosullivan/homebrew-tap`](https://github.com/new)**: an empty public repository. dist writes `Formula/agent-graph.rb` to it.
+2. **The tap, [`chofter/homebrew-tap`](https://github.com/chofter/homebrew-tap)**, already exists (it has Chofter's other casks). dist writes `Formula/agent-graph.rb` to it.
 3. **Fork [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs)** to your account.
 4. **Add the repository secrets** (Settings → Secrets and variables → Actions, or `gh secret set NAME`):
 

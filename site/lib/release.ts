@@ -31,6 +31,17 @@ export const SITE_URL = (
   process.env.NEXT_PUBLIC_SITE_URL || "https://agentgraph.chofter.com"
 ).replace(/\/+$/, "");
 
+/**
+ * Installing with Homebrew, from the Chofter tap (github.com/chofter/homebrew-tap,
+ * which scripts/release.sh updates). Homebrew loads nothing from a tap
+ * outside its own until it's trusted: hence the middle line.
+ */
+export const BREW_COMMAND = [
+  "brew tap chofter/tap",
+  "brew trust chofter/tap",
+  "brew install chofter/tap/agent-graph",
+].join("\n");
+
 /** The command that installs the latest release (GET /install.sh). */
 export const INSTALL_COMMAND = `curl -fsSL ${SITE_URL}/install.sh | sh`;
 

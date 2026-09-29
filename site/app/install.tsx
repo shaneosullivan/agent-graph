@@ -4,7 +4,7 @@ import {useState, useSyncExternalStore} from "react";
 
 import type {Target} from "@/lib/analytics-core";
 import {track} from "@/lib/analytics-client";
-import {INSTALL_COMMAND, latestRelease} from "@/lib/release";
+import {BREW_COMMAND, INSTALL_COMMAND, latestRelease} from "@/lib/release";
 
 type Os = "mac" | "linux" | "windows" | "npm";
 
@@ -24,7 +24,7 @@ const ways: Record<Os, Way> = {
   mac: release
     ? {
         label: "macOS",
-        install: "brew install shaneosullivan/tap/agent-graph",
+        install: BREW_COMMAND,
         or: {note: "Or, without Homebrew:", command: INSTALL_COMMAND},
         downloads: [
           {label: "Apple silicon", target: "aarch64-apple-darwin"},
@@ -38,7 +38,7 @@ const ways: Record<Os, Way> = {
         install: INSTALL_COMMAND,
         or: {
           note: "Or with Homebrew:",
-          command: "brew install shaneosullivan/tap/agent-graph",
+          command: BREW_COMMAND,
         },
         downloads: [
           {label: "x86_64", target: "x86_64-unknown-linux-musl"},

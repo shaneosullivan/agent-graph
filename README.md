@@ -19,11 +19,10 @@ Pick one:
 
 | | Command |
 |---|---|
-| macOS (Homebrew, also on Linux) | `brew install shaneosullivan/tap/agent-graph` |
-| macOS and Linux | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.sh \| sh` |
-| Windows | `winget install ShaneOSullivan.AgentGraph` |
-| Windows (PowerShell) | `powershell -ExecutionPolicy Bypass -c "irm https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.ps1 \| iex"` |
-| Anywhere with Node | `npm install -g agent-graph` |
+| macOS (Homebrew, also on Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install chofter/tap/agent-graph` |
+| macOS and Linux | `curl -fsSL https://agentgraph.chofter.com/install.sh \| sh` |
+| Windows | Coming soon |
+| Anywhere with Node (npm) | Coming soon |
 | From source (Rust stable) | `cargo install --path .` |
 
 Then:
