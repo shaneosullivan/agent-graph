@@ -8,8 +8,15 @@ import {test} from "node:test";
 process.env.AGENT_GRAPH_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString(
   "base64url",
 );
-const {decryptChunk, encryptChunk, metaTag, openLogId, sealLogId, storageId} =
-  await import("../lib/encryption.ts");
+const {
+  decryptChunk,
+  encryptChunk,
+  masterKeyReport,
+  metaTag,
+  openLogId,
+  sealLogId,
+  storageId,
+} = await import("../lib/encryption.ts");
 
 const LOG = "AbCdEf123456";
 const CHUNK = "000000000000000";
@@ -108,6 +115,11 @@ test("rejects a master key of the wrong size", () => {
     bad.stderr,
     /The value here is 9 characters, and decodes to 6 bytes\. Its fingerprint is [0-9a-f]{12}/,
   );
+  // And on a line of its own, where the error's message might be cut short.
+  assert.match(
+    bad.stderr,
+    /^AGENT_GRAPH_ENCRYPTION_KEY: the wrong size\. The value here is 9 characters/m,
+  );
   assert.doesNotMatch(bad.stderr, /too-short/, "never the value itself");
 });
 
@@ -138,6 +150,21 @@ test("a key with the variable's name pasted in says what's in it", () => {
     /\(Vercel environment: production\) is 70 characters, 1 of them not letters, digits, - or _ \(=\), and decodes to 19 bytes/,
   );
   assert.doesNotMatch(bad.stderr, new RegExp(key), "never the value itself");
+});
+
+test("the master key's report gives its fingerprint, never the key", () => {
+  const key = process.env.AGENT_GRAPH_ENCRYPTION_KEY!;
+  const fingerprint = createHash("sha256")
+    .update(key)
+    .digest("hex")
+    .slice(0, 12);
+  const report = masterKeyReport();
+  assert.match(
+    report,
+    /^AGENT_GRAPH_ENCRYPTION_KEY: OK\. The value here is 43 characters, and decodes to 32 bytes\./,
+  );
+  assert.ok(report.includes(`Its fingerprint is ${fingerprint}.`), report);
+  assert.ok(!report.includes(key), "never the key itself");
 });
 
 /** Runs `expr` against lib/encryption.ts under another master key; returns its JSON. */

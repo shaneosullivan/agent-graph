@@ -46,15 +46,16 @@ let master: Buffer | undefined;
  * key's (the same command on it, with the value in KEY). A fingerprint of a
  * random 32-byte key tells nothing about it.
  */
-function describeKey(value: string, decoded: Buffer): string {
+function describeKey(value: string, decoded: Buffer, withWhere = true): string {
   const others = [...value].filter(c => !/[A-Za-z0-9_-]/.test(c));
   const fingerprint = createHash("sha256")
     .update(value)
     .digest("hex")
     .slice(0, 12);
-  const where = process.env.VERCEL_ENV
-    ? ` (Vercel environment: ${process.env.VERCEL_ENV})`
-    : "";
+  const where =
+    withWhere && process.env.VERCEL_ENV
+      ? ` (Vercel environment: ${process.env.VERCEL_ENV})`
+      : "";
   return (
     `The value here${where} is ${value.length} characters` +
     (others.length
@@ -91,6 +92,38 @@ function describeChars(chars: Array<string>): string {
     .join(", ");
 }
 
+/**
+ * One line on the master key this deployment has, without showing it: its
+ * Vercel environment, its length, what isn't base64url in it, what it
+ * decodes to, and its fingerprint, to compare with the key meant for it.
+ * Logged wherever the key's checked (`logMasterKey`), since a key that's
+ * the wrong size is hard to track down otherwise.
+ */
+export function masterKeyReport(): string {
+  const value = process.env.AGENT_GRAPH_ENCRYPTION_KEY;
+  const where = process.env.VERCEL_ENV
+    ? ` (Vercel environment: ${process.env.VERCEL_ENV})`
+    : "";
+  if (!value) {
+    return `AGENT_GRAPH_ENCRYPTION_KEY${where}: not set.`;
+  }
+  const key = Buffer.from(value, "base64url");
+  return (
+    `AGENT_GRAPH_ENCRYPTION_KEY${where}: ` +
+    (key.length === KEY_BYTES ? "OK. " : "the wrong size. ") +
+    describeKey(value, key, false)
+  );
+}
+
+/**
+ * Logs `masterKeyReport`, on a line of its own (a thrown error's message may
+ * be cut short where it's shown): with `console.error` where the key's
+ * wrong, `console.info` otherwise.
+ */
+export function logMasterKey(log: (line: string) => void = console.info): void {
+  log(masterKeyReport());
+}
+
 function masterKey(): Buffer {
   if (master) {
     return master;
@@ -99,12 +132,14 @@ function masterKey(): Buffer {
   if (value) {
     const key = Buffer.from(value, "base64url");
     if (key.length !== KEY_BYTES) {
+      logMasterKey(console.error);
       throw new Error(
         `AGENT_GRAPH_ENCRYPTION_KEY must be 32 bytes, base64url-encoded. ${describeKey(value, key)}`,
       );
     }
     master = key;
   } else if (process.env.NODE_ENV === "production") {
+    logMasterKey(console.error);
     throw new Error("AGENT_GRAPH_ENCRYPTION_KEY must be set in production");
   } else {
     console.warn(

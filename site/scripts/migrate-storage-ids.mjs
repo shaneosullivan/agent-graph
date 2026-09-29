@@ -22,10 +22,14 @@ register("./resolve-ts.mjs", import.meta.url);
 
 const deleteOld = process.argv.includes("--delete-old");
 
+const {decryptChunk, logMasterKey, metaTag, storageId} =
+  await import("../lib/encryption.ts");
+
 if (
   !process.env.AGENT_GRAPH_ENCRYPTION_KEY &&
   !process.env.FIRESTORE_EMULATOR_HOST
 ) {
+  logMasterKey(console.error);
   console.error(
     "Set AGENT_GRAPH_ENCRYPTION_KEY to the site's key (and FIREBASE_SERVICE_ACCOUNT): " +
       "with any other key, the logs would be moved where the site can't find them.",
@@ -36,7 +40,6 @@ if (
 const {getApps} = await import("firebase-admin/app");
 const {FieldPath, FieldValue} = await import("firebase-admin/firestore");
 const {ID_PATTERN} = await import("../lib/config.ts");
-const {decryptChunk, metaTag, storageId} = await import("../lib/encryption.ts");
 const {firestore} = await import("../lib/firebase.ts");
 
 const db = firestore();
@@ -44,6 +47,7 @@ const logs = db.collection("logs");
 console.log(
   `Project: ${getApps()[0]?.options.projectId ?? "the environment's default"}`,
 );
+logMasterKey(console.log);
 
 /** A log's chunks, a page at a time (they can be 512 KB each). */
 async function* pages(log) {
@@ -247,6 +251,7 @@ async function keyWorks() {
     }
   }
   if (tried.length) {
+    logMasterKey(console.error);
     console.error(
       `No old log checked (${tried.map(id => `logs/${id}`).join(", ")}) decrypts with this ` +
         "AGENT_GRAPH_ENCRYPTION_KEY: either it isn't the site's key, or those logs are damaged. Nothing was changed.",
