@@ -201,6 +201,14 @@ body {
   margin-top: 8px;
   font-size: 13px;
 }
+.site .install-version {
+  color: var(--text);
+  font-weight: 600;
+}
+.site .install-soon {
+  margin: 0;
+  color: var(--muted);
+}
 .site .install-steps .command {
   margin: 6px 0 0;
   padding: 9px 12px;

@@ -2,6 +2,33 @@
 
 Agent Graph ships as a prebuilt binary for each platform, so nobody needs Rust to install it. [dist](https://axodotdev.github.io/cargo-dist/) builds the binaries on each version tag, signs and notarizes the macOS ones, and publishes them to each package manager.
 
+## The beta: macOS and Linux, with scripts/release.sh
+
+For now, releases are macOS and Linux only, and are cut from a Mac on the build machine's network, not by dist. Windows and npm are shown on the site as coming soon. Everything below this section is dist's release, for when all six targets ship.
+
+```bash
+scripts/release.sh 0.1.0-beta.1
+```
+
+It checks everything it needs first (a clean `main` that matches `origin/main`, the bucket, the tap, the notarization credentials), then:
+
+1. sets the version in `Cargo.toml` (with `Cargo.lock`, and the viewer's WebAssembly, which records it), commits it as "Release <version>" and pushes it;
+2. waits for Chofter CI to build that commit and downloads its builds (`scripts/fetch-ci-builds.sh`), checking each is that version;
+3. signs and notarizes the macOS builds (`scripts/notarize-mac.sh --bin …`);
+4. packs each build with the LICENSE as `agent-graph-<target>.tar.gz`, uploads it to `$RELEASE_BUCKET/releases/<version>/mac` or `…/linux`, and downloads it again from its public URL to check it;
+5. writes [`site/release.json`](../site/release.json) (the version, commit, and each archive's URL and SHA-256), and commits and pushes it. The site's download buttons and `/install.sh` read it, so they switch to the new release once Vercel has deployed that commit;
+6. writes `Formula/agent-graph.rb` to the tap (`$HOMEBREW_TAP`), for macOS and Linux, ARM and Intel, and pushes it.
+
+If it stops partway (notarization failing, say), fix the cause and run it again with the same version: the version's already committed, so it carries on from the builds.
+
+It pushes no tag: a version tag starts dist's `release.yml`, which would try to publish Windows, npm and winget too.
+
+**Downloads.** The archives are in the Firebase project's Storage bucket, which stays private. Each is uploaded with a Firebase Storage download token, so its URL (`https://firebasestorage.googleapis.com/v0/b/<bucket>/o/releases%2F…?alt=media&token=…`) can be downloaded by anyone who has it, and Storage's security rules don't apply to it. Those URLs are in `site/release.json` and the formula.
+
+**Settings** (in `.env.local`; `.env.example` lists them): `RELEASE_BUCKET` (`gs://…`), `HOMEBREW_TAP` (`owner/homebrew-<name>`), optionally `GCLOUD_ACCOUNT`, and the notarization settings. gcloud must be logged in as an account that can write to the bucket, and gh as one that can push to the tap.
+
+**Installing it.** `brew install shaneosullivan/tap/agent-graph`, or on either platform `curl -fsSL https://agentgraph.chofter.com/install.sh | sh`. That script is made from `site/release.json` (`site/lib/release.ts`): it picks the build for the machine, checks its SHA-256, and puts it in `$AGENT_GRAPH_INSTALL_DIR`, `$XDG_BIN_HOME` or `~/.local/bin`.
+
 ## What people install with
 
 | Platform | Command | Where it comes from |

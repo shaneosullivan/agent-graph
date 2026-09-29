@@ -4,68 +4,55 @@ import {useState, useSyncExternalStore} from "react";
 
 import type {Target} from "@/lib/analytics-core";
 import {track} from "@/lib/analytics-client";
+import {INSTALL_COMMAND, latestRelease} from "@/lib/release";
 
 type Os = "mac" | "linux" | "windows" | "npm";
 
-const RELEASES =
-  "https://github.com/shaneosullivan/agent-graph/releases/latest/download";
+const release = latestRelease();
 
-/**
- * A release's archive of the program for `target`, as dist names it: a
- * .zip for Windows, a .tar.xz for the rest.
- */
-const archive = (target: Target) =>
-  `${RELEASES}/agent-graph-${target}.${target.includes("windows") ? "zip" : "tar.xz"}`;
+type Way = {
+  label: string;
+  /** Not out yet: the tab says so, and nothing else. */
+  soon?: string;
+  install?: string;
+  or?: {note: string; command: string};
+  /** The program itself, for each processor: counted when clicked (/admin). */
+  downloads?: Array<{label: string; target: Target}>;
+};
 
-const ways: Record<
-  Os,
-  {
-    label: string;
-    install: string;
-    or?: {note: string; command: string};
-    /** The program itself, for each processor: counted when clicked (/admin). */
-    downloads?: Array<{label: string; target: Target}>;
-  }
-> = {
-  mac: {
-    label: "macOS",
-    install: "brew install shaneosullivan/tap/agent-graph",
-    or: {
-      note: "Or, without Homebrew:",
-      command: `curl --proto '=https' --tlsv1.2 -LsSf ${RELEASES}/agent-graph-installer.sh | sh`,
-    },
-    downloads: [
-      {label: "Apple silicon", target: "aarch64-apple-darwin"},
-      {label: "Intel", target: "x86_64-apple-darwin"},
-    ],
-  },
-  linux: {
-    label: "Linux",
-    install: `curl --proto '=https' --tlsv1.2 -LsSf ${RELEASES}/agent-graph-installer.sh | sh`,
-    or: {
-      note: "Or with Homebrew:",
-      command: "brew install shaneosullivan/tap/agent-graph",
-    },
-    downloads: [
-      {label: "x86_64", target: "x86_64-unknown-linux-musl"},
-      {label: "ARM64", target: "aarch64-unknown-linux-musl"},
-    ],
-  },
+const ways: Record<Os, Way> = {
+  mac: release
+    ? {
+        label: "macOS",
+        install: "brew install shaneosullivan/tap/agent-graph",
+        or: {note: "Or, without Homebrew:", command: INSTALL_COMMAND},
+        downloads: [
+          {label: "Apple silicon", target: "aarch64-apple-darwin"},
+          {label: "Intel", target: "x86_64-apple-darwin"},
+        ],
+      }
+    : {label: "macOS", soon: "The first release is coming soon."},
+  linux: release
+    ? {
+        label: "Linux",
+        install: INSTALL_COMMAND,
+        or: {
+          note: "Or with Homebrew:",
+          command: "brew install shaneosullivan/tap/agent-graph",
+        },
+        downloads: [
+          {label: "x86_64", target: "x86_64-unknown-linux-musl"},
+          {label: "ARM64", target: "aarch64-unknown-linux-musl"},
+        ],
+      }
+    : {label: "Linux", soon: "The first release is coming soon."},
   windows: {
     label: "Windows",
-    install: "winget install ShaneOSullivan.AgentGraph",
-    or: {
-      note: "Or in PowerShell:",
-      command: `powershell -ExecutionPolicy Bypass -c "irm ${RELEASES}/agent-graph-installer.ps1 | iex"`,
-    },
-    downloads: [
-      {label: "x64", target: "x86_64-pc-windows-msvc"},
-      {label: "ARM64", target: "aarch64-pc-windows-msvc"},
-    ],
+    soon: "Coming soon: agent-graph for Windows, with winget.",
   },
   npm: {
     label: "npm",
-    install: "npm install -g agent-graph",
+    soon: "Coming soon: agent-graph from npm (npm install -g agent-graph).",
   },
 };
 
@@ -109,42 +96,57 @@ export function Install() {
           </button>
         ))}
       </div>
-      <ol className="card-body install-steps">
-        <li>
-          Install <code>agent-graph</code>:
-          <code className="command">{way.install}</code>
-          {way.or && (
-            <>
-              <span className="install-or">{way.or.note}</span>
-              <code className="command">{way.or.command}</code>
-            </>
-          )}
-          {way.downloads && (
-            <>
-              <span className="install-or">
-                Or download the program itself, and put it on your PATH:
+      {way.soon ? (
+        <p className="card-body install-soon">{way.soon}</p>
+      ) : (
+        <ol className="card-body install-steps">
+          <li>
+            Install <code>agent-graph</code>
+            {release ? (
+              <span className="install-version">
+                {" "}
+                {release.version}
+                {release.version.includes("-") ? " (beta)" : ""}
               </span>
-              <span className="downloads">
-                {way.downloads.map(d => (
-                  <a
-                    key={d.target}
-                    className="button secondary download"
-                    href={archive(d.target)}
-                    onClick={() =>
-                      track({event: "download", target: d.target})
-                    }>
-                    {way.label} · {d.label}
-                  </a>
-                ))}
-              </span>
-            </>
-          )}
-        </li>
-        <li>
-          Start recording Claude Code sessions:
-          <code className="command">agent-graph install claude-code</code>
-        </li>
-      </ol>
+            ) : null}
+            :<code className="command">{way.install}</code>
+            {way.or && (
+              <>
+                <span className="install-or">{way.or.note}</span>
+                <code className="command">{way.or.command}</code>
+              </>
+            )}
+            {way.downloads && (
+              <>
+                <span className="install-or">
+                  Or download the program itself (unpack it, and put{" "}
+                  <code>agent-graph</code> on your PATH):
+                </span>
+                <span className="downloads">
+                  {way.downloads.map(d => {
+                    const file = release?.files[d.target];
+                    return file ? (
+                      <a
+                        key={d.target}
+                        className="button secondary download"
+                        href={file.url}
+                        onClick={() =>
+                          track({event: "download", target: d.target})
+                        }>
+                        {way.label} · {d.label}
+                      </a>
+                    ) : null;
+                  })}
+                </span>
+              </>
+            )}
+          </li>
+          <li>
+            Start recording Claude Code sessions:
+            <code className="command">agent-graph install claude-code</code>
+          </li>
+        </ol>
+      )}
     </section>
   );
 }

@@ -9,6 +9,10 @@
 # Usage:
 #   scripts/notarize-mac.sh              # build both, sign, notarize
 #   scripts/notarize-mac.sh --no-build   # use the builds already in target/
+#   scripts/notarize-mac.sh --bin aarch64-apple-darwin=path/to/agent-graph \
+#                           --bin x86_64-apple-darwin=path/to/agent-graph-x86_64
+#                                        # notarize these builds (say, CI's):
+#                                        # only the targets given, no build
 #
 # The notarized binaries go to target/notarized/<target>/agent-graph, and
 # each beside it as the .zip Apple was sent (agent-graph-<target>.zip, as
@@ -86,11 +90,40 @@ OUTPUT_DIR="$REPO_ROOT/target/notarized"
 TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 
 BUILD=1
-for arg in "$@"; do
+# Builds given with --bin, by target: TARGETS becomes theirs.
+GIVEN_TARGETS=()
+GIVEN_PATHS=()
+while [ $# -gt 0 ]; do
+  arg="$1"
+  shift
   case "$arg" in
     --no-build) BUILD=0 ;;
+    --bin | --bin=*)
+      if [ "$arg" = --bin ]; then
+        spec="${1:-}"
+        shift || true
+      else
+        spec="${arg#--bin=}"
+      fi
+      target="${spec%%=*}"
+      path="${spec#*=}"
+      case "$target" in
+        *-apple-darwin) ;;
+        *)
+          echo "--bin takes TARGET=PATH, for a macOS target: $spec" >&2
+          exit 1
+          ;;
+      esac
+      if [ "$target" = "$spec" ] || [ ! -f "$path" ]; then
+        echo "--bin $spec: no build at that path." >&2
+        exit 1
+      fi
+      GIVEN_TARGETS+=("$target")
+      GIVEN_PATHS+=("$(cd "$(dirname "$path")" && pwd)/$(basename "$path")")
+      BUILD=0
+      ;;
     -h | --help)
-      sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -99,6 +132,21 @@ for arg in "$@"; do
       ;;
   esac
 done
+if [ ${#GIVEN_TARGETS[@]} -gt 0 ]; then
+  TARGETS=("${GIVEN_TARGETS[@]}")
+fi
+
+# Where target $1's build is: given with --bin, or cargo's.
+built_path() {
+  local i
+  for i in "${!GIVEN_TARGETS[@]}"; do
+    if [ "${GIVEN_TARGETS[$i]}" = "$1" ]; then
+      echo "${GIVEN_PATHS[$i]}"
+      return
+    fi
+  done
+  echo "$REPO_ROOT/target/$1/dist/agent-graph"
+}
 
 cd "$REPO_ROOT"
 # cargo's own installs, and cargo itself when rustup doesn't put it on PATH.
@@ -196,7 +244,7 @@ rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
 for target in "${TARGETS[@]}"; do
-  built="$REPO_ROOT/target/$target/dist/agent-graph"
+  built="$(built_path "$target")"
   bin="$OUTPUT_DIR/$target/agent-graph"
   if [ ! -f "$built" ]; then
     echo "ERROR: $built isn't built. Run without --no-build." >&2
