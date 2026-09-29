@@ -10,6 +10,8 @@
 //!
 //! A malformed file fails the build, and so does an option the CLI uses but
 //! the file doesn't describe (the constant won't exist).
+//!
+//! For Windows, it also gives agent-graph.exe its icon (`windows_icon`).
 
 use std::env;
 use std::fmt::Write as _;
@@ -22,6 +24,7 @@ const SOURCE: &str = "docs/cli-help.json";
 const WIDTH: usize = 80;
 
 fn main() {
+    windows_icon();
     println!("cargo:rerun-if-changed={SOURCE}");
     let text = fs::read_to_string(SOURCE).unwrap_or_else(|e| panic!("reading {SOURCE}: {e}"));
     let help: Value =
@@ -85,6 +88,80 @@ fn main() {
 
     let dest = Path::new(&env::var("OUT_DIR").unwrap()).join("help_text.rs");
     fs::write(dest, out).unwrap();
+}
+
+/// The icon Explorer and the taskbar show for agent-graph.exe (made by
+/// scripts/make-icons.py).
+const ICON: &str = "assets/windows/agent-graph.ico";
+
+/// Gives agent-graph.exe its icon, built for Windows: the icon, as a
+/// compiled resource file (`.res`), which the linker takes as it is (MSVC's
+/// link.exe, or lld-link cross-compiling), so no resource compiler is
+/// needed.
+fn windows_icon() {
+    println!("cargo:rerun-if-changed={ICON}");
+    let target = |key: &str| env::var(key).unwrap_or_default();
+    if target("CARGO_CFG_TARGET_OS") != "windows" || target("CARGO_CFG_TARGET_ENV") != "msvc" {
+        return;
+    }
+    let ico = fs::read(ICON).unwrap_or_else(|e| panic!("reading {ICON}: {e}"));
+    let res = Path::new(&env::var("OUT_DIR").unwrap()).join("agent-graph.res");
+    fs::write(&res, icon_resources(&ico)).unwrap();
+    println!("cargo:rustc-link-arg-bins={}", res.display());
+}
+
+/// An `.ico` file's images as a resource file: each an `RT_ICON`, and a
+/// `RT_GROUP_ICON` listing them, which Windows shows as the program's icon
+/// (the first group is the one). The layout's Microsoft's: "Resource File
+/// Formats" and "ICONDIR".
+fn icon_resources(ico: &[u8]) -> Vec<u8> {
+    const RT_ICON: u16 = 3;
+    const RT_GROUP_ICON: u16 = 14;
+    let u16_at = |at: usize| u16::from_le_bytes([ico[at], ico[at + 1]]);
+    let u32_at = |at: usize| u32::from_le_bytes(ico[at..at + 4].try_into().unwrap());
+    assert!(
+        ico.len() >= 6 && u16_at(0) == 0 && u16_at(2) == 1,
+        "{ICON} isn't an icon file"
+    );
+    let count = u16_at(4);
+
+    let mut res = Vec::new();
+    // A resource file starts with an empty entry, which says what it is.
+    resource(&mut res, 0, 0, 0, &[]);
+    // The group: ICONDIR's header, then an entry per image, naming its
+    // resource by id rather than giving its place in the file.
+    let mut group = ico[..6].to_vec();
+    for i in 0..count {
+        let entry = 6 + usize::from(i) * 16;
+        let (size, offset) = (u32_at(entry + 8) as usize, u32_at(entry + 12) as usize);
+        let image = ico
+            .get(offset..offset + size)
+            .unwrap_or_else(|| panic!("{ICON}: image {i} is cut short"));
+        resource(&mut res, RT_ICON, i + 1, 0x1010, image);
+        group.extend_from_slice(&ico[entry..entry + 12]);
+        group.extend_from_slice(&(i + 1).to_le_bytes());
+    }
+    resource(&mut res, RT_GROUP_ICON, 1, 0x1030, &group);
+    res
+}
+
+/// One resource: its header (type and name by number, US English), and its
+/// data, padded to four bytes.
+fn resource(res: &mut Vec<u8>, kind: u16, name: u16, flags: u16, data: &[u8]) {
+    let language: u16 = if kind == 0 { 0 } else { 0x0409 };
+    res.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    res.extend_from_slice(&32u32.to_le_bytes()); // this header's size
+    res.extend_from_slice(&[0xFF, 0xFF]);
+    res.extend_from_slice(&kind.to_le_bytes());
+    res.extend_from_slice(&[0xFF, 0xFF]);
+    res.extend_from_slice(&name.to_le_bytes());
+    res.extend_from_slice(&0u32.to_le_bytes()); // data version
+    res.extend_from_slice(&flags.to_le_bytes()); // moveable, pure, discardable
+    res.extend_from_slice(&language.to_le_bytes());
+    res.extend_from_slice(&0u32.to_le_bytes()); // version
+    res.extend_from_slice(&0u32.to_le_bytes()); // characteristics
+    res.extend_from_slice(data);
+    res.resize(res.len().next_multiple_of(4), 0);
 }
 
 fn constant(out: &mut String, name: &str, value: &str) {

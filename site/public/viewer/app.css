@@ -92,10 +92,7 @@ h1, h2, h3 { margin: 0; }
   border-bottom: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: -0.01em; }
-.brand svg { width: 22px; height: 22px; color: var(--line-strong); }
-.brand .b1 { fill: var(--accent); }
-.brand .b2 { fill: var(--cat-agent); }
-.brand .b3 { fill: var(--cat-task); }
+.brand img { width: 24px; height: 24px; }
 .mode { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
 .mode .pill {
   display: inline-flex; align-items: center; gap: 6px;

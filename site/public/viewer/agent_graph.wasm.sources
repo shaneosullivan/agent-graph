@@ -1,5 +1,6 @@
 {
   "files": [
+    "assets/windows/agent-graph.ico",
     "build.rs",
     "docs/cli-help.json",
     "src/adapter/claude_code.rs",
@@ -44,5 +45,5 @@
     "[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true",
     "[profile.wasm]\ninherits = \"release\"\nopt-level = \"z\"\nlto = true\npanic = \"abort\""
   ],
-  "hash": "84bc8916cfb568b51401ee4d0d8c83308f07d9b471f8c4eb899236f8d0cd6454"
+  "hash": "1865d38968dd93506ef90992737c7b1ded555b89cbca13036080ad588bdceaa7"
 }

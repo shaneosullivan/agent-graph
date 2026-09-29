@@ -100,19 +100,9 @@ body {
   color: var(--text);
   text-decoration: none;
 }
-.site .brand svg {
-  width: 24px;
-  height: 24px;
-  color: var(--line-strong);
-}
-.site .brand .b1 {
-  fill: var(--accent);
-}
-.site .brand .b2 {
-  fill: var(--agent);
-}
-.site .brand .b3 {
-  fill: var(--good);
+.site .brand img {
+  width: 28px;
+  height: 28px;
 }
 .site .top nav {
   display: flex;

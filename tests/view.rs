@@ -79,6 +79,10 @@ fn serves_the_page_with_a_strict_policy() {
     assert!(head.contains("Content-Security-Policy: default-src 'none'"));
     assert_eq!(get(port, "/app.js", &host).0, 200);
     assert_eq!(get(port, "/app.css", &host).0, 200);
+    let (status, head, body) = get(port, "/icon.svg", &host);
+    assert_eq!(status, 200);
+    assert!(head.contains("Content-Type: image/svg+xml"), "{head}");
+    assert!(body.starts_with("<svg"));
     assert_eq!(get(port, "/nope", &host).0, 404);
 }
 
@@ -366,7 +370,7 @@ fn nothing_private_is_served_without_the_viewers_key() {
     let host = format!("localhost:{port}");
     let wrong = "0".repeat(key.len());
 
-    for path in ["/", "/app.js", "/app.css"] {
+    for path in ["/", "/app.js", "/app.css", "/icon.svg"] {
         assert_eq!(get_with(port, path, &host, None).0, 200, "{path}");
     }
     for header in [

@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/images/logo-256-dark.png">
+    <img src="assets/images/logo-256.png" width="128" height="128" alt="Agent Graph's logo">
+  </picture>
+</p>
+
 # Agent Graph
 
 Records how AI coding sessions relate to each other: which session spawned which agents, who is waiting on whom, what's waiting on *you*, what looks stuck, what work is left, and what they sent each other. It works from provider hooks and writes an append-only log on your local machine. Nothing leaves it unless you choose to share.
