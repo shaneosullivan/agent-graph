@@ -9,6 +9,7 @@ import {
   type Standing,
   standing,
 } from "./billing";
+import {count} from "./analytics";
 import {safeEqual} from "./crypto";
 import {openLogId, sealLogId} from "./encryption";
 import {firestore} from "./firebase";
@@ -317,20 +318,24 @@ export async function removeComputer(
  */
 export async function recordLogin(account: Account): Promise<void> {
   const ref = users().doc(account.uid);
-  await firestore().runTransaction(async tx => {
+  const made = await firestore().runTransaction(async tx => {
     const now = Timestamp.now();
     const snap = await tx.get(ref);
     if (snap.exists) {
       tx.update(ref, {email: account.email, lastLoginAt: now});
-    } else {
-      tx.set(ref, {
-        email: account.email,
-        createdAt: now,
-        lastLoginAt: now,
-        status: "unpaid",
-      });
+      return false;
     }
+    tx.set(ref, {
+      email: account.email,
+      createdAt: now,
+      lastLoginAt: now,
+      status: "unpaid",
+    });
+    return true;
   });
+  if (made) {
+    await count("signup");
+  }
 }
 
 /** Makes log `id` the one /watch shows `uid`: they're sharing live, now. */

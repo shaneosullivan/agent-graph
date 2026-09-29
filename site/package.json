@@ -23,7 +23,7 @@
     "test:store": "node --experimental-strip-types --no-warnings --test --test-concurrency=1 tests/store.test.mjs tests/cleanup.test.mjs",
     "migrate:storage-ids": "node --experimental-strip-types --no-warnings scripts/migrate-storage-ids.mjs",
     "test:ci": "firebase emulators:exec --only firestore,auth --project demo-agent-graph 'sh scripts/ci-api-test.sh'",
-    "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/auth.test.mts tests/unlock.test.mts tests/viewer.test.mjs tests/wasm.test.mjs tests/site-source.test.mjs tests/trim.test.mts tests/cron.test.mts tests/billing.test.mts"
+    "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/auth.test.mts tests/unlock.test.mts tests/viewer.test.mjs tests/wasm.test.mjs tests/site-source.test.mjs tests/trim.test.mts tests/cron.test.mts tests/billing.test.mts tests/analytics.test.mts"
   },
   "dependencies": {
     "firebase": "12.19.0",

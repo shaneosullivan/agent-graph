@@ -1,4 +1,5 @@
 import {accountOfRequest, setWatchLog, standingOf} from "@/lib/accounts";
+import {count} from "@/lib/analytics";
 import {mustSubscribe, standingReply} from "@/lib/billing";
 import {ID_PATTERN, siteUrl} from "@/lib/config";
 import {safeEqual, writeToken} from "@/lib/crypto";
@@ -49,6 +50,8 @@ export async function POST(
   }
   await setUntil(id, standing.until);
   await setWatchLog(account.uid, id);
+  // A live share, carried on with (lib/analytics-core.ts).
+  await count("watch");
   return Response.json(
     {url: `${siteUrl(req)}/watch`, ...standingReply(standing)},
     {headers: {"Cache-Control": "no-store"}},

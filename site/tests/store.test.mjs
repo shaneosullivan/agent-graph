@@ -1035,3 +1035,42 @@ test(
     );
   },
 );
+
+// /admin's live shares now (lib/analytics.ts): each says when events last
+// came, to the minute, and an append writes it at most once a minute.
+test(
+  "a live share says when events last came, to the minute",
+  {skip, timeout: 60_000},
+  async () => {
+    const store = await import("../lib/store.ts");
+    const {activeWatches} = await import("../lib/analytics.ts");
+    const {Timestamp} = await import("firebase-admin/firestore");
+    const lastAt = async id =>
+      (await copyOf(id)).get("lastAt")?.toMillis() ?? null;
+
+    const anon = newId();
+    await store.createLog(anon, {source: "paste"}, "A\n");
+    await store.appendChunk(anon, 2, "B\n");
+    assert.equal(await lastAt(anon), null, "only an account's live share");
+
+    const id = newId();
+    await store.createLog(id, {source: "watch", owner: "someone"}, "A\n");
+    const made = await lastAt(id);
+    assert.ok(made && Date.now() - made < 60_000);
+    await store.appendChunk(id, 2, "B\n");
+    assert.equal(await lastAt(id), made, "not again within the minute");
+
+    // Quiet for ten minutes: not active.
+    const before = await activeWatches();
+    await (
+      await copyOf(id)
+    ).ref.update({
+      lastAt: Timestamp.fromMillis(Date.now() - 10 * 60_000),
+    });
+    assert.equal(await activeWatches(), before - 1);
+    // Events again: active, and it says so.
+    await store.appendChunk(id, 4, "C\n");
+    assert.ok(Date.now() - (await lastAt(id)) < 60_000);
+    assert.equal(await activeWatches(), before);
+  },
+);

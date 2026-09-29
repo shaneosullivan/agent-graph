@@ -20,7 +20,7 @@ import {firestore} from "./firebase";
 /**
  * How logs are kept in Firestore:
  *
- *   logs/{sid}                 { source, pw?, owner?, until?, createdAt, mac }
+ *   logs/{sid}                 { source, pw?, owner?, until?, lastAt?, createdAt, mac }
  *   logs/{sid}/chunks/{offset} { e: <encrypted JSON Lines, bytes>, n: <its length>, end: <offset + n>, t: <when written> }
  *   unlock-attempts/{bucket}   { n, since, at, expireAt }  (password guesses, and scrypt runs)
  *
@@ -49,7 +49,9 @@ import {firestore} from "./firebase";
  *
  * An account's live share has `until`, when appends to it stop (`Unpaid`),
  * unless the account starts it again first (`setUntil`; lib/billing.ts).
- * It isn't in `mac`: it changes, and only says when to stop.
+ * It isn't in `mac`: it changes, and only says when to stop. It has
+ * `lastAt` too, when events last came, to the minute (see `appendChunk`):
+ * /admin counts the live shares active now by it (lib/analytics.ts).
  */
 
 export type Meta = {
@@ -93,6 +95,7 @@ export async function createLog(
     ...(meta.pw ? {pw: meta.pw} : {}),
     ...(meta.owner ? {owner: meta.owner} : {}),
     ...(until !== null ? {until: Timestamp.fromMillis(until)} : {}),
+    ...(meta.owner ? {lastAt: Timestamp.now()} : {}),
     createdAt: Timestamp.now(),
     mac: metaTag(id, meta),
   });
@@ -140,8 +143,13 @@ export async function setUntil(
 ): Promise<void> {
   await logDoc(id).update({
     until: until === null ? FieldValue.delete() : Timestamp.fromMillis(until),
+    // Carried on with: active again.
+    lastAt: Timestamp.now(),
   });
 }
+
+/** How often, at most, a live share's `lastAt` is brought up to date. */
+const LAST_AT_EVERY_MS = 60 * 1000;
 
 /**
  * Whether log `id` is there to add to: stored, and not being deleted
@@ -214,6 +222,16 @@ export async function appendChunk(
       if (until && until.toMillis() < Date.now()) {
         throw new Unpaid(id);
       }
+      // A live share's when events last came, to the minute: a write only
+      // once a minute, not with every chunk. (Written below, as a
+      // transaction reads everything before it writes.)
+      const lastAt = found?.get("lastAt") as Timestamp | undefined;
+      const touch =
+        found &&
+        found.get("owner") &&
+        (!lastAt || Date.now() - lastAt.toMillis() > LAST_AT_EVERY_MS)
+          ? found.ref
+          : null;
       // (One still stored as it was before storage ids has chunks from
       // before that aren't here to follow on from.)
       if (found) {
@@ -240,6 +258,9 @@ export async function appendChunk(
       }
       // When it was written: a log with none newer than a week is deleted.
       tx.create(doc, chunkData(id, key, text));
+      if (touch) {
+        tx.update(touch, {lastAt: Timestamp.now()});
+      }
     });
   } catch (err) {
     // gRPC ALREADY_EXISTS

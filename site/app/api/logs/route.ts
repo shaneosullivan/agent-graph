@@ -8,6 +8,7 @@ import {
   siteUrl,
 } from "@/lib/config";
 import {accountOfRequest, setWatchLog, standingOf} from "@/lib/accounts";
+import {countEach} from "@/lib/analytics";
 import {mustSubscribe, standingReply} from "@/lib/billing";
 import {
   hashPassword,
@@ -126,6 +127,11 @@ export async function POST(req: Request): Promise<Response> {
     }
     if (account) {
       await setWatchLog(account.uid, id);
+      // A live share, new (lib/analytics-core.ts).
+      const counted = ["watch", "watch.new"] as const;
+      await countEach(counted, counted).catch(err =>
+        console.error("Counting a live share:", err),
+      );
     }
     const url = account ? `${siteUrl(req)}/watch` : `${siteUrl(req)}/l/${id}`;
     return Response.json(

@@ -41,6 +41,15 @@ A live share (`agent-graph watch-remote`) belongs to an account, and only its ow
   - Stripe's webhooks keep `users/{uid}` up to date (`/api/stripe/webhook` for live mode, `/api/stripe/webhook-test` for test mode, each recording only while the site's in its mode): `status`, `stripeCustomer`, and `subscription` (its Stripe status, its plan, and when its paid period ends).
 - **Pages:** `/login`, `/account` (who's logged in, their subscription, the latest share, the computers logged in, each with a way to log it out) and `/watch` (the latest share, in the viewer; logged out, it goes to `/login?next=/watch`).
 
+## Usage, and /admin
+
+`/admin` shows how the site's used, to the accounts in `ADMIN_EMAILS` whose email is verified (Google's are); to anyone else, there's no such page, and the header shows them no Admin link.
+
+- **What's counted** (`lib/analytics-core.ts`): page views and visitors, download buttons clicked per target, watch sessions (`agent-graph watch-remote` starting a new share, or carrying on with one), and sign-ups. Each is a counter per day and per month (UTC), in `analytics-days` and `analytics-months` (`lib/analytics.ts`). Each period's counts are spread over 8 documents, as Firestore takes about one write a second to one. Months are counted as things happen, so a day's counts can be deleted once it's a year old, and its month's are kept: `/api/cron/analytics` does that daily.
+- **How:** browsers report page views and downloads to `POST /api/analytics` (`lib/analytics-client.ts`, `app/analytics.tsx`). A visitor is counted without a cookie or any id: the browser remembers the day and month it was last counted in (`localStorage`), and is counted once in each. The site counts sign-ups and watch sessions itself.
+- **Live shares now:** a live share's log records when events last came (`lastAt`, written at most once a minute, in the transaction an append already makes). "Now" is the last 5 minutes, so a `watch-remote` with nothing new to send for longer isn't counted.
+- **`ANALYTICS_DISABLED=true`** counts nothing: the pages don't report, and the API and the site count nothing. `/admin` still shows what was counted before.
+
 ## The API
 
 All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundaries.
@@ -51,6 +60,8 @@ All bodies are raw JSON Lines, at most 512 KB per request, cut at line boundarie
 | `POST /api/logs/{id}/append?offset=<bytes so far>` | Appends a chunk. Requires `Authorization: Bearer <writeToken>`. Replies `204`, also for the same bytes again (a retry); `409` if other bytes are already stored at that offset.                                                                                   |
 | `POST /api/logs/{id}/trim?before=<offset>`         | Deletes the chunks that start before `offset`. Requires the `writeToken`. A live share keeps only its last two keyframes' worth: see `docs/design.md` §9.                                                                                                         |
 | `GET /api/logs/{id}/content?after=<chunk key>`     | Chunks after `after`, joined, up to about 2 MB, stopping at a gap (a trim). `X-First-Chunk` is where the text starts (its offset); `X-Last-Chunk` is the next cursor; `X-More: 1` means fetch again now. Protected logs need the unlock cookie.                   |
+| `POST /api/analytics`                              | A browser's report: `{event: "pageview", newDay?, newMonth?}` or `{event: "download", target}`, from the site's own pages. Replies `204`. See "Usage, and /admin".                                                                                                |
+| `GET /api/cron/analytics`                          | Deletes days' counts once they're a year old, keeping months' (`lib/analytics.ts`). Run daily by Vercel Cron; requires `Authorization: Bearer <CRON_SECRET>`. Replies `{deleted}`.                                                                                |
 | `GET /api/cron/cleanup`                            | Deletes logs that have had no event for a week (`lib/cleanup.ts`). Run daily by Vercel Cron; requires `Authorization: Bearer <CRON_SECRET>`. Replies `{checked, deleted, done}`.                                                                                  |
 | `POST /api/logs/{id}/unlock`                       | `{"password": "…"}`. Sets an HttpOnly cookie for this log.                                                                                                                                                                                                        |
 
@@ -162,7 +173,9 @@ npm run test:ci
    - `AGENT_GRAPH_ENCRYPTION_KEY`: another 32 random bytes, generated the same way. **Back it up and never change it**: without it, stored logs can't be decrypted.
    - `FIREBASE_SERVICE_ACCOUNT`: the service account's JSON key, on one line.
    - `NEXT_PUBLIC_SITE_URL`: `https://agentgraph.chofter.com`
-   - `CRON_SECRET`: 32+ random bytes, generated the same way. Vercel Cron sends it to `/api/cron/cleanup` (see `vercel.json`), the daily deletion of logs with no event for a week, which does nothing without it.
+   - `CRON_SECRET`: 32+ random bytes, generated the same way. Vercel Cron sends it to `/api/cron/cleanup` and `/api/cron/analytics` (see `vercel.json`): the daily deletion of logs with no event for a week, and of days' usage counts a year old. Neither does anything without it.
+   - `ADMIN_EMAILS`: the addresses, comma-separated, whose accounts can see `/admin` (their email must be verified, as Google's are).
+   - Optionally, `ANALYTICS_DISABLED=true`, to count nothing. It's `false` unless set.
    - `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`: the web app's settings, from step 3. They're public by design (they identify the project; what's secret stays on the server), and built into the pages: redeploy after changing them.
    - Optionally, to charge for sharing live: `STRIPE_MODE` (`test` or `production`), that mode's keys and prices (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_MONTHLY` and `STRIPE_PRICE_YEARLY`, or the same with `STRIPE_TEST_` in test mode), `STRIPE_MONTHLY_LABEL`, `STRIPE_YEARLY_LABEL`, and `FREE_TRIAL_DAYS`. Setting up Stripe for them, step by step: `STRIPE.md`.
 6. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.

@@ -636,3 +636,178 @@ test("subscribing needs a browser logged in, on the site's own pages", async () 
     assert.equal(out.status, 401, `${path}, logged out`);
   }
 });
+
+// ---------- usage, and /admin (lib/analytics.ts) ----------
+
+const COUNTING = process.env.ANALYTICS_DISABLED !== "true";
+
+/** Counter `name`'s count for today, or this month, added up over its shards. */
+async function counted(name, month = false) {
+  const period = new Date().toISOString().slice(0, month ? 7 : 10);
+  const collection = month ? "analytics-months" : "analytics-days";
+  let total = 0;
+  for (let shard = 0; shard < 8; shard++) {
+    const res = await fetch(
+      `http://${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents/${collection}/${period}-${shard}`,
+      {headers: {Authorization: "Bearer owner"}},
+    );
+    if (res.status === 404) continue;
+    const {fields} = await res.json();
+    const v = fields.c?.mapValue?.fields?.[name];
+    total += Number(v?.integerValue ?? 0);
+  }
+  return total;
+}
+
+const report = (body, headers = FROM_SITE) =>
+  fetch(`${BASE}/api/analytics`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json", ...headers},
+    body: JSON.stringify(body),
+  });
+
+test(
+  "browsers' reports are counted by day and month, from the site's own pages",
+  {skip: !COUNTING && "ANALYTICS_DISABLED is true"},
+  async () => {
+    const counter = "download:aarch64-pc-windows-msvc";
+    const [day, month] = [await counted(counter), await counted(counter, true)];
+    const download = {event: "download", target: "aarch64-pc-windows-msvc"};
+    assert.equal((await report(download, {})).status, 403, "from elsewhere");
+    assert.equal((await report(download)).status, 204);
+    assert.equal(await counted(counter), day + 1);
+    assert.equal(await counted(counter, true), month + 1);
+    // Anything else is taken, and counts nothing.
+    assert.equal((await report({event: "download", target: "x"})).status, 204);
+    assert.equal(await counted(counter), day + 1);
+
+    const views = await counted("pageview");
+    assert.equal((await report({event: "pageview", newDay: true})).status, 204);
+    assert.ok((await counted("pageview")) >= views + 1);
+  },
+);
+
+test(
+  "sign-ups and live shares are counted as they happen",
+  {skip: !COUNTING && "ANALYTICS_DISABLED is true"},
+  async () => {
+    const [signups, shares] = [
+      await counted("signup"),
+      await counted("watch.new"),
+    ];
+    const {token} = await withCli();
+    assert.equal((await share(token)).status, 201);
+    // (Other tests run at once, so at least.)
+    assert.ok((await counted("signup")) >= signups + 1);
+    assert.ok((await counted("watch.new")) >= shares + 1);
+  },
+);
+
+/** Signs in as ADMIN_EMAILS' first address, verified, made afresh: a browser's cookies. */
+async function asAdmin() {
+  const email = (process.env.ADMIN_EMAILS || "").split(",")[0].trim();
+  const admin = `http://${AUTH}/identitytoolkit.googleapis.com/v1/projects/${PROJECT}`;
+  const owner = {
+    "Content-Type": "application/json",
+    Authorization: "Bearer owner",
+  };
+  // Left from an earlier run, it's made again.
+  const found = await (
+    await fetch(`${admin}/accounts:lookup`, {
+      method: "POST",
+      headers: owner,
+      body: JSON.stringify({email: [email]}),
+    })
+  ).json();
+  for (const user of found.users ?? []) {
+    await fetch(`${admin}/accounts:delete`, {
+      method: "POST",
+      headers: owner,
+      body: JSON.stringify({localId: user.localId}),
+    });
+  }
+  const password = secret();
+  const res = await fetch(
+    `http://${AUTH}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-key`,
+    {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email, password, returnSecureToken: true}),
+    },
+  );
+  const {localId} = await res.json();
+  await fetch(`${admin}/accounts:update`, {
+    method: "POST",
+    headers: owner,
+    body: JSON.stringify({localId, emailVerified: true}),
+  });
+  return session(await signIn(email, password));
+}
+
+test(
+  "/admin is only for ADMIN_EMAILS' accounts",
+  {skip: !process.env.ADMIN_EMAILS && "ADMIN_EMAILS isn't set"},
+  async () => {
+    const page = cookie =>
+      fetch(`${BASE}/admin`, {headers: cookie ? {Cookie: cookie} : {}});
+    assert.equal((await page()).status, 404, "logged out");
+    const someone = await loggedIn();
+    assert.ok(!someone.cookie.includes("ag_admin=1"));
+    assert.equal((await page(someone.cookie)).status, 404, "not an admin");
+
+    const cookie = await asAdmin();
+    assert.ok(cookie.includes("ag_admin=1"), "the header shows Admin");
+    const res = await page(cookie);
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /Live shares now/);
+  },
+);
+
+test(
+  "the cron deletes days' counts after a year, and keeps months'",
+  {skip: !process.env.CRON_SECRET && "CRON_SECRET isn't set"},
+  async () => {
+    const doc = path =>
+      `http://${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents/${path}`;
+    const put = (path, period) =>
+      fetch(doc(path), {
+        method: "PATCH",
+        headers: {
+          Authorization: "Bearer owner",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fields: {
+            period: {stringValue: period},
+            c: {mapValue: {fields: {pageview: {integerValue: "1"}}}},
+          },
+        }),
+      });
+    const old = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    const recent = new Date(Date.now() - 300 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    await put(`analytics-days/${old}-0`, old);
+    await put(`analytics-days/${recent}-0`, recent);
+    await put(`analytics-months/${old.slice(0, 7)}-0`, old.slice(0, 7));
+
+    const run = auth =>
+      fetch(`${BASE}/api/cron/analytics`, {
+        headers: auth ? {Authorization: auth} : {},
+      });
+    assert.equal((await run()).status, 401);
+    assert.equal((await run("Bearer nope")).status, 401);
+    const res = await run(`Bearer ${process.env.CRON_SECRET}`);
+    assert.equal(res.status, 200, await res.clone().text());
+    assert.ok((await res.json()).deleted >= 1);
+
+    const there = async path =>
+      (await fetch(doc(path), {headers: {Authorization: "Bearer owner"}}))
+        .status === 200;
+    assert.equal(await there(`analytics-days/${old}-0`), false, "a year old");
+    assert.equal(await there(`analytics-days/${recent}-0`), true);
+    assert.equal(await there(`analytics-months/${old.slice(0, 7)}-0`), true);
+  },
+);

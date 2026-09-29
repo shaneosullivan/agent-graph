@@ -12,7 +12,9 @@ import {auth} from "./firebase";
  * routes on the server verify. The browser's own Firebase sign-in is then
  * dropped: the cookie is the only record of it. A second cookie
  * (`SIGNED_IN_COOKIE`, not HttpOnly, holding nothing) only tells the pages'
- * scripts to show "Account" rather than "Log in".
+ * scripts to show "Account" rather than "Log in"; a third (`ADMIN_COOKIE`,
+ * the same), set for an admin (ADMIN_EMAILS: lib/analytics-core.ts), to
+ * show "Admin" too. /admin checks the session itself.
  *
  * `agent-graph watch-remote` logs in through the browser too, and is given a
  * token of its own (lib/accounts.ts).
@@ -21,6 +23,7 @@ import {auth} from "./firebase";
 /** Firebase's name for a session cookie; Firebase Hosting passes only it on. */
 export const SESSION_COOKIE = "__session";
 export const SIGNED_IN_COOKIE = "ag_signed_in";
+export const ADMIN_COOKIE = "ag_admin";
 
 /** How long a session lasts: Firebase allows at most two weeks. */
 export const SESSION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -28,7 +31,7 @@ export const SESSION_MS = 14 * 24 * 60 * 60 * 1000;
 /** How recently the browser must have signed in to be given a session. */
 export const RECENT_SIGN_IN_MS = 5 * 60 * 1000;
 
-export type User = {uid: string; email: string | null};
+export type User = {uid: string; email: string | null; emailVerified: boolean};
 
 /** The account logged in in this request's browser, if any. */
 export async function currentUser(): Promise<User | null> {
@@ -40,17 +43,25 @@ export async function currentUser(): Promise<User | null> {
 export async function userOfSession(cookie: string): Promise<User | null> {
   try {
     const claims = await auth().verifySessionCookie(cookie);
-    return {uid: claims.uid, email: claims.email ?? null};
+    return {
+      uid: claims.uid,
+      email: claims.email ?? null,
+      emailVerified: claims.email_verified === true,
+    };
   } catch {
     return null;
   }
 }
 
-/** Set-Cookie values that log this browser in with `session`, for `maxAge` ms. */
+/**
+ * Set-Cookie values that log this browser in with `session`, for `maxAge`
+ * ms; for an `admin`, with the cookie that shows the Admin link.
+ */
 export function sessionCookies(
   req: Request,
   session: string,
   maxAge: number,
+  admin = false,
 ): Array<string> {
   const seconds = Math.floor(maxAge / 1000);
   const secure = isHttps(req) ? ["Secure"] : [];
@@ -70,13 +81,20 @@ export function sessionCookies(
       "SameSite=Lax",
       ...secure,
     ].join("; "),
+    [
+      `${ADMIN_COOKIE}=${admin ? "1" : ""}`,
+      "Path=/",
+      `Max-Age=${admin ? seconds : 0}`,
+      "SameSite=Lax",
+      ...secure,
+    ].join("; "),
   ];
 }
 
 /** Set-Cookie values that log this browser out. */
 export function clearedCookies(req: Request): Array<string> {
   const secure = isHttps(req) ? ["Secure"] : [];
-  return [SESSION_COOKIE, SIGNED_IN_COOKIE].map(name =>
+  return [SESSION_COOKIE, SIGNED_IN_COOKIE, ADMIN_COOKIE].map(name =>
     [`${name}=`, "Path=/", "Max-Age=0", "SameSite=Lax", ...secure].join("; "),
   );
 }

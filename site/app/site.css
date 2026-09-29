@@ -184,6 +184,17 @@ body {
 .site .install-steps li + li {
   margin-top: 10px;
 }
+.site .downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.site .button.download {
+  font-size: 14px;
+  padding: 8px 14px;
+  text-decoration: none;
+}
 .site .install-or {
   display: block;
   margin-top: 8px;

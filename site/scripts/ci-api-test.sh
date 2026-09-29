@@ -23,6 +23,9 @@ export STRIPE_MONTHLY_LABEL="${STRIPE_MONTHLY_LABEL:-\$5 a month}"
 export STRIPE_YEARLY_LABEL="${STRIPE_YEARLY_LABEL:-\$50 a year}"
 export FREE_TRIAL_DAYS="${FREE_TRIAL_DAYS:-7}"
 
+# An admin, who can see /admin (tests/accounts.test.mjs makes the account).
+export ADMIN_EMAILS="${ADMIN_EMAILS:-admin@agent-graph.test}"
+
 npx next start -p 3000 &
 server=$!
 trap 'kill $server 2>/dev/null' EXIT

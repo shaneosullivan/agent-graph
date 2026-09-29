@@ -1,4 +1,5 @@
 import {recordLogin} from "@/lib/accounts";
+import {isAdmin} from "@/lib/analytics-core";
 import {
   clearedCookies,
   RECENT_SIGN_IN_MS,
@@ -40,8 +41,12 @@ export async function POST(req: Request): Promise<Response> {
       expiresIn: SESSION_MS,
     });
     await recordLogin({uid: claims.uid, email: claims.email ?? null});
+    const admin = isAdmin({
+      email: claims.email ?? null,
+      emailVerified: claims.email_verified === true,
+    });
     const headers = new Headers({"Cache-Control": "no-store"});
-    for (const cookie of sessionCookies(req, session, SESSION_MS)) {
+    for (const cookie of sessionCookies(req, session, SESSION_MS, admin)) {
       headers.append("Set-Cookie", cookie);
     }
     return new Response(null, {status: 204, headers});

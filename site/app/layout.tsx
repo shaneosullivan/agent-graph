@@ -1,5 +1,9 @@
 import type {Metadata, Viewport} from "next";
 
+import {analyticsDisabled} from "@/lib/analytics-core";
+
+import {Analytics} from "./analytics";
+
 const DESCRIPTION =
   "Share a live, step-through view of your AI coding agents: which session started which agents, who's waiting on whom, what's stuck, and what needs you.";
 
@@ -34,7 +38,10 @@ export const viewport: Viewport = {
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        {analyticsDisabled() ? null : <Analytics />}
+      </body>
     </html>
   );
 }
