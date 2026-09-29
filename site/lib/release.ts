@@ -39,7 +39,7 @@ export const SITE_URL = (
 export const BREW_COMMAND = [
   "brew tap chofter/tap",
   "brew trust chofter/tap",
-  "brew install chofter/tap/agent-graph",
+  "brew install --cask chofter/tap/agent-graph",
 ].join("\n");
 
 /** The command that installs the latest release (GET /install.sh). */

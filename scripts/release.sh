@@ -17,11 +17,16 @@
 #   5. Writes site/release.json, which the site's downloads and /install.sh
 #      use, and commits and pushes it: the site shows the release once
 #      Vercel has deployed that.
-#   6. Writes the Homebrew formula to $HOMEBREW_TAP (Formula/agent-graph.rb),
-#      for macOS and Linux, and pushes it.
+#   6. Writes the Homebrew cask to $HOMEBREW_TAP (Casks/agent-graph.rb),
+#      for macOS and Linux, and pushes it. A cask, not a formula: Homebrew
+#      checks a formula without a bottle could be built from source, and
+#      refuses it when the Command Line Tools are out of date, though this
+#      only copies the program into place.
 #
 # Usage:
 #   scripts/release.sh <version>          e.g. scripts/release.sh 0.1.0-beta.1
+#   scripts/release.sh --tap-only         step 6 alone, for the release in
+#                                         site/release.json
 #
 # Run again with the same version, it carries on: the version's already
 # set, so it fetches that commit's builds, and does the rest again.
@@ -78,11 +83,12 @@ LINUX_TARGETS=(aarch64-unknown-linux-musl x86_64-unknown-linux-musl)
 
 case "${1:-}" in
   -h | --help | "")
-    sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,46p' "$0" | sed 's/^# \{0,1\}//'
     [ -n "${1:-}" ] && exit 0 || exit 1
     ;;
+  --tap-only) VERSION="" ;;
+  *) VERSION="${1#v}" ;;
 esac
-VERSION="${1#v}"
 
 fail() {
   echo "" >&2
@@ -116,6 +122,92 @@ fetched() {
     *) echo "target/ci/$os/agent-graph-x86_64" ;;
   esac
 }
+
+# Writes the cask for site/release.json's release to $HOMEBREW_TAP, and
+# pushes it (removing the formula that earlier releases wrote).
+update_tap() {
+  local version tap branch desc homepage
+  version="$(node -p "require('./site/release.json').version || ''")"
+  [ -n "$version" ] || fail "site/release.json has no release to put in the tap."
+  desc="$(sed -n 's/^description = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+  homepage="$(sed -n 's/^homepage = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+
+  tap="$(mktemp -d)"
+  gh repo clone "$HOMEBREW_TAP" "$tap" -- --quiet 2>/dev/null
+  branch="$(gh repo view "$HOMEBREW_TAP" --json defaultBranchRef --jq '.defaultBranchRef.name // empty')"
+  branch="${branch:-main}"
+  git -C "$tap" checkout --quiet -B "$branch"
+  mkdir -p "$tap/Casks"
+  # Each archive's url and sha256, from site/release.json.
+  DESC="$desc" HOMEPAGE="$homepage" node -e '
+    const r = require("./site/release.json");
+    const at = target => {
+      const f = r.files[target];
+      if (!f) throw new Error(`site/release.json has no ${target} archive`);
+      return `      url "${f.url}"\n      sha256 "${f.sha256}"`;
+    };
+    process.stdout.write(`# Written by agent-graph'"'"'s scripts/release.sh: edits are overwritten.
+cask "agent-graph" do
+  version "${r.version}"
+
+  on_macos do
+    on_arm do
+${at("aarch64-apple-darwin")}
+    end
+    on_intel do
+${at("x86_64-apple-darwin")}
+    end
+  end
+
+  on_linux do
+    on_arm do
+${at("aarch64-unknown-linux-musl")}
+    end
+    on_intel do
+${at("x86_64-unknown-linux-musl")}
+    end
+  end
+
+  name "Agent Graph"
+  desc "${process.env.DESC}"
+  homepage "${process.env.HOMEPAGE}"
+
+  binary "agent-graph"
+end
+`);
+  ' >"$tap/Casks/agent-graph.rb"
+  git -C "$tap" add Casks/agent-graph.rb
+  # A formula of the same name, as earlier releases wrote, would be picked
+  # before the cask.
+  if [ -f "$tap/Formula/agent-graph.rb" ]; then
+    git -C "$tap" rm --quiet Formula/agent-graph.rb
+  fi
+  if git -C "$tap" diff --cached --quiet; then
+    echo "✓ The cask's already $version"
+  else
+    git -C "$tap" commit --quiet -m "agent-graph $version"
+    git -C "$tap" push --quiet origin "HEAD:refs/heads/$branch"
+    echo "✓ Pushed Casks/agent-graph.rb ($version)"
+  fi
+  rm -rf "$tap"
+}
+
+# How to install from the tap: Homebrew loads nothing from it until it's
+# trusted.
+brew_steps() {
+  local owner="${HOMEBREW_TAP%%/*}" name="${HOMEBREW_TAP#*/homebrew-}"
+  echo "brew tap $owner/$name && brew trust $owner/$name && brew install --cask $owner/$name/agent-graph"
+}
+
+if [ -z "$VERSION" ]; then
+  [[ "$HOMEBREW_TAP" == */homebrew-* ]] ||
+    fail "Set HOMEBREW_TAP (in .env.local): the tap's repository, as owner/homebrew-tap."
+  gh repo view "$HOMEBREW_TAP" >/dev/null 2>&1 || fail "gh can't see $HOMEBREW_TAP."
+  echo "=== Agent Graph: the Homebrew tap, $HOMEBREW_TAP ==="
+  update_tap
+  echo "    $(brew_steps)"
+  exit 0
+fi
 
 echo "=== Agent Graph: release $VERSION (macOS and Linux) ==="
 
@@ -293,77 +385,16 @@ echo "✓ Committed and pushed $(git rev-parse --short HEAD): the site shows $VE
 # =============================================================================
 
 step "6. Homebrew: $HOMEBREW_TAP"
-url_of() { awk -F'\t' -v t="$1" '$1 == t { print $2 }' "$files"; }
-sha_of() { awk -F'\t' -v t="$1" '$1 == t { print $3 }' "$files"; }
-desc="$(sed -n 's/^description = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
-homepage="$(sed -n 's/^homepage = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
-license="$(sed -n 's/^license = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
-
-tap="$(mktemp -d)"
-trap 'rm -rf "$tap"' EXIT
-gh repo clone "$HOMEBREW_TAP" "$tap" -- --quiet 2>/dev/null
-branch="$(gh repo view "$HOMEBREW_TAP" --json defaultBranchRef --jq '.defaultBranchRef.name // empty')"
-branch="${branch:-main}"
-git -C "$tap" checkout --quiet -B "$branch"
-mkdir -p "$tap/Formula"
-cat >"$tap/Formula/agent-graph.rb" <<EOF
-# Written by agent-graph's scripts/release.sh: edits are overwritten.
-class AgentGraph < Formula
-  desc "$desc"
-  homepage "$homepage"
-  version "$VERSION"
-  license "$license"
-
-  on_macos do
-    on_arm do
-      url "$(url_of aarch64-apple-darwin)"
-      sha256 "$(sha_of aarch64-apple-darwin)"
-    end
-    on_intel do
-      url "$(url_of x86_64-apple-darwin)"
-      sha256 "$(sha_of x86_64-apple-darwin)"
-    end
-  end
-
-  on_linux do
-    on_arm do
-      url "$(url_of aarch64-unknown-linux-musl)"
-      sha256 "$(sha_of aarch64-unknown-linux-musl)"
-    end
-    on_intel do
-      url "$(url_of x86_64-unknown-linux-musl)"
-      sha256 "$(sha_of x86_64-unknown-linux-musl)"
-    end
-  end
-
-  def install
-    bin.install "agent-graph"
-  end
-
-  test do
-    assert_match version.to_s, shell_output("#{bin}/agent-graph --version")
-  end
-end
-EOF
-git -C "$tap" add Formula/agent-graph.rb
-if git -C "$tap" diff --cached --quiet; then
-  echo "✓ The formula's already $VERSION"
-else
-  git -C "$tap" commit --quiet -m "agent-graph $VERSION"
-  git -C "$tap" push --quiet origin "HEAD:refs/heads/$branch"
-  echo "✓ Pushed Formula/agent-graph.rb"
-fi
+update_tap
 
 # =============================================================================
 # DONE
 # =============================================================================
 
-owner="${HOMEBREW_TAP%%/*}"
-tap_name="${HOMEBREW_TAP#*/homebrew-}"
 echo ""
 echo "============================================"
 echo "  Released agent-graph $VERSION (${COMMIT:0:7})"
-echo "    brew tap $owner/$tap_name && brew trust $owner/$tap_name && brew install $owner/$tap_name/agent-graph"
+echo "    $(brew_steps)"
 echo "    Archives: $RELEASE_BUCKET/releases/$VERSION/"
 echo "    Local copies: $out/"
 echo "============================================"

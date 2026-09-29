@@ -19,7 +19,7 @@ Pick one:
 
 | | Command |
 |---|---|
-| macOS (Homebrew, also on Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install chofter/tap/agent-graph` |
+| macOS (Homebrew, also on Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install --cask chofter/tap/agent-graph` |
 | macOS and Linux | `curl -fsSL https://agentgraph.chofter.com/install.sh \| sh` |
 | Windows | Coming soon |
 | Anywhere with Node (npm) | Coming soon |

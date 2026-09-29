@@ -17,7 +17,7 @@ It checks everything it needs first (a clean `main` that matches `origin/main`, 
 3. signs and notarizes the macOS builds (`scripts/notarize-mac.sh --bin …`);
 4. packs each build with the LICENSE as `agent-graph-<target>.tar.gz`, uploads it to `$RELEASE_BUCKET/releases/<version>/mac` or `…/linux`, and downloads it again from its public URL to check it;
 5. writes [`site/release.json`](../site/release.json) (the version, commit, and each archive's URL and SHA-256), and commits and pushes it. The site's download buttons and `/install.sh` read it, so they switch to the new release once Vercel has deployed that commit;
-6. writes `Formula/agent-graph.rb` to the tap (`$HOMEBREW_TAP`), for macOS and Linux, ARM and Intel, and pushes it.
+6. writes the cask `Casks/agent-graph.rb` to the tap (`$HOMEBREW_TAP`), for macOS and Linux, ARM and Intel, and pushes it. A cask, not a formula: Homebrew checks that a formula with no bottle could be built from source, and refuses it when the Command Line Tools are out of date, though installing it only copies the program into place. `scripts/release.sh --tap-only` does this step alone, for the release in `site/release.json`.
 
 If it stops partway (notarization failing, say), fix the cause and run it again with the same version: the version's already committed, so it carries on from the builds.
 
@@ -27,13 +27,13 @@ It pushes no tag: a version tag starts dist's `release.yml`, which would try to 
 
 **Settings** (in `.env.local`; `.env.example` lists them): `RELEASE_BUCKET` (`gs://…`), `HOMEBREW_TAP` (`owner/homebrew-<name>`), optionally `GCLOUD_ACCOUNT`, and the notarization settings. gcloud must be logged in as an account that can write to the bucket, and gh as one that can push to the tap.
 
-**Installing it.** With Homebrew, from the [Chofter tap](https://github.com/chofter/homebrew-tap), which Homebrew has to be told to trust first: `brew tap chofter/tap`, `brew trust chofter/tap`, `brew install chofter/tap/agent-graph`. Or on either platform `curl -fsSL https://agentgraph.chofter.com/install.sh | sh`. That script is made from `site/release.json` (`site/lib/release.ts`): it picks the build for the machine, checks its SHA-256, and puts it in `$AGENT_GRAPH_INSTALL_DIR`, `$XDG_BIN_HOME` or `~/.local/bin`.
+**Installing it.** With Homebrew, from the [Chofter tap](https://github.com/chofter/homebrew-tap), which Homebrew has to be told to trust first: `brew tap chofter/tap`, `brew trust chofter/tap`, `brew install --cask chofter/tap/agent-graph`. Or on either platform `curl -fsSL https://agentgraph.chofter.com/install.sh | sh`. That script is made from `site/release.json` (`site/lib/release.ts`): it picks the build for the machine, checks its SHA-256, and puts it in `$AGENT_GRAPH_INSTALL_DIR`, `$XDG_BIN_HOME` or `~/.local/bin`.
 
 ## What people install with
 
 | Platform | Command | Where it comes from |
 |---|---|---|
-| macOS (also Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install chofter/tap/agent-graph` | The formula in [`chofter/homebrew-tap`](https://github.com/chofter/homebrew-tap), which each release updates |
+| macOS (also Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install --cask chofter/tap/agent-graph` | The cask in [`chofter/homebrew-tap`](https://github.com/chofter/homebrew-tap), which each release updates |
 | macOS and Linux | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.sh \| sh` | The shell installer on the GitHub Release |
 | Windows | `winget install ShaneOSullivan.AgentGraph` | [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs), through a pull request each release opens |
 | Windows | `powershell -ExecutionPolicy Bypass -c "irm https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.ps1 \| iex"` | The PowerShell installer on the GitHub Release |
