@@ -138,7 +138,7 @@ fn node_line(graph: &Graph, node: &Node) -> Line {
             format!(
                 "{} {}",
                 node.agent_type.as_deref().unwrap_or("agent"),
-                short(local_id)
+                node.title.as_deref().unwrap_or_else(|| short(local_id))
             ),
             Tone::Strong,
         )],

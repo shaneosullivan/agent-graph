@@ -560,7 +560,8 @@ fn node_name(node: &Node) -> String {
         NodeKind::Agent => format!(
             "{} {}",
             node.agent_type.as_deref().unwrap_or("Agent"),
-            short(local)
+            // Its name, where its agent gives it one (Codex's nicknames).
+            node.title.as_deref().unwrap_or_else(|| short(local))
         ),
     }
 }

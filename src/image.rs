@@ -627,7 +627,7 @@ fn name(n: &Node) -> String {
     format!(
         "{} {}",
         n.agent_type.as_deref().unwrap_or("Agent"),
-        short(local(&n.id))
+        n.title.as_deref().unwrap_or_else(|| short(local(&n.id)))
     )
 }
 

@@ -26,12 +26,12 @@ if [ -z "$CODEX" ]; then
   npm install --silent --prefix "$TMP/npm" @openai/codex >/dev/null
   CODEX="$TMP/npm/node_modules/.bin/codex"
 fi
-echo "Codex: $("$CODEX" --version)"
-
 export HOME="$TMP/home" CODEX_HOME="$TMP/home/.codex" AGENT_GRAPH_HOME="$TMP/agent-graph"
 export AGENT_GRAPH_AGENT_COMMANDS=fakeagent
 unset AGENT_GRAPH_PARENT AGENT_GRAPH_PARENT_CODEX TRACEPARENT CODEX_THREAD_ID CODEX_SESSION_ID
 mkdir -p "$CODEX_HOME" "$TMP/project/bin"
+# (Only now: Codex makes itself a home even to say its version.)
+echo "Codex: $("$CODEX" --version)"
 PORT=$((20000 + RANDOM % 20000))
 cat > "$CODEX_HOME/config.toml" <<TOML
 # The stand-in model.
@@ -110,6 +110,7 @@ if (!spawned || spawned.parent !== session.node || spawned.data.agent_type !== '
 const returned = of('spawn.returned').find((e) => e.data.child);
 if (returned?.data.child !== spawned.node) fail('the spawn named its child');
 if (!of('agent.finished').some((e) => e.node === spawned.node)) fail('the subagent finished');
+if (!of('status').some((e) => e.node === spawned.node && e.data.title)) fail("the subagent's nickname");
 const waits = of('wait.started');
 if (waits.length !== 1 || waits[0].data.on !== spawned.node) fail('the wait on the subagent');
 if (!of('wait.ended').some((e) => e.data.wait_id === waits[0].data.wait_id)) fail('the wait ended');
