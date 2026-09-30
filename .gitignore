@@ -1,7 +1,9 @@
 /target
 .DS_Store
-# Local tooling
-/.claude/
+# Local tooling, except the project's Claude Code settings: the hooks that
+# share this repository's Claude Code cloud sessions (install claude-code --cloud)
+/.claude/*
+!/.claude/settings.json
 /.last_modified_timestamp
 
 # Secrets: the Firebase service account key

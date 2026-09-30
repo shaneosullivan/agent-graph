@@ -1,0 +1,110 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] || curl -fsSL https://agentgraph.chofter.com/install.sh | AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh >/dev/null 2>&1; \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "timeout": 180
+          },
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; for i in $(seq 180); do [ -x \"$HOME/.local/bin/agent-graph\" ] && break; sleep 1; done; exec \"$HOME/.local/bin/agent-graph\" watch-remote --background",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] && \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] && \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] && \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] && \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] && \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] && \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task|AskUserQuestion|ExitPlanMode|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] && \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Agent|Task|TaskCreate|TaskUpdate|TodoWrite|SendMessage|AskUserQuestion|ExitPlanMode|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] && \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
