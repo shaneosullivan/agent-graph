@@ -22,7 +22,7 @@ const app = readFileSync(new URL("app.js", assets), "utf8");
 export function loadViewer(
   t,
   source,
-  {hash = "", path = "", fetch, EventSource} = {},
+  {hash = "", path = "", fetch, EventSource, wide = false} = {},
 ) {
   const dom = new JSDOM(html, {
     url: `http://localhost:7777/${path}${hash}`,
@@ -31,7 +31,11 @@ export function loadViewer(
   });
   const {window} = dom;
   t.after(() => window.close());
-  window.matchMedia = () => ({matches: false, addEventListener() {}});
+  // Narrow, unless `wide`: then wide enough for the details pane at the right.
+  window.matchMedia = query => ({
+    matches: wide && query.includes("min-width: 1101px"),
+    addEventListener() {},
+  });
   // No canvas here: the page measures text at about 7px a character instead.
   window.HTMLCanvasElement.prototype.getContext = () => null;
   window.HTMLElement.prototype.scrollIntoView = function () {
@@ -65,9 +69,10 @@ export function loadViewer(
         : {}),
     };
   }
-  window.eval(
-    `${app}\nwindow.__viewer = { S, G, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, renderMain, graphData, setViewMode, openModal, graphLabel, CACHED_STEPS };`,
-  );
+  // (Inside the block the viewer's all in, before it closes: see app.js.)
+  const hook =
+    "window.__viewer = { S, G, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, renderMain, graphData, setViewMode, openModal, graphLabel, CACHED_STEPS };";
+  window.eval(app.replace(/\}\s*$/, `${hook}\n}\n`));
   return window;
 }
 

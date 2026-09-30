@@ -1,5 +1,12 @@
 'use strict';
 
+// The whole viewer is in this one block, so nothing it names becomes a
+// global (a script's top-level functions are properties of `window`
+// otherwise): `window.nodeName` from the function below, say, breaks
+// React's event handling on the site's pages (in development, where Next
+// reads it). In strict mode a block's functions are its own.
+{
+
 // Agent Graph viewer. Event text (task names, summaries, messages) comes from
 // models, so it is only ever inserted as text, never as HTML.
 
@@ -1603,11 +1610,11 @@ function renderGraph(host, graph, keep, ringed, flash) {
           .attr('tabindex', 0)
           .attr('role', 'button')
           .attr('transform', (n) => `translate(${n.x},${n.y})`)
-          .on('click', (e, n) => openModal(n.id, onPill(e) ? 'Tasks' : null))
+          .on('click', (e, n) => showDetails(n.id, onPill(e) ? 'Tasks' : null))
           .on('keydown', (e, n) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              openModal(n.id, onPill(e) ? 'Tasks' : null);
+              showDetails(n.id, onPill(e) ? 'Tasks' : null);
             }
           })
           .on('pointerenter pointermove', (e, n) => showGraphTip(e, n))
@@ -1876,58 +1883,136 @@ function scaleFrom(a, b) {
 const SUBROW = 54;
 
 /**
- * Where each node sits, top to bottom (`n.ty`). Each generation is a band;
- * a generation with more nodes than fit well across is spread over several
- * rows in its band, taking turns (so neighbours, which are mostly
- * brothers and sisters, sit in different rows and close up across). How
- * many rows is chosen so the graph can be drawn as large as its space
- * allows: a tall phone gets more than a wide window, and a small graph
- * keeps to one.
+ * Where each node sits: across (`n.tx`) and down (`n.ty`), laid out as a
+ * tidy tree, whose shape the simulation keeps to (see `columnPull`).
+ *
+ * Across, each subtree gets a band as wide as it needs (its own name, or its
+ * children's bands side by side, whichever's wider), and each child's band
+ * sits in its parent's, in order: so families stand apart, rather than
+ * crowding round the middle.
+ *
+ * Down, each generation is a band; a family with many children spreads
+ * them over a few rows in its band, taking turns, so neighbours sit in
+ * different rows and close up across (a family over `r` rows takes about
+ * `r` times less width). The root's own children keep to one row, unless
+ * there are more than four, and even then take more only where that makes
+ * the tree drawn much larger: the top of the tree is where spreading out
+ * pays off most. How many rows a family may take is chosen so the tree can be
+ * drawn as large as its space allows: a tall phone gets more than a wide
+ * window, and a small tree keeps to one.
  */
 function arrangeRows(nodes) {
-  // Each generation's nodes, in the order they're drawn in (depth first,
-  // so each family together, in its parent's place).
-  const byDepth = [];
-  for (const n of nodes) (byDepth[n.depth] ||= []).push(n);
+  const ids = new Set(nodes.map((n) => n.id));
+  const kids = new Map();
+  const roots = [];
+  for (const n of nodes) {
+    if (n.parent && ids.has(n.parent)) {
+      if (!kids.has(n.parent)) kids.set(n.parent, []);
+      kids.get(n.parent).push(n);
+    } else roots.push(n);
+  }
   const box = G.svg && G.svg.node().getBoundingClientRect();
   const W = box && box.width ? box.width : 900;
   const H = box && box.height ? box.height : 560;
-  const rowsAt = (count, r) => Math.max(1, Math.min(r, Math.ceil(count / 2)));
-  // The rows that let it be drawn largest: as many as it takes for its
-  // height, not its width, to be what it's fitted by (and no more, since
-  // more only make it taller).
-  let best = 1;
-  let bestScale = 0;
-  for (let r = 1; r <= 12; r++) {
-    let width = 0;
-    let height = 0;
-    for (const level of byDepth) {
-      if (!level) continue;
-      const rows = rowsAt(level.length, r);
-      // Its rows share its names' width.
-      const across = level.reduce((sum, n) => sum + 2 * n.room, 0) / rows;
-      width = Math.max(width, across);
-      height += LEVEL + (rows - 1) * SUBROW;
-    }
-    // (No larger than it's ever drawn: a graph that fits anyway keeps to one row.)
-    const scale = Math.min(1.4, W / (width + 80), H / (height + 60));
-    // One row that's drawn about full size already stays one row.
-    if (r === 1 && scale >= 0.9) {
-      best = 1;
-      break;
-    }
-    if (scale > bestScale * 1.03) {
-      best = r;
-      bestScale = scale;
+  // How many rows a family of `count` at `depth` takes: the root's children
+  // one, unless there are more than four, then at most `top` (and a row for
+  // every two); others at most `r` (and one each).
+  const rowsFor = (count, depth, r, top) =>
+    depth === 0 || (depth === 1 && count <= 4)
+      ? 1
+      : depth === 1
+        ? Math.max(1, Math.min(top, Math.ceil(count / 2)))
+        : Math.max(1, Math.min(r, count));
+
+  // The tree's width and each subtree's, and each generation's rows, at
+  // `r` rows a family (`top` for the root's children).
+  const measure = (r, top) => {
+    const width = new Map();
+    const bandRows = [];
+    const band = (depth, rows) => (bandRows[depth] = Math.max(bandRows[depth] || 1, rows));
+    const of = (n) => {
+      const children = kids.get(n.id) || [];
+      const rows = rowsFor(children.length, n.depth + 1, r, top);
+      if (children.length) band(n.depth + 1, rows);
+      const across = children.reduce((sum, k) => sum + of(k), 0) / rows;
+      const w = Math.max(2 * n.room + SUBTREE_GAP, across);
+      width.set(n.id, w);
+      return w;
+    };
+    const total = roots.reduce((sum, n) => sum + of(n), 0);
+    band(0, 1);
+    const height = bandRows.reduce((sum, rows) => sum + LEVEL + ((rows || 1) - 1) * SUBROW, 0);
+    return { r, top, width, total, height, bandRows };
+  };
+
+  // The rows that let it be drawn largest (and no more, since more only
+  // make it taller), where each more row of the root's children has to
+  // make it a fifth larger: keeping them in one row, apart, is worth more.
+  const scaleOf = (m) => Math.min(1.4, W / (m.total + 80), H / (m.height + 60));
+  const worth = (m) => scaleOf(m) * 0.8 ** (m.top - 1);
+  let best = measure(1, 1);
+  // One row that's drawn about full size already stays one row.
+  if (scaleOf(best) < 0.9) {
+    const most = Math.max(1, Math.ceil((kids.get(roots[0] && roots[0].id) || []).length / 2));
+    for (let top = 1; top <= most; top++) {
+      for (let r = 1; r <= 12; r++) {
+        const m = measure(r, top);
+        if (worth(m) > worth(best) * 1.03) best = m;
+      }
     }
   }
+  const { r, top: topRows, width, bandRows } = best;
+  // Where it's fitted by its width, with height to spare, the generations
+  // are spread down it too (up to twice as far apart), rather than leaving
+  // it empty.
+  const stretch = Math.max(1, Math.min(2, H / (best.height + 60) / (W / (best.total + 80))));
+
+  // Down: each generation's band's top, and each node's row in it.
+  const tops = [];
   let top = 0;
-  for (const level of byDepth) {
-    if (!level) continue;
-    const rows = rowsAt(level.length, best);
-    level.forEach((n, k) => (n.ty = top + (k % rows) * SUBROW));
-    top += LEVEL + (rows - 1) * SUBROW;
+  for (let depth = 0; depth < bandRows.length; depth++) {
+    tops[depth] = top;
+    top += (LEVEL + ((bandRows[depth] || 1) - 1) * SUBROW) * stretch;
   }
+  const topOf = (depth) => tops[depth] ?? depth * LEVEL;
+  // Across: the children's bands, side by side, spread over the parent's.
+  // (`branch`: which of the root's children's subtrees each is in, and
+  // where that subtree's column is: see `branchesApart`.)
+  const place = (n, center, branch) => {
+    n.tx = center;
+    n.branch = branch || null;
+    const children = kids.get(n.id) || [];
+    if (!children.length) return;
+    const rows = rowsFor(children.length, n.depth + 1, r, topRows);
+    const sum = children.reduce((total, k) => total + width.get(k.id), 0);
+    const scale = width.get(n.id) / sum;
+    let left = center - width.get(n.id) / 2;
+    children.forEach((k, i) => {
+      k.ty = topOf(k.depth) + (i % rows) * SUBROW * stretch;
+      const w = width.get(k.id) * scale;
+      const x = left + w / 2;
+      place(k, x, branch || (k.depth === 1 ? { id: k.id, x } : null));
+      left += w;
+    });
+  };
+  let left = -best.total / 2;
+  for (const root of roots) {
+    root.ty = topOf(root.depth);
+    place(root, left + width.get(root.id) / 2);
+    left += width.get(root.id);
+  }
+}
+
+/** Room left between neighbouring subtrees, across. */
+const SUBTREE_GAP = 24;
+
+/**
+ * How firmly a node's drawn to its place across (`arrangeRows`): most
+ * near the root, where the tree's shape is set, and less further down,
+ * where rows and room between names settle it.
+ */
+function columnPull(n) {
+  return [0.5, 0.35, 0.2][n.depth] ?? 0.08;
 }
 
 /**
@@ -1962,6 +2047,41 @@ function boxCollide() {
   };
   force.initialize = (n) => (nodes = n);
   return force;
+}
+
+/** How far above or below each other nodes of different subtrees still push apart. */
+const BRANCH_REACH = 140;
+/** How much room, across, beyond their names, nodes of different subtrees keep. */
+const BRANCH_GAP = 48;
+
+/**
+ * Keeps the root's children's subtrees apart: nodes of different ones that
+ * come close across (nearer than their names and `BRANCH_GAP`) push apart,
+ * each toward its own subtree's side (so subtrees never pass through each
+ * other), most on the same level, less the further apart they are down,
+ * and not at all past `BRANCH_REACH`.
+ */
+function branchesApart(alpha) {
+  const nodes = G.sim ? G.sim.nodes() : [];
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    if (!a.branch) continue;
+    for (let j = i + 1; j < nodes.length; j++) {
+      const b = nodes[j];
+      if (!b.branch || b.branch.id === a.branch.id) continue;
+      const dy = Math.abs(b.y - a.y);
+      if (dy >= BRANCH_REACH) continue;
+      const want = a.room + b.room + BRANCH_GAP;
+      const dx = b.x - a.x;
+      if (Math.abs(dx) >= want) continue;
+      // Apart the way their subtrees' columns are, whichever way they are now.
+      const side = b.branch.x >= a.branch.x ? 1 : -1;
+      const gap = side * dx;
+      const push = (want - gap) * 0.12 * alpha * (1 - dy / BRANCH_REACH);
+      a.vx -= side * push;
+      b.vx += side * push;
+    }
+  }
 }
 
 /** Each node drawn toward its parent, across, so a family stays under it. */
@@ -2069,10 +2189,12 @@ function buildGraph(d3, host) {
     .force('charge', d3.forceManyBody().strength(() => -Math.max(60, 320 * Math.min(1, Math.sqrt(12 / Math.max(1, G.sim ? G.sim.nodes().length : 1))))).distanceMax(400))
     .force('collide', boxCollide())
     .force('family', family)
+    .force('branches', branchesApart)
     // Top down: each generation in its band, on its row (see `arrangeRows`),
     // the tree centred.
     .force('y', d3.forceY((n) => n.ty ?? n.depth * LEVEL).strength(0.9))
-    .force('x', d3.forceX(0).strength(0.04))
+    // Across: each in its family's column (see `arrangeRows`).
+    .force('x', d3.forceX((n) => n.tx ?? 0).strength(columnPull))
     .alphaDecay(0.03)
     .on('tick', tick)
     .on('end', () => fitGraph(false));
@@ -2761,6 +2883,28 @@ function onPill(e) {
   return Boolean(at && at.closest && at.closest('g.pill'));
 }
 
+/** Wide enough for the details pane at the right of the graph (see app.css). */
+const WIDE = matchMedia('(min-width: 1101px)');
+
+/**
+ * Shows node `id`'s details (brought to its section headed `at`, if it's
+ * given): in the pane at the right, where there's one; otherwise, where
+ * that pane would be out of the way (under the graph, or a page away), in
+ * the dialog.
+ */
+function showDetails(id, at) {
+  if (!WIDE.matches) {
+    openModal(id, at);
+    return;
+  }
+  hideGraphTip();
+  selectNode(id);
+  const pane = $('#detail');
+  const heading = at && [...pane.querySelectorAll('h3')].find((h3) => h3.textContent.startsWith(at));
+  if (heading) heading.scrollIntoView({ block: 'start' });
+  else pane.scrollTop = 0;
+}
+
 /**
  * The dialog with everything about node `id`: what the details pane shows,
  * centred over the page; brought to its section headed `at` (as "Tasks"),
@@ -3445,3 +3589,4 @@ async function main() {
 }
 
 main();
+}

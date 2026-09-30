@@ -1747,3 +1747,35 @@ test("the graph's legend button shows the legend, and tapping the legend hides i
   assert.ok(!host().classList.contains("legend-open"));
   if (v.G.sim) v.G.sim.stop();
 });
+
+test("clicking a graph node shows its details in the pane at the right, where there's room; otherwise in the dialog", async t => {
+  for (const wide of [true, false]) {
+    const g = agentsTree();
+    const window = loadViewer(t, {graph: async () => g}, {wide});
+    const doc = window.document;
+    const v = window.__viewer;
+    window.eval(
+      readFileSync(
+        new URL("../../src/view/assets/d3.min.js", import.meta.url),
+        "utf8",
+      ),
+    );
+    await until(() => doc.querySelector("#view .node"));
+    v.setViewMode("graph");
+    await until(() => doc.querySelectorAll("#view .gnode").length === 4);
+    const node = [...doc.querySelectorAll("#view .gnode")].find(
+      n => n.__data__.id === "x:s/b",
+    );
+    node.dispatchEvent(new window.MouseEvent("click", {bubbles: true}));
+    assert.equal(v.S.selected, "x:s/b");
+    const dialog = doc.querySelector("#node-modal");
+    if (wide) {
+      assert.ok(!dialog?.open, "no dialog");
+      assert.match(doc.querySelector("#detail h2").textContent, /^Agent b/);
+    } else {
+      assert.ok(dialog.open, "the dialog");
+      assert.match(dialog.querySelector("h2").textContent, /^Agent b/);
+    }
+    if (v.G.sim) v.G.sim.stop();
+  }
+});
