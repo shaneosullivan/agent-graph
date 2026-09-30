@@ -60,6 +60,8 @@ enum Command {
         command: Option<String>,
         #[arg(long, help = help::install::opt::NO_SLASH_COMMAND)]
         no_slash_command: bool,
+        #[arg(long, conflicts_with_all = ["command"], help = help::install::opt::CLOUD)]
+        cloud: bool,
     },
     #[command(
         display_order = 2,
@@ -259,17 +261,32 @@ pub fn run() -> ExitCode {
             yes,
             command,
             no_slash_command,
-        } => install_cmd(
-            provider.into(),
-            scope.into(),
-            InstallOptions {
-                dry_run,
-                yes,
-                hook_command: command,
-                slash_command: !no_slash_command,
-                add: true,
-            },
-        ),
+            cloud,
+        } => {
+            // For Claude Code's cloud: the project's committed settings, and
+            // no slash command (it'd run the CLI on the computer).
+            if cloud
+                && (!matches!(provider, Provider::ClaudeCode)
+                    || !matches!(scope, ScopeArg::User | ScopeArg::Project))
+            {
+                eprintln!(
+                    "agent-graph: --cloud is for Claude Code, in a project's settings (--scope project)"
+                );
+                return ExitCode::FAILURE;
+            }
+            install_cmd(
+                provider.into(),
+                if cloud { Scope::Project } else { scope.into() },
+                InstallOptions {
+                    dry_run,
+                    yes,
+                    hook_command: command,
+                    slash_command: !no_slash_command && !cloud,
+                    add: true,
+                    cloud,
+                },
+            )
+        }
         Command::Uninstall {
             provider,
             scope,
@@ -284,6 +301,7 @@ pub fn run() -> ExitCode {
                 hook_command: None,
                 slash_command: true,
                 add: false,
+                cloud: false,
             },
         ),
         Command::Snapshot {
@@ -375,6 +393,8 @@ struct InstallOptions {
     slash_command: bool,
     /// Install, or (false) uninstall.
     add: bool,
+    /// The hooks for Claude Code's cloud (see `install::install_claude_code_cloud`).
+    cloud: bool,
 }
 
 /// One file `install` or `uninstall` would write or remove.
@@ -523,8 +543,20 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
             let data = paths::data_dir()
                 .map(|d| d.display().to_string())
                 .unwrap_or_default();
-            println!("Installed. New Claude Code sessions will be recorded in {data}.");
-            offer_autostart(opts.yes);
+            if opts.cloud {
+                let site = crate::remote::DEFAULT_URL;
+                println!(
+                    "Installed. Commit .claude/settings.json, then, in your Claude Code cloud \
+                     environment's settings (claude.ai/code):\n\
+                     \x20 1. Environment variables: AGENT_GRAPH_TOKEN=<an API token from {site}/account>\n\
+                     \x20 2. Network access: Custom, allowing agentgraph.chofter.com and \
+                     firebasestorage.googleapis.com\n\
+                     Cloud sessions of this project are then shared live, at {site}/watch."
+                );
+            } else {
+                println!("Installed. New Claude Code sessions will be recorded in {data}.");
+                offer_autostart(opts.yes);
+            }
         } else {
             println!("Installed.");
         }
@@ -622,7 +654,9 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
         None if scope == Scope::Project => install::path_command("claude-code"),
         None => install::default_command("claude-code")?,
     };
-    if opts.add {
+    if opts.add && opts.cloud {
+        install::install_claude_code_cloud(&mut after, crate::remote::DEFAULT_URL)?;
+    } else if opts.add {
         install::install_claude_code(&mut after, &command)?;
     } else {
         install::uninstall_claude_code(&mut after)?;
@@ -640,7 +674,20 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
     } else {
         format!("Settings file: {}", path.display())
     }];
-    if opts.add {
+    if opts.add && opts.cloud {
+        summary.push(format!(
+            "Adds hooks for Claude Code's cloud (claude.ai/code): {}",
+            install::our_events(&after).join(", ")
+        ));
+        summary.push(
+            "They do nothing on a computer. In a cloud session, they install agent-graph if it \
+             isn't there, record the session, and share it live."
+                .into(),
+        );
+        if !install::our_events(&before).is_empty() {
+            summary.push("(Replaces the Agent Graph hooks already there.)".into());
+        }
+    } else if opts.add {
         summary.push(format!("Hook command:  {command}"));
         summary.push(format!(
             "Adds hooks for: {}",

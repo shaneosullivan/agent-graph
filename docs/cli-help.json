@@ -106,12 +106,14 @@
         { "id": "dry_run", "flag": "--dry-run", "text": "Show what would change, and change nothing." },
         { "id": "yes", "flag": "-y, --yes", "text": "Don't ask before making the changes." },
         { "id": "command", "flag": "--command <COMMAND>", "text": "The command the hooks run, which must contain `emit --provider claude-code` (it's how they're found again). Defaults to this executable's `emit`, or with --scope project, `agent-graph emit` from PATH." },
-        { "id": "no_slash_command", "flag": "--no-slash-command", "text": "Don't add the /agent-graph command; just the hooks." }
+        { "id": "no_slash_command", "flag": "--no-slash-command", "text": "Don't add the /agent-graph command; just the hooks." },
+        { "id": "cloud", "flag": "--cloud", "text": "Claude Code only: add the hooks for Claude Code's cloud (claude.ai/code) to this project's settings (.claude/settings.json), to commit. They do nothing on a computer; in a cloud session they install agent-graph if it isn't there, record the session, and share it live to the account whose API token the cloud environment gives as AGENT_GRAPH_TOKEN. The environment's network access must allow agentgraph.chofter.com and firebasestorage.googleapis.com." }
       ],
       "examples": [
         { "command": "agent-graph install claude-code", "text": "Hooks and /agent-graph for every project." },
         { "command": "agent-graph install claude-code --dry-run", "text": "Show exactly what would change, and change nothing." },
         { "command": "agent-graph install claude-code --scope project", "text": "Just this project, in .claude/ (usually committed)." },
+        { "command": "agent-graph install claude-code --cloud", "text": "Record and share this project's sessions in Claude Code's cloud (claude.ai/code): commit .claude/settings.json, and give the cloud environment an API token." },
         { "command": "agent-graph install claude-code --no-slash-command", "text": "Just the hooks." },
         { "command": "agent-graph install codex", "text": "Add the command to Codex too. `gemini` and `cursor` work the same way." },
         { "command": "agent-graph install claude-code --command \"/opt/bin/agent-graph emit --provider claude-code\"", "text": "Register a different path for the hooks. They use this executable by default." }

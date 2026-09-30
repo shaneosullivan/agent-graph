@@ -8,7 +8,7 @@ import {BREW_COMMAND, INSTALL_COMMAND, latestRelease} from "@/lib/release";
 
 import {CopyCommand} from "./copy-command";
 
-type Os = "mac" | "linux" | "windows" | "npm";
+type Os = "mac" | "linux" | "windows" | "npm" | "cloud";
 
 const release = latestRelease();
 
@@ -63,7 +63,50 @@ const ways: Record<Os, Way> = {
     label: "npm",
     soon: "Coming soon: agent-graph from npm (npm install -g agent-graph).",
   },
+  // Its steps are its own (CloudSteps).
+  cloud: {label: "Claude Code cloud"},
 };
+
+/**
+ * Recording and sharing live from Claude Code's cloud (claude.ai/code): the
+ * project's hooks (`agent-graph install claude-code --cloud`), committed,
+ * install agent-graph in each cloud session and share it to the account
+ * whose API token the cloud environment gives.
+ */
+function CloudSteps() {
+  return (
+    <ol className="card-body install-steps">
+      <li>
+        In your project, on your computer (with agent-graph installed), add the
+        hooks for Claude Code&rsquo;s cloud, and commit{" "}
+        <code>.claude/settings.json</code>. They do nothing on a computer:
+        <Copyable
+          command="agent-graph install claude-code --cloud"
+          copied="claude-code-cloud"
+        />
+      </li>
+      <li>
+        Make an API token on your <a href="/account#api-tokens">account page</a>
+        .
+      </li>
+      <li>
+        In your Claude Code cloud environment&rsquo;s settings (claude.ai/code),
+        add the token as an environment variable:
+        <CopyCommand command="AGENT_GRAPH_TOKEN=agt_…" />
+        <span className="install-or">
+          and set network access to Custom, allowing these two:
+        </span>
+        <CopyCommand
+          command={"agentgraph.chofter.com\nfirebasestorage.googleapis.com"}
+        />
+      </li>
+      <li>
+        Start a cloud session in the project: it installs agent-graph, records
+        the session, and shares it live, at <a href="/watch">/watch</a>.
+      </li>
+    </ol>
+  );
+}
 
 /** A command to copy, whose copies count as downloads (/admin). */
 function Copyable({command, copied}: Command) {
@@ -115,7 +158,9 @@ export function Install() {
           </button>
         ))}
       </div>
-      {way.soon ? (
+      {os === "cloud" ? (
+        <CloudSteps />
+      ) : way.soon ? (
         <p className="card-body install-soon">{way.soon}</p>
       ) : (
         <ol className="card-body install-steps">

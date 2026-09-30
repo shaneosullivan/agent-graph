@@ -34,7 +34,12 @@ export type Target = (typeof TARGETS)[number];
  * The commands the install section shows, with a button to copy each
  * (app/copy-command.tsx): a copy counts as a download of its own kind.
  */
-export const COPIED = ["homebrew", "install-script", "claude-code"] as const;
+export const COPIED = [
+  "homebrew",
+  "install-script",
+  "claude-code",
+  "claude-code-cloud",
+] as const;
 export type Copied = (typeof COPIED)[number];
 
 /** Every counter there can be. */

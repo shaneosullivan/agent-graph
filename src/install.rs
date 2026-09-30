@@ -88,6 +88,53 @@ pub const CLAUDE_CODE_MARKER: &str = "emit --provider claude-code";
 /// Seconds Claude Code waits for the synchronous hook.
 const SYNC_TIMEOUT_SECS: u64 = 10;
 
+/// Also ours: the hook that shares from Claude Code's cloud (see
+/// `install_claude_code_cloud`), which runs no `emit`.
+const CLOUD_SHARE_MARKER: &str = "watch-remote --background";
+
+/// Where the cloud hooks install `agent-graph`, and run it from.
+const CLOUD_BIN: &str = "\"$HOME/.local/bin/agent-graph\"";
+
+/// Seconds Claude Code waits for the cloud's `SessionStart` hook, which may
+/// first download and install `agent-graph`.
+const CLOUD_START_TIMEOUT_SECS: u64 = 180;
+
+/// Each cloud hook starts with this: in Claude Code's cloud (claude.ai/code)
+/// it carries on; anywhere else it does nothing, so the same committed
+/// settings never record a session a second time on a computer that
+/// records its own.
+const IN_CLOUD: &str = "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0";
+
+/// The cloud's `SessionStart` hook: installs `agent-graph` (from the site's
+/// install script, where the cloud's setup hasn't), then records the start.
+fn cloud_start_command(site: &str) -> String {
+    format!(
+        "{IN_CLOUD}; [ -x {CLOUD_BIN} ] || curl -fsSL {site}/install.sh | \
+         AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh >/dev/null 2>&1; \
+         {CLOUD_BIN} {CLAUDE_CODE_MARKER}; exit 0"
+    )
+}
+
+/// The cloud's other hooks: record the event, once `agent-graph`'s there.
+fn cloud_emit_command() -> String {
+    format!("{IN_CLOUD}; [ -x {CLOUD_BIN} ] && {CLOUD_BIN} {CLAUDE_CODE_MARKER}; exit 0")
+}
+
+/// The cloud's second `SessionStart` hook, in the background: once
+/// `agent-graph`'s installed, shares to the account whose API token the
+/// environment gives (AGENT_GRAPH_TOKEN), for as long as the session lasts.
+fn cloud_share_command(site: &str) -> String {
+    let url = if site.trim_end_matches('/') == crate::remote::DEFAULT_URL {
+        String::new()
+    } else {
+        format!(" --url={site}")
+    };
+    format!(
+        "{IN_CLOUD}; for i in $(seq 180); do [ -x {CLOUD_BIN} ] && break; sleep 1; done; \
+         exec {CLOUD_BIN} {CLOUD_SHARE_MARKER}{url}"
+    )
+}
+
 pub fn claude_settings_path(scope: Scope, project_dir: &Path) -> Option<PathBuf> {
     Some(match scope {
         Scope::User => std::env::var_os("CLAUDE_CONFIG_DIR")
@@ -183,6 +230,55 @@ pub fn install_claude_code(settings: &mut Value, command: &str) -> Result<(), St
     Ok(())
 }
 
+/// Adds our hooks for Claude Code's cloud (claude.ai/code) to a project's
+/// Claude Code `settings`, sharing to `site`, replacing any earlier copy.
+/// They're committed, and do nothing but in the cloud (see `IN_CLOUD`).
+/// There, `SessionStart` installs `agent-graph` if it isn't there (no setup
+/// script needed), and records the start; a second, in the background,
+/// shares the session live with the API token the environment gives as
+/// AGENT_GRAPH_TOKEN; and the rest record each event, as the hooks on a
+/// computer do.
+pub fn install_claude_code_cloud(settings: &mut Value, site: &str) -> Result<(), String> {
+    uninstall_claude_code(settings)?;
+    let hooks = hooks_object(settings)?;
+    for spec in CLAUDE_CODE_HOOKS {
+        let mut handlers = Vec::new();
+        if spec.event == "SessionStart" {
+            handlers.push(json!({
+                "type": "command",
+                "command": cloud_start_command(site),
+                "timeout": CLOUD_START_TIMEOUT_SECS,
+            }));
+            handlers.push(json!({
+                "type": "command",
+                "command": cloud_share_command(site),
+                "async": true,
+            }));
+        } else {
+            let mut handler = Map::new();
+            handler.insert("type".into(), json!("command"));
+            handler.insert("command".into(), json!(cloud_emit_command()));
+            if spec.background {
+                handler.insert("async".into(), json!(true));
+            } else {
+                handler.insert("timeout".into(), json!(SYNC_TIMEOUT_SECS));
+            }
+            handlers.push(Value::Object(handler));
+        }
+        let mut group = Map::new();
+        if let Some(matcher) = spec.matcher {
+            group.insert("matcher".into(), json!(matcher));
+        }
+        group.insert("hooks".into(), json!(handlers));
+        let groups = hooks.entry(spec.event).or_insert_with(|| json!([]));
+        let groups = groups
+            .as_array_mut()
+            .ok_or_else(|| format!("settings.hooks.{} isn't a list", spec.event))?;
+        groups.push(Value::Object(group));
+    }
+    Ok(())
+}
+
 /// Removes our hooks from Claude Code `settings`. Returns how many handlers
 /// were removed. Other handlers, and groups that still have any, are kept.
 pub fn uninstall_claude_code(settings: &mut Value) -> Result<usize, String> {
@@ -230,7 +326,7 @@ fn is_ours(handler: &Value) -> bool {
     handler
         .get("command")
         .and_then(Value::as_str)
-        .is_some_and(|c| c.contains(CLAUDE_CODE_MARKER))
+        .is_some_and(|c| c.contains(CLAUDE_CODE_MARKER) || c.contains(CLOUD_SHARE_MARKER))
 }
 
 fn hooks_object(settings: &mut Value) -> Result<&mut Map<String, Value>, String> {
@@ -317,6 +413,52 @@ mod tests {
             uninstall_claude_code(&mut settings).unwrap(),
             CLAUDE_CODE_HOOKS.len()
         );
+    }
+
+    #[test]
+    fn the_cloud_hooks_do_nothing_but_in_the_cloud_and_come_out_again() {
+        let mut settings = json!({"model": "opus"});
+        install_claude_code_cloud(&mut settings, crate::remote::DEFAULT_URL).unwrap();
+        let hooks = settings["hooks"].as_object().unwrap();
+        // Every command does nothing unless in Claude Code's cloud, and runs
+        // the copy it installs there, not one from PATH.
+        for groups in hooks.values() {
+            for group in groups.as_array().unwrap() {
+                for handler in group["hooks"].as_array().unwrap() {
+                    let command = handler["command"].as_str().unwrap();
+                    assert!(command.starts_with(IN_CLOUD), "{command}");
+                    assert!(command.contains(CLOUD_BIN), "{command}");
+                }
+            }
+        }
+        // SessionStart installs it, then records; a second shares, in the background.
+        let start = hooks["SessionStart"][0]["hooks"].as_array().unwrap();
+        assert!(
+            start[0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("/install.sh")
+        );
+        assert!(
+            start[0]["command"]
+                .as_str()
+                .unwrap()
+                .contains(CLAUDE_CODE_MARKER)
+        );
+        assert_eq!(start[0]["timeout"], CLOUD_START_TIMEOUT_SECS);
+        assert!(
+            start[1]["command"]
+                .as_str()
+                .unwrap()
+                .contains(CLOUD_SHARE_MARKER)
+        );
+        assert_eq!(start[1]["async"], true);
+        // Installed again, it replaces itself; uninstalled, all of it goes.
+        let once = settings.clone();
+        install_claude_code_cloud(&mut settings, crate::remote::DEFAULT_URL).unwrap();
+        assert_eq!(settings, once);
+        uninstall_claude_code(&mut settings).unwrap();
+        assert_eq!(settings, json!({"model": "opus"}));
     }
 
     #[test]
