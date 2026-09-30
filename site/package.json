@@ -4,7 +4,7 @@
   "private": true,
   "description": "Share Agent Graph logs: paste, upload or stream them, and get a permanent link to a live viewer.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "PORT=3112 next dev",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
