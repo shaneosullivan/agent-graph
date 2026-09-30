@@ -624,13 +624,14 @@ main { padding: 22px 28px 40px; }
   *, *::before { animation: none !important; transition: none !important; }
 }
 
-/* Narrow windows: stack the columns */
+/* Narrower windows: the list and the view, and no details pane (a node's
+   details open in the dialog instead: see `showDetails`). A phone has its
+   own layout, below. */
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 250px minmax(0, 1fr); }
-  .detail { grid-column: 2; border-left: none; border-top: 1px solid var(--line); }
-  .layout { grid-template-rows: minmax(0, 1fr) auto; }
-  .sessions { grid-row: 1 / span 2; }
-  .detail { max-height: 40vh; }
+}
+@media (min-width: 721px) and (max-width: 1100px) {
+  .layout > .detail { display: none; }
 }
 @media (max-width: 720px) {
   /* Content shorter than the window (a session's page, say) leaves the top

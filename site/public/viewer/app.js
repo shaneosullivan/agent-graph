@@ -2905,9 +2905,8 @@ const WIDE = matchMedia('(min-width: 1101px)');
 
 /**
  * Shows node `id`'s details (brought to its section headed `at`, if it's
- * given): in the pane at the right, where there's one; otherwise, where
- * that pane would be out of the way (under the graph, or a page away), in
- * the dialog.
+ * given): in the pane at the right, where there's one; otherwise in the
+ * dialog (between a phone's width and that, there's no pane: see app.css).
  */
 function showDetails(id, at) {
   if (!WIDE.matches) {
@@ -3048,7 +3047,9 @@ function card(graph, n, ringed, flash) {
 
   return h(
     'button',
-    { class: classes.join(' '), 'data-id': n.id, onclick: () => selectNode(n.id) },
+    // Its details: in the pane at the right, or on a phone a page of their
+    // own; between, where there's neither, in the dialog.
+    { class: classes.join(' '), 'data-id': n.id, onclick: () => (WIDE.matches || NARROW.matches ? selectNode(n.id) : openModal(n.id)) },
     h('span', { class: `dot ${n.state}` }),
     h(
       'span',

@@ -1807,3 +1807,17 @@ test("stepping to what needs you shows its details in the pane at the right, whe
     }
   }
 });
+
+test("between a phone's width and room for the pane at the right, clicking a card shows its details in the dialog", async t => {
+  // (Neither wide nor a phone: the harness's default.)
+  const g = agentsTree();
+  const window = loadViewer(t, {graph: async () => g});
+  const doc = window.document;
+  const v = window.__viewer;
+  await until(() => doc.querySelector('#view .node[data-id="x:s/b"]'));
+  doc.querySelector('#view .node[data-id="x:s/b"]').click();
+  const dialog = doc.querySelector("#node-modal");
+  assert.ok(dialog?.open, "the dialog");
+  assert.match(dialog.querySelector("h2").textContent, /^Agent b/);
+  assert.equal(v.S.modal, "x:s/b");
+});
