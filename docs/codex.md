@@ -79,7 +79,7 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 
 ### Not now
 
-- **Codex cloud** (chatgpt.com/codex): nothing in Codex's source says whether it runs a project's hooks, or trusts them, and there's no variable that marks a cloud run. To try once the local side is in.
+- **Codex cloud** (chatgpt.com/codex): nothing in Codex's source says whether it runs a project's hooks, or trusts them, and there's no variable that marks a cloud run. Planned in [codex-cloud.md](codex-cloud.md).
 - **Multi-agent v2** (off by default): its `spawn_agent` returns no id, so the child is bound by guess (by its SubagentStart), as Claude Code's are when they have to be. Its `wait_agent` names no targets, so no wait is shown.
 - **The Codex desktop app and IDE extension** run the same core, so they should fire the same hooks; untested.
 - Windows.
