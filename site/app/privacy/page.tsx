@@ -136,6 +136,11 @@ export default function Privacy() {
           site&rsquo;s database, and serves downloads of the command.
         </li>
         <li>Stripe takes payments.</li>
+        <li>
+          The home page shows a video from YouTube (Google), from its
+          privacy-enhanced domain: it sets no cookies until you play the video
+          yourself, but your browser does fetch it from YouTube.
+        </li>
       </ul>
       <p>
         We don&rsquo;t sell your data, share it with advertisers, or use it to

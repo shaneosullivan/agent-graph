@@ -773,6 +773,22 @@ body {
   fill: currentColor;
 }
 
+/* An embedded YouTube video (app/youtube-video.tsx): full width, 16:9. */
+.site .video {
+  margin: 20px 0;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #000;
+}
+.site .video iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
 /* About, Contact, Privacy and Terms (app/info-page.tsx). */
 .site .info {
   max-width: 46em;

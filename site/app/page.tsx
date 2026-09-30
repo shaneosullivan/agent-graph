@@ -12,6 +12,7 @@ import {SiteHeader} from "./site-header";
 import {SiteFooter} from "./site-footer";
 import {Uploader} from "./uploader";
 import {WatchCard} from "./watch-card";
+import {YouTubeVideo} from "./youtube-video";
 
 const watchRemote = (cliHelp as unknown as Help).commands.find(
   c => c.name === "watch-remote",
@@ -79,6 +80,11 @@ export default function Home() {
                 run it completely locally, it starts a local web server that you
                 use on your computer.
               </p>
+              <YouTubeVideo
+                id="v0GHik_RKJM"
+                title="Agent Graph, in action"
+                autoplay
+              />
               <h3>What about when I'm away from my computer?</h3>
               <p>
                 To keep up with your agents on the move, you simply run{" "}
