@@ -1779,3 +1779,31 @@ test("clicking a graph node shows its details in the pane at the right, where th
     if (v.G.sim) v.G.sim.stop();
   }
 });
+
+test("stepping to what needs you shows its details in the pane at the right, where there's room", async t => {
+  for (const wide of [true, false]) {
+    const g = oneNeedsYou();
+    const window = loadViewer(
+      t,
+      {graph: async () => g},
+      {hash: "#x%3Abusy", wide},
+    );
+    const doc = window.document;
+    const v = window.__viewer;
+    await until(
+      () => doc.querySelector("#view .node") && v.S.root === "x:busy",
+    );
+    doc.querySelector('#attention button[aria-label^="Next"]').click();
+    await until(() => doc.querySelector("#view .node.attention"));
+    if (wide) {
+      assert.equal(v.S.selected, "x:s/b");
+      assert.match(doc.querySelector("#detail h2").textContent, /^Agent b/);
+      assert.ok(
+        doc.querySelector('#view .node.selected[data-id="x:s/b"]'),
+        "its card's marked",
+      );
+    } else {
+      assert.notEqual(v.S.selected, "x:s/b", "only brought into view");
+    }
+  }
+});

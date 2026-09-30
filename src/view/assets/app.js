@@ -1031,6 +1031,21 @@ function stepAttention(dir) {
 }
 
 /**
+ * On a screen wide enough for the details pane at the right, shows node
+ * `id`'s there (the node stepped to with the attention arrows, see
+ * `stepAttention`), and marks it selected in the cards or graph drawn now.
+ * Narrower, the node's only brought into view: its details would be out of
+ * the way (see `showDetails`).
+ */
+function detailNeedsYou(id) {
+  if (!WIDE.matches || S.selected === id) return;
+  S.selected = id;
+  renderDetail();
+  for (const el of document.querySelectorAll('#view .node[data-id]')) el.classList.toggle('selected', el.dataset.id === id);
+  if (window.d3 && G.svg) G.svg.selectAll('g.gnode').classed('selected', (n) => n.id === id);
+}
+
+/**
  * The node under `rootId` that needs you: the first waiting for you, from
  * the top, or the session itself if none of its nodes says so.
  */
@@ -1185,6 +1200,7 @@ function renderMain() {
   if (S.showNeedsYou && S.showNeedsYou === S.root && graph.nodes[S.root]) {
     S.showNeedsYou = null;
     const id = needsYouIn(graph, S.root);
+    detailNeedsYou(id);
     const card = [...view.querySelectorAll('.node')].find((e) => e.dataset.id === id);
     if (card) {
       const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1692,6 +1708,7 @@ function renderGraph(host, graph, keep, ringed, flash) {
   if (S.showNeedsYou && S.showNeedsYou === S.root && graph.nodes[S.root]) {
     S.showNeedsYou = null;
     G.focus = needsYouIn(graph, S.root);
+    detailNeedsYou(G.focus);
   }
 
   const sim = G.sim;
