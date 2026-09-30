@@ -24,7 +24,7 @@ step cargo build -p agent-graph-wasm --target wasm32-unknown-unknown --profile w
 # The site's copy of the viewer must match the crate's, and its WebAssembly
 # must be built from the Rust as it is now.
 step node site/scripts/sync-viewer.mjs
-step git diff --exit-code -- site/public/viewer/app.js site/public/viewer/app.css site/lib/viewer-shell.ts
+step git diff --exit-code -- site/public/viewer/app.js site/public/viewer/app.css site/public/viewer/d3.min.js site/lib/viewer-shell.ts
 step node site/scripts/sync-viewer.mjs --check-wasm
 
 # The site. Its code must be as Prettier formats it (`npm run format`).

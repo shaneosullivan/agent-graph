@@ -370,7 +370,7 @@ fn nothing_private_is_served_without_the_viewers_key() {
     let host = format!("localhost:{port}");
     let wrong = "0".repeat(key.len());
 
-    for path in ["/", "/app.js", "/app.css", "/icon.svg"] {
+    for path in ["/", "/app.js", "/app.css", "/d3.min.js", "/icon.svg"] {
         assert_eq!(get_with(port, path, &host, None).0, 200, "{path}");
     }
     for header in [

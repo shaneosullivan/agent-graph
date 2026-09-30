@@ -64,7 +64,7 @@ export function loadViewer(
     };
   }
   window.eval(
-    `${app}\nwindow.__viewer = { S, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, CACHED_STEPS };`,
+    `${app}\nwindow.__viewer = { S, G, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, renderMain, graphData, setViewMode, openModal, CACHED_STEPS };`,
   );
   return window;
 }

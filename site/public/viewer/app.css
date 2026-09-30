@@ -179,15 +179,13 @@ h1, h2, h3 { margin: 0; }
 .app-filter > summary::-webkit-details-marker { display: none; }
 .app-filter > summary::after { content: "▾"; font-size: 10px; }
 .app-filter[open] > summary { color: var(--text); }
+/* Placed on the page (`placeAppMenu`), so the scrolling list can't clip it. */
 .app-menu {
-  position: absolute; left: 0; top: calc(100% + 6px); z-index: 5;
+  position: fixed; left: 0; top: 0; z-index: 40;
   min-width: 190px; max-width: calc(100vw - 32px); padding: 6px; display: grid; gap: 1px;
   background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
 }
-/* Directly below the button: from its left edge, or, without room for that
-   (it's at the end of a row), to its right edge (see `placeAppMenu`). */
-.app-menu.from-end { left: auto; right: 0; }
 .app-menu label { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; font-size: 13px; color: var(--text); cursor: pointer; white-space: nowrap; }
 .app-menu label:hover { background: var(--panel-2); }
 .app-menu .app-icon { margin-right: 0; }
@@ -243,6 +241,7 @@ main { padding: 22px 28px 40px; }
 .node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .node.current { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent); }
 .node.flash { animation: flash 1.6s ease-out; }
+.node.attention { animation: needs-you 0.65s ease-in-out 4; }
 .node.input_required { border-color: color-mix(in srgb, var(--input) 55%, var(--line)); }
 .node.completed, .node.canceled { background: var(--panel-2); }
 .node.completed .node-name, .node.canceled .node-name { color: var(--muted); }
@@ -289,7 +288,7 @@ main { padding: 22px 28px 40px; }
 }
 .empty h2 { font-size: 18px; margin-bottom: 8px; }
 .empty p { color: var(--muted); margin: 8px 0; }
-.empty code, .detail code {
+.empty code, .detail code, .modal-box code {
   font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); border: 1px solid var(--line);
   border-radius: 6px; padding: 2px 6px;
 }
@@ -298,7 +297,7 @@ main { padding: 22px 28px 40px; }
 
 /* Detail panel */
 .detail { border-left: 1px solid var(--line); background: var(--panel); padding: 20px 20px 40px; }
-.detail .placeholder { color: var(--faint); margin-top: 30px; text-align: center; }
+.detail .placeholder, .modal-box .placeholder { color: var(--faint); margin-top: 30px; text-align: center; }
 .detail-head h2 { font-size: 17px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .idline { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--faint); min-width: 0; }
 .idline .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -312,10 +311,10 @@ main { padding: 22px 28px 40px; }
 .open-ok { color: var(--muted); }
 .open-error { color: var(--failed); display: block; }
 .open-command { color: var(--muted); display: block; margin-top: 6px; }
-.detail section { margin-top: 20px; }
-.detail h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 8px; }
-.detail .lead { margin-top: 12px; }
-.detail .attention-box {
+.detail section, .modal-box section { margin-top: 20px; }
+.detail h3, .modal-box h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 8px; }
+.detail .lead, .modal-box .lead { margin-top: 12px; }
+.detail .attention-box, .modal-box .attention-box {
   margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--input-soft); color: var(--input); font-weight: 600;
 }
 .list { list-style: none; margin: 0; padding: 0; }
@@ -434,8 +433,158 @@ main { padding: 22px 28px 40px; }
 .swatch.wait { background: var(--cat-wait); }
 .swatch.message { background: var(--cat-message); }
 
+/* The Cards / Graph switch, in the view's heading */
+.title-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.view-switch { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.view-option {
+  font: inherit; font-size: 12.5px; font-weight: 600; padding: 4px 12px; border: none; border-radius: 7px;
+  background: none; color: var(--muted); cursor: pointer;
+}
+.view-option:hover { color: var(--text); }
+.view-option.on { background: var(--accent-soft); color: var(--accent); }
+
+/* The graph view: the tree as a network (app.js, "graph view"). Nodes are
+   coloured by state as the cards' dots are, and outlined and shaped by
+   kind in the legend's colours: a session square, an agent circle, a
+   command diamond. */
+.graph-host {
+  position: relative; height: clamp(420px, calc(100vh - 330px), 1100px);
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden;
+}
+.graph { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; user-select: none; }
+.graph:active { cursor: grabbing; }
+.graph-note { padding: 24px; color: var(--muted); }
+.gnode { cursor: pointer; outline: none; }
+.gnode.leaving { pointer-events: none; }
+.gnode .shape { fill: var(--idle); stroke: var(--cat-agent); stroke-width: 2.5; transition: fill 0.4s, stroke 0.4s; }
+.gnode.k-session .shape { stroke: var(--cat-lifecycle); }
+.gnode.k-command .shape { stroke: var(--cat-message); }
+.gnode.working .shape { fill: var(--working); }
+.gnode.input_required .shape { fill: var(--input); }
+.gnode.idle .shape { fill: var(--idle); }
+.gnode.completed .shape { fill: var(--completed); }
+.gnode.failed .shape { fill: var(--failed); }
+.gnode.canceled .shape { fill: var(--canceled); }
+.gnode.stale .shape { stroke-dasharray: 3 2; }
+.gnode.completed .grow, .gnode.canceled .grow { opacity: 0.6; transition: opacity 0.4s; }
+.gnode.selected .shape { stroke: var(--accent); stroke-width: 3.5; }
+.gnode:hover .shape { stroke-width: 3.5; }
+.gnode .halo { fill: none; stroke: transparent; stroke-width: 3; transform-box: fill-box; transform-origin: center; }
+.gnode.working .halo { stroke: var(--working); animation: halo 1.8s ease-out infinite; }
+/* A session's working is its agents': it doesn't pulse itself. */
+.gnode.k-session.working .halo { stroke: transparent; animation: none; }
+.gnode.input_required .halo { stroke: var(--input); animation: halo 1s ease-out infinite; }
+.gnode.current .halo { stroke: var(--accent); stroke-width: 4; opacity: 0.5; animation: none; }
+.gnode.flash .halo { stroke: var(--completed); animation: halo 1.6s ease-out; }
+/* What needs you, just brought into view (the attention counter's arrows): it pulses. */
+.gnode.attention .halo { stroke: var(--input); stroke-width: 5; animation: halo 0.65s ease-out 4; }
+.gnode.attention .shape { transform-box: fill-box; transform-origin: center; animation: bump 0.65s ease-in-out 4; }
+.gnode:focus-visible .halo { stroke: var(--accent); stroke-dasharray: 3 3; opacity: 1; animation: none; }
+.glabel {
+  font-size: 11px; font-weight: 600; fill: var(--text); text-anchor: middle; pointer-events: none;
+  paint-order: stroke; stroke: var(--panel); stroke-width: 4px; stroke-linejoin: round;
+}
+.gnode.completed .glabel, .gnode.canceled .glabel { fill: var(--muted); font-weight: 500; }
+.link { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
+/* A node's tasks, as one pill beside it: how many are done, of how many. */
+.pill { outline: none; }
+.pill path { fill: var(--panel); stroke: var(--cat-task); stroke-width: 1.5; }
+.pill text { font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; fill: var(--cat-task); text-anchor: middle; pointer-events: none; }
+.pill.all-done path { fill: color-mix(in srgb, var(--cat-task) 16%, var(--panel)); }
+.pill image { pointer-events: none; }
+/* The check mark is black: white in a dark theme. */
+@media (prefers-color-scheme: dark) { .pill image { filter: invert(1); } }
+.pill:hover path, .pill:focus-visible path { stroke-width: 2.5; }
+.modal-box section.spot { animation: spot 1.4s ease-out; border-radius: 8px; }
+.link.wait { stroke: var(--cat-wait); stroke-dasharray: 5 4; marker-end: url(#wait-arrow); opacity: 0.8; }
+/* A parent waiting on its child (or a child on its parent): its line, dashed. */
+.link.tree.waiting { stroke: var(--cat-wait); stroke-dasharray: 5 4; stroke-width: 2; animation: march 1s linear infinite; }
+.wait-head { fill: var(--cat-wait); }
+.graph-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; }
+.graph-tools .btn[hidden] { display: none; }
+.graph-tools .icon-fit { display: grid; place-items: center; padding: 4px 7px; }
+.graph-tools .icon-fit img { display: block; width: 20px; height: 20px; }
+
+/* The other sessions, round this one when zoomed out (app.js, "the other
+   sessions, zoomed out"): coloured by how they're doing, as the list's
+   dots are, pulsing orange where they need you, and drifting a little. */
+.onode { cursor: pointer; outline: none; }
+.onode.gone { pointer-events: none; }
+.onode .drift { animation: drift 6s ease-in-out infinite; }
+.onode .hit { fill: transparent; stroke: transparent; transition: fill 0.15s, stroke 0.15s; }
+.onode:hover .hit, .onode:focus-visible .hit { fill: color-mix(in srgb, var(--accent) 6%, transparent); stroke: color-mix(in srgb, var(--accent) 40%, transparent); }
+.onode .shape { fill: var(--idle); stroke: var(--cat-lifecycle); stroke-width: 2.5; }
+.onode.working .shape { fill: var(--working); }
+.onode.completed .shape { fill: var(--completed); }
+.onode.failed .shape { fill: var(--failed); }
+.onode.canceled .shape { fill: var(--canceled); }
+.onode.completed .drift, .onode.canceled .drift { opacity: 0.6; }
+.onode.needs-you .shape { fill: var(--input); stroke: var(--input); }
+.onode .halo { fill: none; stroke: transparent; stroke-width: 3; transform-box: fill-box; transform-origin: center; }
+.onode.needs-you .halo { stroke: var(--input); stroke-width: 4; animation: halo 1s ease-out infinite; }
+.onode .oname {
+  font-size: 13px; font-weight: 650; fill: var(--text); text-anchor: middle; pointer-events: none;
+  paint-order: stroke; stroke: var(--panel); stroke-width: 4px; stroke-linejoin: round;
+}
+.onode .ostatus { font-size: 11.5px; fill: var(--muted); text-anchor: middle; pointer-events: none; }
+.onode.needs-you .ostatus { fill: var(--input); font-weight: 650; }
+/* Going to one: everything else fades as the view zooms into it. */
+.graph-host.choosing .nodes, .graph-host.choosing .links, .graph-host.choosing .onode:not(.chosen) { opacity: 0; transition: opacity 0.45s; }
+.graph-legend {
+  position: absolute; bottom: 10px; left: 10px; margin: 0; padding: 5px 10px; list-style: none;
+  display: flex; flex-wrap: wrap; gap: 4px 12px; max-width: calc(100% - 20px); pointer-events: none;
+  font-size: 12px; color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 8px;
+  transition: opacity 0.4s ease;
+}
+/* Zoomed out to the other sessions, the legend fades away, and back. */
+.graph-host.overview .graph-legend { opacity: 0; }
+.glyph { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 2px solid; background: var(--panel); }
+.glyph.k-session { border-color: var(--cat-lifecycle); border-radius: 3px; }
+.glyph.k-agent { border-color: var(--cat-agent); border-radius: 50%; }
+.glyph.k-command { border-color: var(--cat-message); width: 9px; height: 9px; transform: rotate(45deg); }
+.glyph.k-tasks { border-color: var(--cat-task); border-width: 1.5px; width: 16px; height: 9px; border-radius: 5px; }
+.glyph.k-wait { width: 16px; height: 0; border: none; border-top: 2px dashed var(--cat-wait); background: none; vertical-align: middle; }
+.graph-tip {
+  position: absolute; z-index: 5; max-width: 300px; padding: 10px 12px; pointer-events: none;
+  display: flex; flex-direction: column; gap: 4px; font-size: 12.5px;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.16);
+}
+.graph-tip[hidden] { display: none; }
+.tip-head { display: flex; align-items: center; gap: 8px; }
+.tip-head .dot { margin-top: 0; }
+.tip-sub, .tip-muted { color: var(--muted); }
+.tip-attention { color: var(--input); font-weight: 600; }
+.tip-hint { color: var(--faint); font-size: 11.5px; margin-top: 2px; }
+
+/* A node's details, in a dialog over the page (from the graph) */
+.node-modal {
+  width: min(640px, calc(100vw - 32px)); max-height: min(82vh, 900px); padding: 0;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.3);
+}
+.node-modal::backdrop { background: rgb(0 0 0 / 0.42); }
+.node-modal[open] { animation: modal-in 0.18s ease-out; }
+.modal-box { position: relative; padding: 22px 24px 26px; }
+.modal-box .detail-head h2 { padding-right: 36px; }
+.modal-close {
+  position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; border: none; border-radius: 8px;
+  background: none; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer;
+}
+.modal-close:hover { background: var(--panel-2); color: var(--text); }
+
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes halo { 0% { opacity: 0.9; transform: scale(0.85); } 100% { opacity: 0; transform: scale(1.5); } }
+@keyframes march { to { stroke-dashoffset: -9; } }
+@keyframes spot { 0% { background: color-mix(in srgb, var(--cat-task) 16%, transparent); } 100% { background: transparent; } }
+@keyframes bump { 50% { transform: scale(1.3); } }
+@keyframes needs-you {
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--input) 45%, transparent); border-color: var(--input); }
+}
+@keyframes drift { 0%, 100% { transform: translate(0, 0); } 33% { transform: translate(3px, -4px); } 66% { transform: translate(-3px, 3px); } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
 @keyframes flash {
   0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--completed) 45%, transparent); }
   100% { box-shadow: 0 0 0 4px transparent; }

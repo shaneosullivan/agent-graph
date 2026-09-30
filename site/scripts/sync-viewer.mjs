@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Copies what the site shares with the Rust crate, so neither can drift:
 //
-//   ../src/view/assets/app.js, app.css  ->  public/viewer/
+//   ../src/view/assets/app.js, app.css, d3.min.js  ->  public/viewer/
 //   ../src/view/assets/index.html       ->  lib/viewer-shell.ts (its markup)
 //
 // With --wasm it also builds the reducer to WebAssembly (needs Rust and the
@@ -158,7 +158,7 @@ if (args.has("--check-wasm")) {
 }
 
 mkdirSync(out, {recursive: true});
-for (const name of ["app.js", "app.css"])
+for (const name of ["app.js", "app.css", "d3.min.js"])
   copyFileSync(join(assets, name), join(out, name));
 
 const html = readFileSync(join(assets, "index.html"), "utf8");

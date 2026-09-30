@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {test} from "node:test";
+import vm from "node:vm";
 
 import {asServer, graph, loadViewer, node, until} from "./viewer-harness.mjs";
 
@@ -1296,4 +1297,381 @@ test("the list groups sessions by folder, which fold away", async t => {
   assert.equal(heads()[0].getAttribute("aria-expanded"), "true");
   assert.equal(inApp().length, 2);
   assert.ok(!heads()[0].querySelector(".folder-attention"));
+});
+
+// ---------- the graph view ----------
+
+/** A session that started three agents: one done, one waiting on another. */
+function agentsTree() {
+  const s = node("x:s", {
+    children: ["x:s/a", "x:s/b", "x:s/c"],
+    blocked: {on: ["x:s/a"], starting: 0, open_tasks: 0, nodes: 1},
+  });
+  const a = node("x:s/a", {parent: "x:s"});
+  const b = node("x:s/b", {
+    parent: "x:s",
+    blocked: {on: ["x:s/c"], starting: 0, open_tasks: 0, nodes: 1},
+  });
+  const c = node("x:s/c", {parent: "x:s", state: "completed"});
+  return graph([s, a, b, c], {roots: ["x:s"]});
+}
+
+test("the graph's nodes and lines: the tree, and waits that aren't along it", async t => {
+  const g = agentsTree();
+  const window = loadViewer(t, {graph: async () => g});
+  const v = window.__viewer;
+  await until(() => window.document.querySelector("#view .node"));
+  const {nodes, links} = v.graphData(
+    v.S.shown || v.S.live,
+    "x:s",
+    new Set(["x:s"]),
+  );
+  // (Copied out of the page's own arrays, to compare.)
+  const plain = x => JSON.parse(JSON.stringify(x));
+  assert.deepEqual(plain(nodes.map(n => [n.id, n.depth])), [
+    ["x:s", 0],
+    ["x:s/a", 1],
+    ["x:s/b", 1],
+    ["x:s/c", 1],
+  ]);
+  assert.deepEqual(
+    plain(links.map(l => [l.kind, l.source, l.target, Boolean(l.waiting)])),
+    [
+      // The session waiting on its own agent: its tree line, marked.
+      ["tree", "x:s", "x:s/a", true],
+      ["tree", "x:s", "x:s/b", false],
+      ["tree", "x:s", "x:s/c", false],
+      // One agent waiting on another: an arrow of its own.
+      ["wait", "x:s/b", "x:s/c", false],
+    ],
+  );
+
+  // Without "Completed", the finished agent (and the arrow to it) goes.
+  v.S.showDone = false;
+  const filtered = v.graphData(v.S.shown || v.S.live, "x:s", new Set(["x:s"]));
+  assert.deepEqual(plain(filtered.nodes.map(n => n.id)), [
+    "x:s",
+    "x:s/a",
+    "x:s/b",
+  ]);
+  assert.equal(filtered.links.filter(l => l.kind === "wait").length, 0);
+});
+
+test("the view switch shows the graph, is remembered, and redraws keep what's drawn in it", async t => {
+  const g = agentsTree();
+  const window = loadViewer(t, {graph: async () => g});
+  const doc = window.document;
+  const v = window.__viewer;
+  await until(() => doc.querySelector("#view .node"));
+  assert.equal(v.S.view, "cards");
+  const graphButton = [...doc.querySelectorAll(".view-option")].find(
+    b => b.textContent === "Graph",
+  );
+  graphButton.click();
+  assert.equal(v.S.view, "graph");
+  assert.equal(window.localStorage.getItem("agentGraphView"), "graph");
+  const host = doc.querySelector("#view .graph-host");
+  assert.ok(host, "the graph's place");
+  assert.equal(doc.querySelectorAll("#view .node").length, 0, "no cards");
+  // What's drawn in it (the graph, or here, a stand-in) survives a redraw.
+  const drawn = doc.createElement("span");
+  drawn.className = "drawn";
+  host.append(drawn);
+  v.renderMain();
+  assert.equal(doc.querySelector("#view .graph-host"), host);
+  assert.ok(host.querySelector(".drawn"));
+  // And back.
+  [...doc.querySelectorAll(".view-option")]
+    .find(b => b.textContent === "Cards")
+    .click();
+  assert.equal(doc.querySelectorAll("#view .node").length, 4);
+});
+
+test("the graph draws the tree with D3, and the Completed filter takes nodes out and puts them back", async t => {
+  const g = agentsTree();
+  const window = loadViewer(t, {graph: async () => g});
+  const doc = window.document;
+  const v = window.__viewer;
+  // D3 as the page would load it (jsdom doesn't fetch scripts).
+  window.eval(
+    readFileSync(
+      new URL("../../src/view/assets/d3.min.js", import.meta.url),
+      "utf8",
+    ),
+  );
+  await until(() => doc.querySelector("#view .node"));
+  v.setViewMode("graph");
+  const drawn = () =>
+    [...doc.querySelectorAll("#view .gnode:not(.leaving)")].map(
+      n => n.querySelector("text").textContent,
+    );
+  await until(() => drawn().length === 4);
+  assert.deepEqual(
+    [...doc.querySelectorAll("#view .gnode")].map(n =>
+      [...n.classList].filter(c => c.startsWith("k-") || c === "completed"),
+    ),
+    [["k-session"], ["k-agent"], ["k-agent"], ["k-agent", "completed"]],
+  );
+  assert.equal(doc.querySelectorAll("#view path.link.wait").length, 1);
+  assert.equal(doc.querySelectorAll("#view path.link.waiting").length, 1);
+
+  const box = doc.querySelector("#show-done");
+  box.checked = false;
+  box.dispatchEvent(new window.Event("change"));
+  await until(() => drawn().length === 3);
+  // Gone once it's shrunk away.
+  await until(() => doc.querySelectorAll("#view .gnode").length === 3);
+
+  box.checked = true;
+  box.dispatchEvent(new window.Event("change"));
+  await until(() => drawn().length === 4);
+  if (v.G.sim) v.G.sim.stop();
+});
+
+test("a node's dialog shows all about it, follows a link in it, and closes", async t => {
+  const g = agentsTree();
+  const window = loadViewer(t, {graph: async () => g});
+  const doc = window.document;
+  const v = window.__viewer;
+  await until(() => doc.querySelector("#view .node"));
+  v.openModal("x:s/b");
+  const dialog = doc.querySelector("#node-modal");
+  assert.ok(dialog.open);
+  assert.equal(v.S.selected, "x:s/b");
+  assert.match(dialog.querySelector("h2").textContent, /^Agent b/);
+  assert.ok(
+    [...dialog.querySelectorAll("h3")].some(h =>
+      /Waiting on/.test(h.textContent),
+    ),
+  );
+  // A node named in it is shown in it.
+  [...dialog.querySelectorAll("button.linkish")]
+    .find(b => b.dataset.id === "x:s/c")
+    .click();
+  assert.equal(v.S.modal, "x:s/c");
+  dialog.querySelector(".modal-close").click();
+  assert.equal(dialog.open, false);
+  assert.equal(v.S.modal, null);
+});
+
+test("a node's tasks are one pill beside it, counting them, that opens its details at its tasks", async t => {
+  const task = (text, status) => ({text, status});
+  const s = node("x:s", {
+    children: ["x:s/a"],
+    tasks: [
+      task("One", "completed"),
+      task("Two", "completed"),
+      task("Three", "in_progress"),
+    ],
+    open_tasks: 1,
+  });
+  const a = node("x:s/a", {parent: "x:s"});
+  const g = graph([s, a], {roots: ["x:s"]});
+  const window = loadViewer(t, {graph: async () => g});
+  const doc = window.document;
+  const v = window.__viewer;
+  window.eval(
+    readFileSync(
+      new URL("../../src/view/assets/d3.min.js", import.meta.url),
+      "utf8",
+    ),
+  );
+  await until(() => doc.querySelector("#view .node"));
+  v.setViewMode("graph");
+  await until(() => doc.querySelectorAll("#view .gnode").length === 2);
+  const [session, agent] = doc.querySelectorAll("#view .gnode");
+  const pill = session.querySelector("g.pill");
+  assert.equal(pill.getAttribute("display"), null, "shown");
+  assert.equal(pill.querySelector("text").textContent, "2/3");
+  assert.equal(pill.getAttribute("aria-label"), "Tasks: 2 of 3 done");
+  // An agent without tasks has none.
+  assert.equal(agent.querySelector("g.pill").getAttribute("display"), "none");
+
+  const scrolls = window.__scrolls || 0;
+  pill
+    .querySelector("path")
+    .dispatchEvent(new window.MouseEvent("click", {bubbles: true}));
+  const dialog = doc.querySelector("#node-modal");
+  assert.ok(dialog.open);
+  assert.equal(v.S.modal, "x:s");
+  // Brought to its tasks, which it lists.
+  assert.ok((window.__scrolls || 0) > scrolls);
+  assert.ok(
+    dialog.querySelector("section.spot h3").textContent.startsWith("Tasks"),
+  );
+  assert.equal(dialog.querySelectorAll("li.task").length, 3);
+  // The node itself opens at the top.
+  dialog.querySelector(".modal-close").click();
+  session
+    .querySelector("path.shape")
+    .dispatchEvent(new window.MouseEvent("click", {bubbles: true}));
+  assert.equal(dialog.querySelector("section.spot"), null);
+  if (v.G.sim) v.G.sim.stop();
+});
+
+/** Two sessions: one busy, and one whose agent needs you. */
+function oneNeedsYou() {
+  const busy = node("x:busy", {last_event_at: new Date().toISOString()});
+  const s = node("x:s", {
+    children: ["x:s/a", "x:s/b"],
+    last_event_at: new Date(Date.now() - 60_000).toISOString(),
+  });
+  const a = node("x:s/a", {parent: "x:s"});
+  const b = node("x:s/b", {
+    parent: "x:s",
+    state: "input_required",
+    attention: "Allow it?",
+  });
+  return graph([busy, s, a, b], {roots: ["x:busy", "x:s"]});
+}
+
+test("the attention arrows show the session that needs you, with its card brought to the middle and pulsing", async t => {
+  const g = oneNeedsYou();
+  const window = loadViewer(
+    t,
+    {graph: async (until, root) => g},
+    {hash: "#x%3Abusy"},
+  );
+  const doc = window.document;
+  const v = window.__viewer;
+  await until(() => doc.querySelector("#view .node") && v.S.root === "x:busy");
+  doc.querySelector('#attention button[aria-label^="Next"]').click();
+  await until(() => doc.querySelector("#view .node.attention"));
+  assert.equal(v.S.root, "x:s");
+  assert.equal(doc.querySelector("#view .node.attention").dataset.id, "x:s/b");
+  // It stops pulsing after a moment.
+  await until(() => !doc.querySelector("#view .node.attention"), 4000);
+});
+
+test("in the graph, the attention arrows centre what needs you, and pulse it", async t => {
+  const g = oneNeedsYou();
+  const window = loadViewer(
+    t,
+    {graph: async (until, root) => g},
+    {hash: "#x%3Abusy"},
+  );
+  const doc = window.document;
+  const v = window.__viewer;
+  window.eval(
+    readFileSync(
+      new URL("../../src/view/assets/d3.min.js", import.meta.url),
+      "utf8",
+    ),
+  );
+  await until(() => doc.querySelector("#view .node") && v.S.root === "x:busy");
+  v.setViewMode("graph");
+  await until(() => doc.querySelector("#view .gnode"));
+  doc.querySelector('#attention button[aria-label^="Next"]').click();
+  await until(
+    () => doc.querySelector("#view .gnode.attention") && v.S.root === "x:s",
+    4000,
+  );
+  assert.equal(
+    doc.querySelector("#view .gnode.attention").getAttribute("aria-label"),
+    "Agent b, Needs you",
+  );
+  assert.equal(v.S.showNeedsYou, null);
+  assert.equal(v.G.focus, null);
+  if (v.G.sim) v.G.sim.stop();
+});
+
+test("the built D3 has everything the viewer uses of it", () => {
+  const app = readFileSync(
+    new URL("../../src/view/assets/app.js", import.meta.url),
+    "utf8",
+  );
+  const used = new Set(
+    [...app.matchAll(/\bd3\s*\.\s*([A-Za-z]+)\s*\(?/g)]
+      .map(m => m[1])
+      // The file's name, where it's loaded from.
+      .filter(name => name !== "min"),
+  );
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(
+    readFileSync(
+      new URL("../../src/view/assets/d3.min.js", import.meta.url),
+      "utf8",
+    ),
+    context,
+  );
+  const missing = [...used].filter(name => !(name in context.d3));
+  assert.deepEqual(missing, [], "npm run build-d3, with them in its entry");
+  assert.ok(used.has("forceSimulation") && used.has("zoomTransform"));
+});
+
+test("the Apps filter: unticking an app leaves its sessions out, and unticking them all means all", async t => {
+  const g = graph([node("x:one"), node("y:two")], {roots: ["x:one", "y:two"]});
+  // Showing y's session: the one shown is always listed.
+  const window = loadViewer(t, {graph: async () => g}, {hash: "#y%3Atwo"});
+  const doc = window.document;
+  await until(
+    () => doc.querySelectorAll("#session-list .session").length === 2,
+  );
+  const tick = app => doc.querySelector(`#app-filter input[data-app="${app}"]`);
+  const untick = app => {
+    tick(app).checked = false;
+    tick(app).dispatchEvent(new window.Event("change"));
+  };
+  const listed = () =>
+    [...doc.querySelectorAll("#session-list .session")].map(e => e.dataset.id);
+  const label = () => doc.querySelector("#app-filter-label").textContent;
+
+  untick("x");
+  assert.deepEqual(listed(), ["y:two"]);
+  assert.notEqual(label(), "All");
+
+  // The last one unticked: none ticked is all of them.
+  untick("y");
+  assert.deepEqual(listed().sort(), ["x:one", "y:two"]);
+  assert.equal(label(), "All");
+  assert.equal(tick("x").checked, true);
+  assert.equal(tick("y").checked, true);
+  assert.equal(tick("").checked, true, "All apps");
+
+  // Unticking "All apps" is the same: everything still shows.
+  untick("");
+  assert.deepEqual(listed().sort(), ["x:one", "y:two"]);
+  assert.equal(label(), "All");
+});
+
+test("zoomed out, the other sessions show round this one, and choosing one shows it", async t => {
+  const g = oneNeedsYou();
+  const window = loadViewer(t, {graph: async () => g}, {hash: "#x%3Abusy"});
+  const doc = window.document;
+  const v = window.__viewer;
+  window.eval(
+    readFileSync(
+      new URL("../../src/view/assets/d3.min.js", import.meta.url),
+      "utf8",
+    ),
+  );
+  await until(() => doc.querySelector("#view .node") && v.S.root === "x:busy");
+  v.setViewMode("graph");
+  await until(() => doc.querySelector("#view .gnode"));
+  const others = () => [...doc.querySelectorAll("#view .onode:not(.gone)")];
+  assert.equal(others().length, 0, "not until zoomed out");
+
+  const button = doc.querySelector("#view .show-others");
+  assert.equal(button.hidden, false, "there's another session to show");
+  button.click();
+  await until(() => others().length === 1);
+  const [other] = others();
+  assert.equal(
+    other.getAttribute("aria-label"),
+    "Session s: Needs you: Allow it?. Show it.",
+  );
+  assert.ok(other.classList.contains("needs-you"));
+
+  // Fit: back to this session alone, the others sent away.
+  doc.querySelector("#view .icon-fit").click();
+  await until(() => !doc.querySelector("#view .onode"), 3000);
+
+  // Out again, and choosing it shows it.
+  doc.querySelector("#view .show-others").click();
+  await until(() => others().length === 1);
+  others()[0].dispatchEvent(new window.MouseEvent("click", {bubbles: true}));
+  await until(() => v.S.root === "x:s");
+  await until(() => doc.querySelectorAll("#view .gnode").length === 3);
+  if (v.G.sim) v.G.sim.stop();
 });

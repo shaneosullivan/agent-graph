@@ -57,6 +57,8 @@ pub const MAX_CONNECTIONS: usize = 256;
 const INDEX_HTML: &str = include_str!("assets/index.html");
 const APP_CSS: &str = include_str!("assets/app.css");
 const APP_JS: &str = include_str!("assets/app.js");
+/// D3, for the graph view: loaded by the page only when that's chosen.
+const D3_JS: &str = include_str!("assets/d3.min.js");
 /// The logo (scripts/make-icons.py): the favicon, and the header's.
 const ICON_SVG: &str = include_str!("assets/icon.svg");
 
@@ -348,7 +350,7 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
     let public = req.method == "GET"
         && matches!(
             req.path.as_str(),
-            "/" | "/index.html" | "/app.css" | "/app.js" | "/icon.svg"
+            "/" | "/index.html" | "/app.css" | "/app.js" | "/d3.min.js" | "/icon.svg"
         );
     if !public && !has_key(req, &shared.key) {
         return respond(stream, 403, "text/plain", &[], NEEDS_KEY);
@@ -393,6 +395,13 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
             "text/javascript; charset=utf-8",
             &[],
             APP_JS.as_bytes(),
+        ),
+        "/d3.min.js" => respond(
+            stream,
+            200,
+            "text/javascript; charset=utf-8",
+            &[],
+            D3_JS.as_bytes(),
         ),
         "/icon.svg" => respond(
             stream,
