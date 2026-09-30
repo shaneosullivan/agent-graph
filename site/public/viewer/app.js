@@ -2161,24 +2161,34 @@ function fitGraph(smooth) {
   else G.svg.call(G.zoom.transform, t);
 }
 
-/** Dragging a node moves it (and the others make room); let go, and it settles. */
+/**
+ * Dragging a node moves it (and the others make room); let go, and it stays
+ * where it's put: pinned there (`fx`, `fy`) while the rest settle round it.
+ * A click, which doesn't move it, leaves it as it was. Once one's been
+ * moved, the view stays put too, rather than being fitted again round it.
+ */
 function dragNodes(d3) {
   return d3
     .drag()
     .on('start', (e, n) => {
-      if (!e.active) G.sim.alphaTarget(0.3).restart();
-      n.fx = n.x;
-      n.fy = n.y;
+      n.dragging = false;
       hideGraphTip();
     })
     .on('drag', (e, n) => {
+      if (!n.dragging) {
+        n.dragging = true;
+        G.userMoved = true;
+        G.following = null;
+        // (During a drag, d3 counts it among the active ones: so not `!e.active`.)
+        G.sim.alphaTarget(0.3).restart();
+      }
       n.fx = e.x;
       n.fy = e.y;
     })
     .on('end', (e, n) => {
+      if (!n.dragging) return;
+      n.dragging = false;
       if (!e.active) G.sim.alphaTarget(0);
-      n.fx = null;
-      n.fy = null;
     });
 }
 
