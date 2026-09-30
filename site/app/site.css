@@ -22,6 +22,14 @@
   --bad: #d93025;
   --radius: 12px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* Commands and code blocks: a dark, terminal-like block in either theme,
+     so they stand out from the cards they're on. */
+  --code-bg: #1e2027;
+  --code-line: #1e2027;
+  --code-text: #e9ebf0;
+  /* Code in a sentence: a tinted chip. */
+  --chip-bg: #eeede8;
+  --chip-line: #e0dfd9;
   font:
     15px/1.55 system-ui,
     -apple-system,
@@ -48,6 +56,11 @@
     --warn: #f0a33a;
     --warn-soft: #33260f;
     --bad: #ff6b5e;
+    --code-bg: #060607;
+    --code-line: #3d3d46;
+    --code-text: #f4f5f8;
+    --chip-bg: #2b2b31;
+    --chip-line: #3d3d45;
   }
 }
 
@@ -72,6 +85,20 @@ body {
 .site pre {
   font-family: var(--mono);
   font-size: 13px;
+}
+/* Code in a sentence, or naming an option: a chip. (Not a command, which
+   is a block of its own: see .command.) */
+.site :not(pre) > code:not(.command) {
+  font-size: 0.88em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-line);
+  color: var(--text);
+  /* Wrapped over two lines, each part a chip of its own. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  overflow-wrap: break-word;
 }
 .site h1,
 .site h2,
@@ -411,8 +438,9 @@ body {
   margin: 12px 0;
   padding-right: 6px;
   border-radius: 10px;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  background: var(--code-bg);
+  border: 1px solid var(--code-line);
+  color-scheme: dark;
 }
 .site .command-box.multi {
   align-items: flex-start;
@@ -436,7 +464,7 @@ body {
   padding: 0;
   border: none;
   border-radius: 6px;
-  background: var(--panel);
+  background: none;
   cursor: pointer;
   opacity: 0.6;
 }
@@ -446,17 +474,15 @@ body {
 .site .copy-command:hover,
 .site .copy-command:focus-visible {
   opacity: 1;
-  background: var(--panel-2);
+  background: rgb(255 255 255 / 0.1);
 }
 .site .copy-command img {
   width: 16px;
   height: 16px;
 }
-/* The icons are black: white in a dark theme. */
-@media (prefers-color-scheme: dark) {
-  .site .copy-command img {
-    filter: invert(1);
-  }
+/* The icons are black: white, on a command's dark block. */
+.site .copy-command img {
+  filter: invert(1);
 }
 
 .site .paste {
@@ -650,9 +676,10 @@ body {
   padding: 12px 14px;
   border-radius: 10px;
   overflow-x: auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  color: var(--text);
+  background: var(--code-bg);
+  border: 1px solid var(--code-line);
+  color: var(--code-text);
+  color-scheme: dark;
 }
 .site .options {
   display: grid;
@@ -805,13 +832,6 @@ body {
 .site .muted {
   color: var(--muted);
 }
-.site .docs-main :not(pre) > code {
-  font-size: 0.88em;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 1px 5px;
-}
 .site .steps {
   padding-left: 22px;
   margin: 10px 0;
@@ -854,9 +874,10 @@ body {
   padding: 12px 14px;
   border-radius: 10px;
   overflow-x: auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  color: var(--text);
+  background: var(--code-bg);
+  border: 1px solid var(--code-line);
+  color: var(--code-text);
+  color-scheme: dark;
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.5;

@@ -9,8 +9,7 @@ import {ImageResponse} from "next/og";
  * by scripts/make-icons.py), the name and what it does. Made once, at
  * build time.
  */
-export const alt =
-  "Agent Graph: see what your AI coding agents are doing, and share it.";
+export const alt = "Agent Graph: Keep up with your army of agents.";
 export const size = {width: 1200, height: 630};
 export const contentType = "image/png";
 

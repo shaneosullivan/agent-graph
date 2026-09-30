@@ -8,6 +8,10 @@ import {CopyCommand} from "./copy-command";
 /** What GET /api/watching says of the account's `watch-remote`. */
 type Watching = {watching: true; sessions: number} | {watching: false};
 
+interface Props {
+  loggedOutContent: React.ReactNode;
+}
+
 /**
  * For a logged-in visitor, above the install card: whether their
  * `agent-graph watch-remote` is running now, and if so how many sessions
@@ -19,7 +23,7 @@ type Watching = {watching: true; sessions: number} | {watching: false};
  * named (app/site.css, "view transitions"), so it comes in as the cards
  * below it move down to make room, rather than jumping in.
  */
-export function WatchCard() {
+export function WatchCard(props: Props) {
   const signedIn = useSyncExternalStore(
     () => () => {},
     () => document.cookie.split("; ").includes("ag_signed_in=1"),
@@ -80,7 +84,7 @@ export function WatchCard() {
   }, [signedIn]);
 
   if (!signedIn || !state) {
-    return null;
+    return props.loggedOutContent;
   }
   return state.watching ? (
     <a className="card watch-card live" href="/watch">
@@ -101,7 +105,7 @@ export function WatchCard() {
         Open →
       </span>
     </a>
-  ) : (
+  ) : signedIn ? (
     <div className="card watch-card">
       <div className="watch-text">
         <strong>Not watching anything right now</strong>
@@ -111,5 +115,7 @@ export function WatchCard() {
         <CopyCommand command="agent-graph watch-remote" />
       </div>
     </div>
+  ) : (
+    props.loggedOutContent
   );
 }

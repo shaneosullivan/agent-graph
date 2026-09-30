@@ -29,22 +29,80 @@ export default function Home() {
         />
 
         <section className="hero">
-          <h1>See what your AI coding agents are doing, and share it.</h1>
+          <h1>Keep up with your army of agents</h1>
+
           <p>
-            Paste or upload an Agent Graph log to get a link. It opens a viewer
-            you can step through: which session started which agents,
-            who&rsquo;s waiting on whom, what looks stuck, and what needs you. A
-            log is deleted once it has had no new events for a week.
+            We humans are still an integral cog in the AI machine, but when
+            we're running dozens (or even just 4 or 5) agents or sessions, we
+            often become the bottleneck. An agent is waiting on our input, a
+            session is blocked by a child session it spawned, and unless we
+            monitor them like a hawk, they remain blocked.
+          </p>
+          <p>
+            <strong>Agent Graph</strong> solves this.
           </p>
         </section>
 
-        <WatchCard />
+        <WatchCard
+          loggedOutContent={
+            <section>
+              <h2>How does Agent Graph help?</h2>
+              <p>
+                Agent Graph integrates with leading AI coding providers like{" "}
+                <a
+                  href="https://claude.com/product/claude-code"
+                  target="_blank">
+                  Claude Code
+                </a>
+                ,{" "}
+                <a href="https://openai.com/codex/" target="_blank">
+                  Codex
+                </a>{" "}
+                and{" "}
+                <a href="https://cursor.com/" target="_blank">
+                  Cursor
+                </a>{" "}
+                to record a log of all your sessions, agents and tasks and the
+                dependencies between them. It highlights where you are needed at
+                any time, what work is ongoing, and what is completed. You can
+                run it completely locally, it starts a local web server that you
+                use on your computer.
+              </p>
+              <h3>What about when I'm away from my computer?</h3>
+              <p>
+                To keep up with your agents on the move, you simply run{" "}
+                <code>agent-graph watch-remote</code>, and that streams your
+                logs to this site, where you can track all your agent's work in
+                a fully secure and private manner. This is completely optional,
+                and you can of course keep all of your logs local on your
+                machine. This entire project is open source too of course, so
+                you can even fork it, deploy this site yourself to your own
+                domain, and use it for your work instead of this site.
+              </p>
+            </section>
+          }
+        />
 
-        <Install />
-
-        <Uploader />
+        <section className="section">
+          <h2>Install Agent Graph on Mac, Linux and soon Windows</h2>
+          <Install />
+        </section>
 
         <Examples />
+
+        <section className="section">
+          <h2>Share your logs</h2>
+
+          <p>
+            Paste or upload an Agent Graph log to get a link, get it from{" "}
+            <code>.agent-graph/events</code> in your home folder. It opens a
+            viewer you can step through: which session started which agents,
+            who&rsquo;s waiting on whom, what looks stuck, and what needs you.
+            You can share the url with a teammate and it'll stay live for a
+            week.
+          </p>
+          <Uploader />
+        </section>
 
         <section className="section" id="live">
           <h2>Share live from your machine</h2>
@@ -60,7 +118,7 @@ export default function Home() {
             {watchRemote.options.map(option =>
               // (Not --url, for another site, nor --background, which
               // --autostart's service runs it with.)
-              option.flag !== "--url" && option.flag !== "--background" ? (
+              option.id !== "url" && option.id !== "background" ? (
                 <Fragment key={option.id}>
                   <dt>
                     <code>{option.flag}</code>
