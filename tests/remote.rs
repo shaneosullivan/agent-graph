@@ -1305,3 +1305,94 @@ fn says_it_is_still_running() {
     assert_eq!(said.headers["authorization"], "Bearer the-key");
     assert_eq!(said.body, r#"{"sessions":1}"#);
 }
+
+/// Where `--autostart` puts its service, under `home` (as $HOME).
+fn service_file(home: &std::path::Path) -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/LaunchAgents/com.chofter.agent-graph.watch-remote.plist")
+    } else {
+        home.join(".config/systemd/user/agent-graph-watch-remote.service")
+    }
+}
+
+/// `--autostart` writes the service that runs it in the background at
+/// login, for someone logged in; `--no-autostart` removes it. (Only the
+/// files: launchd and systemd aren't told, in a test.)
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn autostart_sets_up_a_service_and_no_autostart_removes_it() {
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join(".agent-graph");
+    std::fs::create_dir_all(&data).unwrap();
+    let site = "https://sharing.example";
+    let account = serde_json::json!({"site": site, "token": "agt_test", "email": "me@example.com"});
+    std::fs::write(data.join("account.json"), account.to_string()).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+            .args(args)
+            .env("HOME", home.path())
+            .env("AGENT_GRAPH_HOME", &data)
+            .env("AGENT_GRAPH_NO_SERVICE_MANAGER", "1")
+            .env("AGENT_GRAPH_NO_BROWSER", "1")
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+            .unwrap()
+    };
+
+    let out = run(&["watch-remote", "--autostart", &format!("--url={site}")]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("whenever you log in"), "{said}");
+    assert!(said.contains("me@example.com"), "{said}");
+    let service = std::fs::read_to_string(service_file(home.path())).unwrap();
+    assert!(service.contains("watch-remote"), "{service}");
+    assert!(service.contains("--background"), "{service}");
+    assert!(service.contains(&format!("--url={site}")), "{service}");
+    assert!(
+        service.contains(&data.to_string_lossy().to_string()),
+        "its data directory: {service}"
+    );
+
+    // With another option that doesn't go with it, it's refused.
+    assert!(
+        !run(&["watch-remote", "--autostart", "--new"])
+            .status
+            .success()
+    );
+
+    let out = run(&["watch-remote", "--no-autostart"]);
+    assert!(out.status.success());
+    assert!(!service_file(home.path()).exists());
+    let out = run(&["watch-remote", "--no-autostart"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("wasn't set to start"));
+}
+
+/// Started at login but not logged in, it doesn't open a browser or fail
+/// (which would have it started again and again): it says how to log in,
+/// and stops.
+#[test]
+fn a_background_run_that_needs_a_login_says_so_and_stops() {
+    let (port, requests) = mock_site();
+    let home = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args([
+            "watch-remote",
+            "--background",
+            &format!("--url=http://127.0.0.1:{port}"),
+        ])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("Not logged in"), "{said}");
+    assert!(said.contains("agent-graph watch-remote --url="), "{said}");
+    assert!(
+        requests.recv_timeout(Duration::from_millis(300)).is_err(),
+        "nothing's sent to the site"
+    );
+}

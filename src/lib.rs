@@ -19,6 +19,8 @@ pub mod store;
 pub mod timeline;
 
 #[cfg(feature = "cli")]
+pub mod autostart;
+#[cfg(feature = "cli")]
 pub mod cli;
 #[cfg(feature = "cli")]
 pub mod emit;

@@ -279,19 +279,25 @@
         { "text": "Only you. The site gives the share a key when it's made, and every update must carry it. It's kept in ~/.agent-graph/shares/, readable only by you, so the next run can carry on." },
         { "text": "It checks for new events once a second, and sends them at most every 5 seconds, together. If the connection drops, new events are kept and sent when it's back. If the site refuses them outright, it stops and says why. The site deletes a share that has had no new events for a week: sharing it then stops." },
         { "heading": "Running it again" },
-        { "text": "The next run for the same site, account and sessions carries on with the same share. What the site already has isn't sent again: it starts again from one summary of the log as it is now, and deletes what came before. --new starts a new share instead, as does logging in as someone else, and a share the site has deleted. If it's being shared now, by another run, it's left to that run." }
+        { "text": "The next run for the same site, account and sessions carries on with the same share. What the site already has isn't sent again: it starts again from one summary of the log as it is now, and deletes what came before. --new starts a new share instead, as does logging in as someone else, and a share the site has deleted. If it's being shared now, by another run, it's left to that run." },
+        { "heading": "Sharing whenever you log in" },
+        { "text": "--autostart has it start by itself whenever you log in to this computer, and share every session, so you never have to run it. On macOS it's a launchd agent (~/Library/LaunchAgents/com.chofter.agent-graph.watch-remote.plist; what it says goes to watch-remote.log in ~/.agent-graph); on Linux, a systemd user service (agent-graph-watch-remote.service; `journalctl --user -u agent-graph-watch-remote` shows what it says). If it fails (the network isn't up yet, say), it's started again a minute later. It never opens a browser: if you have to log in again, it stops and says so, until you do. Setting it up logs you in first, if you aren't. `agent-graph install claude-code` offers to set it up too. --no-autostart stops it and removes it." }
       ],
       "options": [
         { "id": "url", "flag": "--url <URL>", "text": "The site to share on." },
         { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code session this runs in; if that isn't recorded, it stops rather than guess)." },
         { "id": "new", "flag": "--new", "text": "Start a new share, rather than carry on with the last one." },
-        { "id": "logout", "flag": "--logout", "text": "Log this computer out of the site, and forget the login. The next run asks you to log in again." }
+        { "id": "logout", "flag": "--logout", "text": "Log this computer out of the site, and forget the login. The next run asks you to log in again." },
+        { "id": "autostart", "flag": "--autostart", "text": "Share every session whenever you log in to this computer, without running this yourself: it's started now, and at every login (on macOS and Linux). If you aren't logged in, you log in first, in the browser." },
+        { "id": "no_autostart", "flag": "--no-autostart", "text": "Stop sharing at login: what --autostart set up is stopped and removed." },
+        { "id": "background", "flag": "--background", "text": "Run unattended, as --autostart does: it never opens a browser, stops quietly if you have to log in again, and waits while another run is sharing." }
       ],
       "examples": [
         { "command": "agent-graph watch-remote", "text": "Share every session, live, to your account (logging in the first time). The first line printed is where to see it." },
         { "command": "agent-graph watch-remote --session current", "text": "Share just the session this runs in." },
         { "command": "agent-graph watch-remote --new", "text": "Start a new share of every session, rather than carry on with the last one." },
         { "command": "agent-graph watch-remote --logout", "text": "Log out on this computer." },
+        { "command": "agent-graph watch-remote --autostart", "text": "Share every session whenever you log in to this computer, from now on." },
         { "command": "agent-graph watch-remote --url=http://localhost:3000", "text": "Share to a copy of the site you're running yourself." }
       ]
     },

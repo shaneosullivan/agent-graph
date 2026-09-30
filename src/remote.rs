@@ -83,7 +83,15 @@ pub struct Options {
     pub new: bool,
     /// Log out instead: the site forgets this computer's login.
     pub logout: bool,
+    /// Run unattended (started at login: see `autostart`). It never opens a
+    /// browser: where it needs the user (to log in), it says so and stops
+    /// without failing, so it isn't started again and again; and it waits
+    /// while another run's sharing, rather than stopping.
+    pub background: bool,
 }
+
+/// How often a background run looks whether another run's still sharing.
+const WAIT_FOR_OTHER_RUN: Duration = Duration::from_secs(30);
 
 pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     let base = opts.url.trim_end_matches('/').to_string();
@@ -105,23 +113,38 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         None => (None, format!("every session in {}", root.display())),
     };
     let share_path = share_path(root, &base, only.as_deref());
-    let saved = if opts.new {
-        None
-    } else {
-        SavedShare::load(&share_path, &base, only.as_deref())
+    let load = || {
+        if opts.new {
+            None
+        } else {
+            SavedShare::load(&share_path, &base, only.as_deref())
+        }
     };
-    // Shared by another run now: its link will do.
+    let mut saved = load();
+    // Shared by another run now: its link will do. In the background, it
+    // takes over once that one stops.
     if let Some(running) = saved.as_ref().filter(|s| s.sharing_now()) {
-        println!("{}", running.link);
-        eprintln!(
-            "Already sharing {what}, from another watch-remote. Stop that one first to start this one."
-        );
-        return Ok(());
+        if !opts.background {
+            println!("{}", running.link);
+            eprintln!(
+                "Already sharing {what}, from another watch-remote. Stop that one first to start this one."
+            );
+            return Ok(());
+        }
+        eprintln!("Already sharing {what}, from another watch-remote: waiting till it stops.");
+        while saved.as_ref().is_some_and(|s| s.sharing_now()) {
+            std::thread::sleep(WAIT_FOR_OTHER_RUN);
+            saved = load();
+        }
     }
 
     let client = Client::new(&base);
     let mut account = match crate::account::load(root, &base) {
         Some(account) => account,
+        None if opts.background => {
+            eprintln!("{}", needs_login(&base, "Not logged in"));
+            return Ok(());
+        }
         None => crate::account::login(root, &base, &client)?,
     };
     let mut source = Lines::new(&events, only.clone());
@@ -138,13 +161,19 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
             .filter(|s| s.account.as_deref() == Some(account_key(&account)));
         match start_share(&client, raw.clone(), saved, &account.token) {
             Ok(started) => break started,
+            Err(SendError::LoggedOut(e)) if opts.background => {
+                eprintln!("{}", needs_login(&base, &e));
+                return Ok(());
+            }
             Err(SendError::LoggedOut(e)) if !logged_in_again => {
                 crate::account::forget(root)?;
                 eprintln!("{e}");
                 account = crate::account::login(root, &base, &client)?;
                 logged_in_again = true;
             }
-            Err(SendError::Unpaid(e)) => wait_to_subscribe(&client, &base, &account.token, &e)?,
+            Err(SendError::Unpaid(e)) => {
+                wait_to_subscribe(&client, &base, &account.token, &e, opts.background)?
+            }
             Err(e) => return Err(e.message()),
         }
     };
@@ -232,7 +261,7 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
                 // started again (which the site checks), and carries on.
                 Err(SendError::Unpaid(e)) => {
                     retrying = Some(n);
-                    wait_to_subscribe(&client, &base, &account.token, &e)?;
+                    wait_to_subscribe(&client, &base, &account.token, &e, opts.background)?;
                     match client.claim(&log, &account.token) {
                         Ok(_) | Err(SendError::Retry(_) | SendError::Unpaid(_)) => {}
                         Err(e) => return Err(e.message()),
@@ -284,12 +313,23 @@ type Started = (Created, Stream, u64, Option<u64>, bool, Standing);
 /// Opens the account page, for the user to subscribe (the site said
 /// `why`), and waits till they have: the site's asked every
 /// `SUBSCRIBE_POLL`. Ctrl+C stops it, as ever.
-fn wait_to_subscribe(client: &Client, base: &str, token: &str, why: &str) -> Result<(), String> {
+fn wait_to_subscribe(
+    client: &Client,
+    base: &str,
+    token: &str,
+    why: &str,
+    background: bool,
+) -> Result<(), String> {
     let url = format!("{base}/account");
-    eprintln!("{why}\nOpening your account page, to subscribe:\n  {url}");
-    eprintln!("(If it doesn't open, open that address yourself.) Waiting till you have…");
-    if std::env::var_os("AGENT_GRAPH_NO_BROWSER").is_none() {
-        crate::view::open_browser(&url);
+    // (In the background, nothing's opened: see `Options::background`.)
+    if background {
+        eprintln!("{why}\nSubscribe on your account page, {url}; waiting till you have…");
+    } else {
+        eprintln!("{why}\nOpening your account page, to subscribe:\n  {url}");
+        eprintln!("(If it doesn't open, open that address yourself.) Waiting till you have…");
+        if std::env::var_os("AGENT_GRAPH_NO_BROWSER").is_none() {
+            crate::view::open_browser(&url);
+        }
     }
     loop {
         std::thread::sleep(SUBSCRIBE_POLL);
@@ -302,6 +342,22 @@ fn wait_to_subscribe(client: &Client, base: &str, token: &str, why: &str) -> Res
             Err(e) => return Err(e.message()),
         }
     }
+}
+
+/// What a background run says when it needs the user to log in (`why`),
+/// which it can't do itself: how to, and to start it again.
+fn needs_login(base: &str, why: &str) -> String {
+    let url = if base == DEFAULT_URL {
+        String::new()
+    } else {
+        format!(" --url={base}")
+    };
+    let why = why.trim_end_matches('.');
+    format!(
+        "{why}. Sharing at login is paused: log in by running `agent-graph watch-remote{url}` yourself. \
+         It starts again by itself the next time you log in to this computer, or now with \
+         `agent-graph watch-remote{url} --autostart`."
+    )
 }
 
 /// A day, from ms since 1970: "2026-10-06".
@@ -1528,7 +1584,7 @@ impl Client {
 /// as it's parsed to be sent: the scheme in any case, the host after any
 /// userinfo, an IPv6 address in full. (Redirects aren't followed, so it
 /// can't be sent on anywhere else: see `Client::new`.)
-fn sends_privately(base: &str) -> bool {
+pub fn sends_privately(base: &str) -> bool {
     let Ok(uri) = base.parse::<ureq::http::Uri>() else {
         return false;
     };

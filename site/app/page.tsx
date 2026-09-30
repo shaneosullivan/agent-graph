@@ -58,7 +58,9 @@ export default function Home() {
           {/* The same text as `agent-graph watch-remote --help`. */}
           <dl className="options">
             {watchRemote.options.map(option =>
-              option.flag !== "--url" ? (
+              // (Not --url, for another site, nor --background, which
+              // --autostart's service runs it with.)
+              option.flag !== "--url" && option.flag !== "--background" ? (
                 <Fragment key={option.id}>
                   <dt>
                     <code>{option.flag}</code>

@@ -142,6 +142,20 @@ enum Command {
         new: bool,
         #[arg(long, help = help::watch_remote::opt::LOGOUT)]
         logout: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["session", "new", "logout", "no_autostart", "background"],
+            help = help::watch_remote::opt::AUTOSTART
+        )]
+        autostart: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["session", "new", "logout", "background"],
+            help = help::watch_remote::opt::NO_AUTOSTART
+        )]
+        no_autostart: bool,
+        #[arg(long, help = help::watch_remote::opt::BACKGROUND)]
+        background: bool,
     },
     #[command(
         display_order = 4,
@@ -313,9 +327,18 @@ pub fn run() -> ExitCode {
             session,
             new,
             logout,
+            autostart,
+            no_autostart,
+            background,
         } => paths::data_dir()
             .ok_or_else(|| "can't find your home directory".to_string())
             .and_then(|root| {
+                if autostart {
+                    return crate::autostart::enable(&root, &url);
+                }
+                if no_autostart {
+                    return crate::autostart::disable();
+                }
                 crate::remote::run(
                     &root,
                     crate::remote::Options {
@@ -323,6 +346,7 @@ pub fn run() -> ExitCode {
                         session,
                         new,
                         logout,
+                        background,
                     },
                 )
             }),
@@ -500,6 +524,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                 .map(|d| d.display().to_string())
                 .unwrap_or_default();
             println!("Installed. New Claude Code sessions will be recorded in {data}.");
+            offer_autostart(opts.yes);
         } else {
             println!("Installed.");
         }
@@ -507,6 +532,46 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
         println!("Uninstalled.");
     }
     Ok(())
+}
+
+/// After installing: offers to share live whenever this computer's logged
+/// in to (`watch-remote --autostart`, which logs in to the site first if
+/// need be), asking first; with --yes, or without a terminal to ask in, it
+/// only says how. Nothing if it's set up already, or can't be here.
+fn offer_autostart(yes: bool) {
+    let site = crate::remote::DEFAULT_URL;
+    if crate::autostart::service_path().is_err() || crate::autostart::enabled() {
+        return;
+    }
+    let Some(root) = paths::data_dir() else {
+        return;
+    };
+    if yes || !io::stdin().is_terminal() {
+        println!(
+            "\nTo see your sessions live from anywhere (your phone, say), shared to your account at \
+             {site}/watch whenever you log in to this computer: agent-graph watch-remote --autostart"
+        );
+        return;
+    }
+    let logged_in = crate::account::load(&root, site).is_some();
+    let question = format!(
+        "\nAlso share your sessions live to your account at {site}/watch, to see them from anywhere, \
+         whenever you log in to this computer?{}",
+        if logged_in {
+            ""
+        } else {
+            " (You'll log in to the site first.)"
+        }
+    );
+    match confirm(&question) {
+        Ok(true) => {
+            if let Err(e) = crate::autostart::enable(&root, site) {
+                println!("Couldn't set that up: {e}");
+            }
+        }
+        Ok(false) => println!("Not now. To later: agent-graph watch-remote --autostart"),
+        Err(_) => {}
+    }
 }
 
 /// A project can ship anything, including links out of itself. For project
