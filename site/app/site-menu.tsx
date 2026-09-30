@@ -1,5 +1,6 @@
 "use client";
 
+import {link} from "@/lib/links";
 import {useEffect, useRef, useState, useSyncExternalStore} from "react";
 
 /**
@@ -93,7 +94,7 @@ export function SiteMenu({
         <ul>
           {items.map(item => (
             <li key={item.href}>
-              <a href={item.href} onClick={close}>
+              <a {...link(item.href)} onClick={close}>
                 {item.label}
               </a>
             </li>

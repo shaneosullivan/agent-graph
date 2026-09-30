@@ -1,4 +1,5 @@
 import {CONTACT} from "@/lib/contact";
+import {link} from "@/lib/links";
 
 import {AccountLink} from "./account-link";
 import {Brand} from "./brand";
@@ -19,9 +20,9 @@ export function SiteHeader({
     <header className="top">
       <Brand />
       <nav>
-        {all.map(link => (
-          <a key={link.href} className="nav-page" href={link.href}>
-            {link.label}
+        {all.map(item => (
+          <a key={item.href} className="nav-page" {...link(item.href)}>
+            {item.label}
           </a>
         ))}
         <AccountLink />

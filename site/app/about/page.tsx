@@ -3,6 +3,7 @@ import "../site.css";
 import type {Metadata} from "next";
 
 import {CONTACT} from "@/lib/contact";
+import {link} from "@/lib/links";
 
 import {InfoPage} from "../info-page";
 
@@ -44,15 +45,18 @@ export default function About() {
       <h2>Open source</h2>
       <p>
         Agent Graph is open source, under the MIT licence:{" "}
-        <a href={CONTACT.source}>{CONTACT.source.replace("https://", "")}</a>.
-        You can run everything yourself, this site included.
+        <a {...link(CONTACT.source)}>
+          {CONTACT.source.replace("https://", "")}
+        </a>
+        . You can run everything yourself, this site included.
       </p>
       <h2>Who makes it</h2>
       <p>
         Agent Graph is made by Shane O&rsquo;Sullivan, at {CONTACT.company} in{" "}
         {CONTACT.country}. Say hello on X at{" "}
-        <a href={CONTACT.twitter.url}>{CONTACT.twitter.handle}</a>, on Threads
-        at <a href={CONTACT.threads.url}>{CONTACT.threads.handle}</a>, or by{" "}
+        <a {...link(CONTACT.twitter.url)}>{CONTACT.twitter.handle}</a>, on
+        Threads at{" "}
+        <a {...link(CONTACT.threads.url)}>{CONTACT.threads.handle}</a>, or by{" "}
         <a href="/contact">email</a>.
       </p>
     </InfoPage>

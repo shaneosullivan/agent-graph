@@ -1,5 +1,7 @@
 import {Fragment} from "react";
 
+import {link} from "./links";
+
 /**
  * Renders the CLI's help text (lib/cli-help.json, the same file compiled into
  * the `agent-graph` binary) as HTML. The binary lays the same blocks out for a
@@ -50,7 +52,7 @@ export function Inline({text}: {text: string}) {
           <Fragment key={i}>
             {part.split(/(https:\/\/[^\s,)]+)/).map((piece, j) =>
               piece.startsWith("https://") ? (
-                <a key={j} href={piece.replace(/\.$/, "")}>
+                <a key={j} {...link(piece.replace(/\.$/, ""))}>
                   {piece.replace(/\.$/, "")}
                 </a>
               ) : (

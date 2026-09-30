@@ -3,6 +3,7 @@ import "../site.css";
 import type {Metadata} from "next";
 
 import {CONTACT} from "@/lib/contact";
+import {link} from "@/lib/links";
 
 import {InfoPage} from "../info-page";
 
@@ -25,15 +26,15 @@ export default function Contact() {
         </dd>
         <dt>X (Twitter)</dt>
         <dd>
-          <a href={CONTACT.twitter.url}>{CONTACT.twitter.handle}</a>
+          <a {...link(CONTACT.twitter.url)}>{CONTACT.twitter.handle}</a>
         </dd>
         <dt>Threads</dt>
         <dd>
-          <a href={CONTACT.threads.url}>{CONTACT.threads.handle}</a>
+          <a {...link(CONTACT.threads.url)}>{CONTACT.threads.handle}</a>
         </dd>
         <dt>Bugs and features</dt>
         <dd>
-          <a href={`${CONTACT.source}/issues`}>GitHub issues</a>
+          <a {...link(`${CONTACT.source}/issues`)}>GitHub issues</a>
         </dd>
       </dl>
       <p className="muted">

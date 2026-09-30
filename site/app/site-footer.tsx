@@ -1,4 +1,5 @@
 import {CONTACT} from "@/lib/contact";
+import {link} from "@/lib/links";
 
 // The X, Threads and GitHub logos (from Simple Icons), filled with the text colour.
 const X_LOGO =
@@ -26,8 +27,7 @@ export function SiteFooter({children}: {children?: React.ReactNode}) {
         <div className="foot-social">
           <a
             className="foot-icon"
-            href={CONTACT.twitter.url}
-            rel="noopener"
+            {...link(CONTACT.twitter.url)}
             title={`${CONTACT.twitter.handle} on X`}
             aria-label={`${CONTACT.twitter.handle} on X`}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -36,8 +36,7 @@ export function SiteFooter({children}: {children?: React.ReactNode}) {
           </a>
           <a
             className="foot-icon"
-            href={CONTACT.threads.url}
-            rel="noopener"
+            {...link(CONTACT.threads.url)}
             title={`${CONTACT.threads.handle} on Threads`}
             aria-label={`${CONTACT.threads.handle} on Threads`}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -46,8 +45,7 @@ export function SiteFooter({children}: {children?: React.ReactNode}) {
           </a>
           <a
             className="foot-icon"
-            href={CONTACT.source}
-            rel="noopener"
+            {...link(CONTACT.source)}
             title="Agent Graph on GitHub"
             aria-label="Agent Graph on GitHub">
             <svg viewBox="0 0 24 24" aria-hidden="true">

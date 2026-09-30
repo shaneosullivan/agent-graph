@@ -55,15 +55,22 @@ export default function Home() {
                 Agent Graph integrates with leading AI coding providers like{" "}
                 <a
                   href="https://claude.com/product/claude-code"
-                  target="_blank">
+                  target="_blank"
+                  rel="noopener noreferrer">
                   Claude Code
                 </a>
                 ,{" "}
-                <a href="https://openai.com/codex/" target="_blank">
+                <a
+                  href="https://openai.com/codex/"
+                  target="_blank"
+                  rel="noopener noreferrer">
                   Codex
                 </a>{" "}
                 and{" "}
-                <a href="https://cursor.com/" target="_blank">
+                <a
+                  href="https://cursor.com/"
+                  target="_blank"
+                  rel="noopener noreferrer">
                   Cursor
                 </a>{" "}
                 to record a log of all your sessions, agents and tasks and the

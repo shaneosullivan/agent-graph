@@ -3,6 +3,7 @@ import "../site.css";
 import type {Metadata} from "next";
 
 import {CONTACT} from "@/lib/contact";
+import {link} from "@/lib/links";
 
 import {InfoPage} from "../info-page";
 
@@ -177,8 +178,8 @@ export default function Privacy() {
         <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a>, and we&rsquo;ll
         reply within a week. If you&rsquo;re not happy with how we handle it,
         you can complain to Ireland&rsquo;s Data Protection Commission, at{" "}
-        <a href="https://www.dataprotection.ie">dataprotection.ie</a>, or the
-        authority where you live.
+        <a {...link("https://www.dataprotection.ie")}>dataprotection.ie</a>, or
+        the authority where you live.
       </p>
       <p>
         The services above may process data outside the European Economic Area
@@ -191,7 +192,10 @@ export default function Privacy() {
       <p>
         If this changes, we&rsquo;ll update this page and the date at the top.
         Agent Graph is open source, so you can always check what it does:{" "}
-        <a href={CONTACT.source}>{CONTACT.source.replace("https://", "")}</a>.
+        <a {...link(CONTACT.source)}>
+          {CONTACT.source.replace("https://", "")}
+        </a>
+        .
       </p>
     </InfoPage>
   );

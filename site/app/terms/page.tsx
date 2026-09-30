@@ -3,6 +3,7 @@ import "../site.css";
 import type {Metadata} from "next";
 
 import {CONTACT} from "@/lib/contact";
+import {link} from "@/lib/links";
 
 import {InfoPage} from "../info-page";
 
@@ -27,9 +28,12 @@ export default function Terms() {
       <p>
         The <code>agent-graph</code> command, and this site&rsquo;s code, are
         open source, under the MIT licence:{" "}
-        <a href={CONTACT.source}>{CONTACT.source.replace("https://", "")}</a>.
-        That licence, not these terms, covers the software itself: you&rsquo;re
-        free to use it, change it, and run your own copy of the site.
+        <a {...link(CONTACT.source)}>
+          {CONTACT.source.replace("https://", "")}
+        </a>
+        . That licence, not these terms, covers the software itself:
+        you&rsquo;re free to use it, change it, and run your own copy of the
+        site.
       </p>
 
       <h2>What you share</h2>
