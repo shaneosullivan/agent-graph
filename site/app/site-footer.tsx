@@ -20,6 +20,7 @@ export function SiteFooter({children}: {children?: React.ReactNode}) {
       <div className="foot-row">
         <nav className="foot-links" aria-label="About Agent Graph">
           <a href="/about">About</a>
+          <a href="/faq">FAQ</a>
           <a href="/contact">Contact</a>
           <a href="/privacy">Privacy</a>
           <a href="/terms">Terms &amp; Conditions</a>
