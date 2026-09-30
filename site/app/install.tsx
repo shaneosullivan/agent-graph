@@ -136,8 +136,21 @@ export function Install() {
     detectOs,
     () => "mac",
   );
+  // A tab named in the address (/#install-cloud, say: linked to from the
+  // account page), until another's chosen.
+  const named = useSyncExternalStore<Os | null>(
+    change => {
+      window.addEventListener("hashchange", change);
+      return () => window.removeEventListener("hashchange", change);
+    },
+    () => {
+      const key = location.hash.replace(/^#install-/, "");
+      return key !== location.hash && key in ways ? (key as Os) : null;
+    },
+    () => null,
+  );
   const [chosen, setOs] = useState<Os | null>(null);
-  const os = chosen ?? detected;
+  const os = chosen ?? named ?? detected;
 
   const way = ways[os];
   return (
@@ -145,6 +158,10 @@ export function Install() {
       className="card install"
       id="install"
       aria-label="Install Agent Graph">
+      {/* Where /#install-<tab> goes to (and opens that tab). */}
+      {(Object.keys(ways) as Array<Os>).map(key => (
+        <span key={key} id={`install-${key}`} className="install-anchor" />
+      ))}
       <div className="tabs" role="tablist">
         {(Object.keys(ways) as Array<Os>).map(key => (
           <button

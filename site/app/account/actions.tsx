@@ -6,6 +6,7 @@ import {useState} from "react";
 import type {Computer} from "@/lib/accounts";
 
 import {CopyCommand} from "../copy-command";
+import {KeyIcon, LaptopIcon} from "./icons";
 
 /** The computers agent-graph is logged in on, each with a way to log it out. */
 export function Computers({computers}: {computers: Array<Computer>}) {
@@ -26,40 +27,33 @@ export function Computers({computers}: {computers: Array<Computer>}) {
 
   if (!computers.length) {
     return (
-      <p>
+      <p className="acct-muted">
         agent-graph isn&rsquo;t logged in on any computer.{" "}
         <code>agent-graph watch-remote</code> asks you to log in the first time.
       </p>
     );
   }
-  // The same on the server and in the browser, whatever either's locale.
-  const date = (ms: number) =>
-    new Date(ms).toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-      timeZone: "UTC",
-    });
   return (
     <>
-      <p>agent-graph is logged in on these. Removing one logs it out there.</p>
-      <ul className="computers">
+      <ul className="acct-rows">
         {computers.map(c => (
           <li key={c.id}>
-            <span>
+            <span className="acct-row-icon">
+              <LaptopIcon />
+            </span>
+            <span className="acct-row-main">
               <strong>{c.host || "A computer"}</strong>
-              <br />
-              <span className="when">
-                Logged in {date(c.createdAt)}, last used{" "}
+              <span className="acct-row-sub">
+                Logged in {date(c.createdAt)} · last used{" "}
                 {date(c.usedAt ?? c.createdAt)}
               </span>
             </span>
             <button
-              className="link-button"
+              className="acct-row-action"
               type="button"
               onClick={() => remove(c.id)}
               disabled={busy === c.id}>
-              {busy === c.id ? "Removing…" : "Remove"}
+              {busy === c.id ? "Logging out…" : "Log out"}
             </button>
           </li>
         ))}
@@ -68,6 +62,15 @@ export function Computers({computers}: {computers: Array<Computer>}) {
     </>
   );
 }
+
+// The same on the server and in the browser, whatever either's locale.
+const date = (ms: number) =>
+  new Date(ms).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 
 export function LogOut() {
   const [busy, setBusy] = useState(false);
@@ -78,12 +81,11 @@ export function LogOut() {
   }
   return (
     <button
-      className="button secondary"
+      className="button secondary acct-logout"
       type="button"
       onClick={logOut}
-      disabled={busy}
-      style={{marginTop: 24}}>
-      {busy ? "Logging out…" : "Log out of this browser"}
+      disabled={busy}>
+      {busy ? "Logging out…" : "Log out"}
     </button>
   );
 }
@@ -343,23 +345,8 @@ export function ApiTokens({tokens}: {tokens: Array<Computer>}) {
     router.refresh();
   }
 
-  const date = (ms: number) =>
-    new Date(ms).toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-      timeZone: "UTC",
-    });
   return (
     <>
-      <p>
-        For a machine where you can&rsquo;t log in in a browser, such as a cloud
-        instance: make a token here, and give it to{" "}
-        <code>agent-graph watch-remote</code> there as{" "}
-        <code>AGENT_GRAPH_TOKEN</code>. It shares to this account, like a
-        computer you&rsquo;ve logged in on. Anyone who has it can too, so keep
-        it secret, and revoke it when you&rsquo;re done with it.
-      </p>
       {made ? (
         <div className="token-made" role="status">
           <p>
@@ -367,10 +354,10 @@ export function ApiTokens({tokens}: {tokens: Array<Computer>}) {
             now: it won&rsquo;t be shown again.
           </p>
           <CopyCommand command={`export AGENT_GRAPH_TOKEN=${made.token}`} />
-          <p className="muted">
-            Then, on that machine, <code>agent-graph watch-remote</code> (or{" "}
-            <code>--autostart</code>) shares to your account, without logging
-            in.
+          <p>
+            Next, use it where it&rsquo;s needed:{" "}
+            <a href="/#install-cloud">set up Claude Code&rsquo;s cloud</a>.
+            Codex and Cursor&rsquo;s cloud agents aren&rsquo;t supported yet.
           </p>
           <button
             className="link-button"
@@ -381,19 +368,21 @@ export function ApiTokens({tokens}: {tokens: Array<Computer>}) {
         </div>
       ) : null}
       {tokens.length ? (
-        <ul className="computers">
+        <ul className="acct-rows">
           {tokens.map(t => (
             <li key={t.id}>
-              <span>
+              <span className="acct-row-icon">
+                <KeyIcon />
+              </span>
+              <span className="acct-row-main">
                 <strong>{t.host || "An API token"}</strong>
-                <br />
-                <span className="when">
-                  Made {date(t.createdAt)},{" "}
+                <span className="acct-row-sub">
+                  Made {date(t.createdAt)} ·{" "}
                   {t.usedAt ? `last used ${date(t.usedAt)}` : "not used yet"}
                 </span>
               </span>
               <button
-                className="link-button"
+                className="acct-row-action"
                 type="button"
                 onClick={() => revoke(t.id)}
                 disabled={busy === t.id}>
