@@ -944,3 +944,80 @@ body {
   color: var(--muted);
   font-size: 13px;
 }
+
+/* The examples (app/examples.tsx): cards that open one in a new tab. */
+.site .section-lead {
+  color: var(--muted);
+  margin: 6px 0 16px;
+}
+.site .examples {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+.site .examples li {
+  display: flex;
+}
+.site .example {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 10px);
+  background: var(--panel);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    border-color 0.15s,
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+.site .example:hover,
+.site .example:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.08);
+}
+.site .example-title {
+  font-weight: 650;
+}
+.site .example-title::after {
+  content: " ↗";
+  color: var(--muted);
+  font-weight: 400;
+}
+.site .example-description {
+  color: var(--muted);
+  font-size: 14px;
+  flex: 1;
+}
+.site .example-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.site .example-tag {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(
+    --accent-soft,
+    color-mix(in srgb, var(--accent) 12%, transparent)
+  );
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .site .example {
+    transition: none;
+  }
+  .site .example:hover {
+    transform: none;
+  }
+}

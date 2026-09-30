@@ -8,10 +8,22 @@ import {VIEWER_SHELL} from "@/lib/viewer-shell";
  * (site-worker.js) fetches the log and computes graphs in the browser with
  * the reducer compiled to WebAssembly.
  */
-export function Viewer({id, live}: {id: string; live: boolean}) {
+export function Viewer({
+  id,
+  live,
+  url,
+}: {
+  id: string;
+  live: boolean;
+  /** A log that's a file of its own (an example), read whole from here. */
+  url?: string;
+}) {
   // Only our own values go in here, but escape `<` anyway so nothing in it
   // could ever close the script tag.
-  const config = JSON.stringify({id, live}).replace(/</g, "\\u003c");
+  const config = JSON.stringify({id, live, ...(url ? {url} : {})}).replace(
+    /</g,
+    "\\u003c",
+  );
   return (
     <>
       <link rel="stylesheet" href="/viewer/app.css" precedence="viewer" />

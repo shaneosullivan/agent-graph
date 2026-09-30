@@ -1,0 +1,92 @@
+[
+  {
+    "slug": "needs-you",
+    "title": "Waiting for you",
+    "description": "A session stopped at a permission prompt, beside one that's working: it's flagged, counted at the top of the list, and pulses until you answer.",
+    "tags": [
+      "Needs you"
+    ],
+    "href": "/examples/needs-you?view=graph#claude-code%3Ae0000004-7a9e-4c1d-9b2f-000000000004"
+  },
+  {
+    "slug": "tasks",
+    "title": "Tasks, done and to do",
+    "description": "One session 12 tasks into 30, another checking them off as it goes: counts on every card, and the whole list in its details.",
+    "tags": [
+      "Tasks",
+      "Progress"
+    ],
+    "href": "/examples/tasks?view=cards#claude-code%3Ae000000f-7a9e-4c1d-9b2f-00000000000f"
+  },
+  {
+    "slug": "parallel",
+    "title": "Agents in parallel",
+    "description": "Three agents started at once: one finished, one failed, one still running, and the session waiting only on that one.",
+    "tags": [
+      "Running",
+      "Completed",
+      "Failed"
+    ],
+    "href": "/examples/parallel?view=graph#claude-code%3Ae0000009-7a9e-4c1d-9b2f-000000000009"
+  },
+  {
+    "slug": "nested",
+    "title": "Agents within agents",
+    "description": "A plan that started an explorer, which started a worker: each three levels down, under the agent that asked for it.",
+    "tags": [
+      "Nesting"
+    ],
+    "href": "/examples/nested?view=graph#claude-code%3Ae000000a-7a9e-4c1d-9b2f-00000000000a"
+  },
+  {
+    "slug": "deadlock",
+    "title": "A deadlock",
+    "description": "Two sessions each waiting on the other: both marked, with the wait drawn between them.",
+    "tags": [
+      "Waits",
+      "Deadlock"
+    ],
+    "href": "/examples/deadlock?view=graph#claude-code%3Ae0000005-7a9e-4c1d-9b2f-000000000005"
+  },
+  {
+    "slug": "scripts",
+    "title": "Sessions a script started",
+    "description": "A command run with agent-graph run that started two headless Claude Code sessions, both under it; and a session another one started from its shell.",
+    "tags": [
+      "agent-graph run",
+      "Linked sessions"
+    ],
+    "href": "/examples/scripts?view=graph#run%3Ae0000013-7a9e-4c1d-9b2f-000000000013"
+  },
+  {
+    "slug": "large",
+    "title": "A large graph",
+    "description": "A migration run by six planners, each with explorers and workers under them: 61 sessions and agents, 40 tasks, some done, some running, one failed, one waiting for you.",
+    "tags": [
+      "Scale",
+      "Graph view"
+    ],
+    "href": "/examples/large?view=graph#claude-code%3Ae0000100-7a9e-4c1d-9b2f-000000000100"
+  },
+  {
+    "slug": "team",
+    "title": "A busy team",
+    "description": "A dozen sessions open at once, of every size: the large migration, busy ones, small ones, a Codex session, two waiting for you. Zoom out in the graph to see them all round the one you're on.",
+    "tags": [
+      "Many sessions",
+      "Zoomed out",
+      "Needs you"
+    ],
+    "href": "/examples/team?view=graph&zoom=out#claude-code%3Ae0000100-7a9e-4c1d-9b2f-000000000100"
+  },
+  {
+    "slug": "everything",
+    "title": "A busy day",
+    "description": "Every example at once, about thirty-five sessions: the list by folder, deadlocks and scripts, and everything the busy team was doing.",
+    "tags": [
+      "Sessions list",
+      "Every kind"
+    ],
+    "href": "/examples/everything?view=graph&zoom=out#claude-code%3Ae0000100-7a9e-4c1d-9b2f-000000000100"
+  }
+]

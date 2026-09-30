@@ -86,6 +86,22 @@ async function pull(log) {
   }
 }
 
+// A log that's a file of its own (the site's examples, public/examples/):
+// read whole, once. Returns how many events it held.
+let fileRead = false;
+async function pullFile(url) {
+  if (fileRead) return 0;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  fileRead = true;
+  if (!bytes.length) return 0;
+  const [ptr, len] = putBytes(bytes);
+  const added = wasm.append(ptr, len);
+  wasm.dealloc(ptr, len);
+  return added;
+}
+
 function startsWithKeyframe(text) {
   const end = text.indexOf("\n");
   try {
@@ -118,7 +134,7 @@ self.onmessage = async ({data}) => {
   try {
     await loading;
     if (op === "pull") {
-      const added = await pull(data.log);
+      const added = data.url ? await pullFile(data.url) : await pull(data.log);
       postMessage(added === null ? {id, reload: true} : {id, added: added > 0});
     } else if (op === "query") {
       postMessage({id, result: call(data.request)});

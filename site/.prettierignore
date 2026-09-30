@@ -3,3 +3,4 @@ public/viewer/app.css
 lib/viewer-shell.ts
 lib/cli-help.json
 public/viewer/d3.min.js
+lib/examples.json

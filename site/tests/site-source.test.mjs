@@ -302,3 +302,56 @@ test("the log is read and reduced in a worker, and the graph now brings its time
   assert.equal((await src.info()).where, null);
   assert.deepEqual(page, {fetches: [], wasm: 0}, "none of it in the page");
 });
+
+test("a log that's a file of its own (an example) is read whole, once, from its url", async () => {
+  const fetched = [];
+  const file = readFileSync(
+    new URL("../public/examples/team.jsonl", import.meta.url),
+  );
+  const fetch = async url => {
+    fetched.push(url);
+    if (url === "/viewer/agent_graph.wasm")
+      return {arrayBuffer: async () => wasm};
+    if (url === "/examples/team.jsonl")
+      return {ok: true, arrayBuffer: async () => file};
+    throw new Error(`unexpected fetch of ${url}`);
+  };
+  const Worker = workerClass(fetch, []);
+  const w = new Worker("/viewer/site-worker.js");
+  const replies = new Map();
+  w.onmessage = ({data}) => replies.get(data.id)(data);
+  let next = 0;
+  const ask = message =>
+    new Promise(resolve => {
+      const id = ++next;
+      replies.set(id, resolve);
+      w.postMessage({id, ...message});
+    });
+
+  const first = await ask({
+    op: "pull",
+    log: "example-team",
+    url: "/examples/team.jsonl",
+  });
+  assert.equal(first.error, undefined, first.error);
+  assert.equal(first.added, true);
+  // Once only: the file's all there is.
+  const again = await ask({
+    op: "pull",
+    log: "example-team",
+    url: "/examples/team.jsonl",
+  });
+  assert.equal(again.added, false);
+  assert.deepEqual(
+    fetched.filter(u => u.startsWith("/examples/")),
+    ["/examples/team.jsonl"],
+  );
+  // Not the API's content reads.
+  assert.ok(!fetched.some(u => u.startsWith("/api/")));
+
+  const {result} = await ask({
+    op: "query",
+    request: {op: "graph", env: "site", until: null, root: null, now_ms: null},
+  });
+  assert.ok(result.roots.length >= 10, `${result.roots.length} sessions`);
+});

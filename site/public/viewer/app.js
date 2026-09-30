@@ -1256,6 +1256,10 @@ const G = {
 };
 
 function savedViewMode() {
+  // A link can choose it for its page (the site's examples do), leaving the
+  // reader's own choice as it was.
+  const asked = new URLSearchParams(location.search).get('view');
+  if (asked === 'graph' || asked === 'cards') return asked;
   try {
     return localStorage.getItem('agentGraphView') === 'graph' ? 'graph' : 'cards';
   } catch {
@@ -1569,6 +1573,12 @@ function renderGraph(host, graph, keep, ringed, flash) {
   }
   if (G.focus) focusNode();
   drawOthers();
+  // A link can ask for the other sessions to be shown (?zoom=out): once,
+  // when the graph's first drawn and has settled a little.
+  if (!G.zoomedOutOnce && new URLSearchParams(location.search).get('zoom') === 'out') {
+    G.zoomedOutOnce = true;
+    setTimeout(showOthers, still ? 0 : 1200);
+  }
 }
 
 /**

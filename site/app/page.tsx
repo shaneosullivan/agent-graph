@@ -5,6 +5,7 @@ import {Fragment} from "react";
 import cliHelp from "@/lib/cli-help.json";
 import {type Help, Inline} from "@/lib/help-render";
 
+import {Examples} from "./examples";
 import {Install} from "./install";
 import {SiteHeader} from "./site-header";
 import {Uploader} from "./uploader";
@@ -20,6 +21,7 @@ export default function Home() {
         <SiteHeader
           links={[
             {href: "#install", label: "Install"},
+            {href: "#examples", label: "Examples"},
             {href: "#live", label: "Share live"},
             {href: "/docs", label: "Docs"},
           ]}
@@ -38,6 +40,8 @@ export default function Home() {
         <Install />
 
         <Uploader />
+
+        <Examples />
 
         <section className="section" id="live">
           <h2>Share live from your machine</h2>

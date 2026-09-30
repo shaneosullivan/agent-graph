@@ -53,7 +53,12 @@
   // Has the worker fetch the chunks we don't have yet. Returns whether any
   // events arrived.
   async function pull() {
-    const {added, reload} = await ask({op: "pull", log: config.id});
+    // (A log that's a file of its own, as an example is, is read from its `url`.)
+    const {added, reload} = await ask({
+      op: "pull",
+      log: config.id,
+      url: config.url,
+    });
     if (reload) {
       location.reload(); // the password cookie expired; the page asks again
       return false;
