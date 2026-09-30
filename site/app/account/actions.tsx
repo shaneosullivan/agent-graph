@@ -145,3 +145,146 @@ export function StripeButton({
     </>
   );
 }
+
+/**
+ * Deleting the account, for good (DELETE /api/account): what goes, spelled
+ * out, and a button that works only once the account's email address (or
+ * "delete", for one without) is typed. If the last sign-in wasn't recent,
+ * it asks to log in again first.
+ */
+export function DeleteAccount({
+  email,
+  subscribed,
+}: {
+  email: string | null;
+  /** Whether there's a subscription it'll cancel. */
+  subscribed: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [signInAgain, setSignInAgain] = useState(false);
+  const expected = email ?? "delete";
+  const matches = typed.trim().toLowerCase() === expected.toLowerCase();
+
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/account", {
+        method: "DELETE",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({confirm: typed}),
+      });
+      if (res.status === 401) {
+        const reply = await res.json().catch(() => null);
+        if (reply?.signInAgain) {
+          setSignInAgain(true);
+          setBusy(false);
+          return;
+        }
+      }
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      location.assign("/?deleted=1");
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "That didn't work. Try again.",
+      );
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        className="button danger-outline"
+        type="button"
+        onClick={() => setOpen(true)}>
+        Delete my account…
+      </button>
+    );
+  }
+  return (
+    <div className="danger-zone" role="group" aria-labelledby="delete-title">
+      <h3 id="delete-title">Delete your account?</h3>
+      <p>This can&rsquo;t be undone. Straight away:</p>
+      <ul>
+        {subscribed ? (
+          <li>
+            <strong>Your subscription is cancelled</strong>, with no refund for
+            the rest of the period you&rsquo;ve paid for.
+          </li>
+        ) : null}
+        <li>
+          <strong>Your live shares are deleted</strong>, and /watch shows
+          nothing.
+        </li>
+        <li>
+          <strong>Every computer is logged out</strong>:{" "}
+          <code>agent-graph watch-remote</code> stops sharing, and has to log in
+          again (to a new account).
+        </li>
+        <li>
+          <strong>Your login and account are deleted.</strong> Logging in again
+          with the same email makes a new, empty account.
+        </li>
+      </ul>
+      <p className="muted">
+        Logs you pasted or uploaded aren&rsquo;t part of your account: anyone
+        with their links can still open them until they expire, a week after
+        they were last added to. Nothing on your own computer is touched.
+      </p>
+      {signInAgain ? (
+        <p className="error">
+          To be sure it&rsquo;s you, log in again first, then come back here:{" "}
+          <a href="/login?again=1&next=/account%23delete">log in again</a>.
+        </p>
+      ) : (
+        <>
+          <label className="field delete-field">
+            <span>
+              To confirm, type{" "}
+              {email ? "your email address" : <>&ldquo;delete&rdquo;</>}:{" "}
+              <strong>{expected}</strong>
+            </span>
+            <input
+              type="text"
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={typed}
+              onChange={e => setTyped(e.target.value)}
+              disabled={busy}
+            />
+          </label>
+          <div className="danger-actions">
+            <button
+              className="button danger"
+              type="button"
+              onClick={remove}
+              disabled={!matches || busy}>
+              {busy ? "Deleting…" : "Delete my account for good"}
+            </button>
+            <button
+              className="button secondary"
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setTyped("");
+                setError(null);
+              }}
+              disabled={busy}>
+              Keep my account
+            </button>
+          </div>
+        </>
+      )}
+      {error ? <p className="error">{error}</p> : null}
+    </div>
+  );
+}

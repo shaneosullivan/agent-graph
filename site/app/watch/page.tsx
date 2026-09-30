@@ -8,6 +8,7 @@ import {currentUser} from "@/lib/auth";
 import {getMeta} from "@/lib/store";
 
 import {SiteHeader} from "../site-header";
+import {SiteFooter} from "../site-footer";
 import {Viewer} from "../viewer";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,7 @@ export default async function Watch() {
             </p>
           </div>
         </div>
+        <SiteFooter />
       </div>
     </div>
   );

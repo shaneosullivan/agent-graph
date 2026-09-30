@@ -6,6 +6,7 @@ import cliHelp from "@/lib/cli-help.json";
 import {Blocks, Examples, type Help, Inline, Options} from "@/lib/help-render";
 
 import {SiteHeader} from "../site-header";
+import {SiteFooter} from "../site-footer";
 
 // The same text `agent-graph --help` prints: lib/cli-help.json is copied from
 // docs/cli-help.json (which build.rs compiles into the binary) by `npm run dev`
@@ -98,6 +99,7 @@ export default function Docs() {
             ))}
           </main>
         </div>
+        <SiteFooter />
       </div>
     </div>
   );

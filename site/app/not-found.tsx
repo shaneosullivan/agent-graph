@@ -3,6 +3,7 @@ import "./site.css";
 import Link from "next/link";
 
 import {SiteHeader} from "./site-header";
+import {SiteFooter} from "./site-footer";
 
 export default function NotFound() {
   return (
@@ -28,6 +29,7 @@ export default function NotFound() {
             </Link>
           </div>
         </div>
+        <SiteFooter />
       </div>
     </div>
   );

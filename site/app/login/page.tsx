@@ -8,6 +8,7 @@ import {currentUser} from "@/lib/auth";
 import {safeNext} from "@/lib/config";
 
 import {SiteHeader} from "../site-header";
+import {SiteFooter} from "../site-footer";
 import {type CliLogin, LoginForm} from "./login";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,14 @@ export const metadata: Metadata = {
   robots: {index: false, follow: false},
 };
 
-type Search = {next?: string; cli?: string; state?: string; challenge?: string};
+type Search = {
+  next?: string;
+  cli?: string;
+  state?: string;
+  challenge?: string;
+  /** Log in again, though logged in already (to confirm it's you: deleting an account asks). */
+  again?: string;
+};
 
 /**
  * Logging in: with Google, or an email and password (lib/auth.ts). `next`
@@ -34,7 +42,7 @@ export default async function Login({
   const next = safeNext(search.next);
   const user = await currentUser();
   const cli = cliLogin(search);
-  if (user && !search.cli) {
+  if (user && !search.cli && !search.again) {
     redirect(next);
   }
   return (
@@ -45,8 +53,9 @@ export default async function Login({
           next={next}
           cli={cli}
           badCli={Boolean(search.cli) && !cli}
-          email={user ? (user.email ?? "") : null}
+          email={user && !search.again ? (user.email ?? "") : null}
         />
+        <SiteFooter />
       </div>
     </div>
   );

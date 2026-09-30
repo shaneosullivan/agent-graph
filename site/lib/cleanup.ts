@@ -124,6 +124,39 @@ export async function deleteIfIdle(
   since: number,
   now: number,
 ): Promise<boolean> {
+  return deleteLogDoc(key, (log, newest) => idleSince(log, newest, since, now));
+}
+
+/**
+ * Deletes every log owned by account `uid` (its live shares), now, idle or
+ * not: its account's being deleted. How many it deleted.
+ */
+export async function deleteLogsOf(uid: string): Promise<number> {
+  const owned = await firestore()
+    .collection("logs")
+    .where("owner", "==", uid)
+    .get();
+  let deleted = 0;
+  for (const log of owned.docs) {
+    if (await deleteLogDoc(log.id, () => true)) {
+      deleted++;
+    }
+  }
+  return deleted;
+}
+
+/**
+ * Deletes log document `key`, if `due` says so (given the log, and its
+ * newest chunk), judged in the transaction that marks it for deletion: see
+ * `deleteIfIdle`.
+ */
+async function deleteLogDoc(
+  key: string,
+  due: (
+    log: FirebaseFirestore.DocumentSnapshot,
+    newest: FirebaseFirestore.QuerySnapshot,
+  ) => boolean,
+): Promise<boolean> {
   const {ref, added, sid} = where(key);
   const old = !added.isEqual(ref);
   const marked = await firestore().runTransaction(async tx => {
@@ -140,7 +173,7 @@ export async function deleteIfIdle(
     }
     const copy = old ? await tx.get(added) : null;
     const newest = await tx.get(newestChunk(added));
-    if (!idleSince(log, newest, since, now)) {
+    if (!due(log, newest)) {
       return false;
     }
     tx.update(ref, {deleting: true});

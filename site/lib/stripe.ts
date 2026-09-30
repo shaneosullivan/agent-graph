@@ -55,6 +55,27 @@ export function stripe(
   return billing ? client(billing.secretKey) : null;
 }
 
+/**
+ * Ends Stripe customer `customer`'s billing, for good: it's deleted, which
+ * cancels its subscriptions at once (Stripe keeps the record of what was
+ * paid). One already gone is fine. Throws if Stripe can't be reached, or
+ * isn't set up (so an account isn't deleted while it could still be
+ * charged).
+ */
+export async function deleteCustomer(customer: string): Promise<void> {
+  const s = stripe();
+  if (!s) {
+    throw new Error("Stripe isn't set up here, so billing can't be ended.");
+  }
+  try {
+    await s.customers.del(customer);
+  } catch (err) {
+    if ((err as {code?: unknown}).code !== "resource_missing") {
+      throw err;
+    }
+  }
+}
+
 /** Account `account`'s Stripe customer, made the first time. */
 async function customerOf(s: Stripe, account: Account): Promise<string> {
   const existing = await stripeCustomerOf(account.uid);

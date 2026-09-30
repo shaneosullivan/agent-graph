@@ -39,6 +39,25 @@ export async function currentUser(): Promise<User | null> {
   return cookie ? userOfSession(cookie) : null;
 }
 
+/**
+ * When this request's browser last signed in (ms), for the account it's
+ * logged in as; null if it isn't. Its session cookie was made from that
+ * sign-in (app/api/session), so this is how long ago someone proved it was
+ * them: what deleting an account asks to be recent.
+ */
+export async function signedInAt(): Promise<number | null> {
+  const cookie = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!cookie) {
+    return null;
+  }
+  try {
+    const claims = await auth().verifySessionCookie(cookie, true);
+    return claims.auth_time * 1000;
+  } catch {
+    return null;
+  }
+}
+
 /** The account a session cookie is for, if it's valid. */
 export async function userOfSession(cookie: string): Promise<User | null> {
   try {

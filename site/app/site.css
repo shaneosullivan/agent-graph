@@ -726,10 +726,77 @@ body {
 
 .site .foot {
   margin-top: 56px;
-  padding-top: 18px;
+  padding: 18px 0 8px;
   border-top: 1px solid var(--line);
   font-size: 13px;
   color: var(--faint);
+}
+/* A page's own note, above the site's links (app/site-footer.tsx). */
+.site .foot-note {
+  margin: 0 0 16px;
+  max-width: 52em;
+}
+.site .foot-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px 24px;
+}
+.site .foot-links,
+.site .foot-social {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+.site .foot a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.site .foot a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.site .foot-company {
+  margin: 14px 0 0;
+}
+/* The X and Threads logos, as links. */
+.site .foot-social {
+  align-items: center;
+}
+.site .foot-icon {
+  display: inline-grid;
+  place-items: center;
+}
+.site .foot-icon svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+/* About, Contact, Privacy and Terms (app/info-page.tsx). */
+.site .info {
+  max-width: 46em;
+  margin: 12px 0 0;
+}
+.site .info h1 {
+  font-size: 32px;
+  margin-bottom: 6px;
+}
+.site .info h2 {
+  font-size: 19px;
+  margin: 30px 0 6px;
+}
+.site .contact-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 10px 22px;
+  margin: 22px 0;
+}
+.site .contact-list dt {
+  color: var(--muted);
+}
+.site .contact-list dd {
+  margin: 0;
 }
 
 /* Password prompt and not-found pages */
@@ -963,6 +1030,65 @@ body {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--line-strong);
+}
+/* After deleting an account (app/deleted-notice.tsx). */
+.site .deleted-notice {
+  margin: 0 0 20px;
+  padding: 14px 18px;
+}
+/* Deleting an account (app/account/actions.tsx): red, and set apart. */
+.site .delete-heading {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.site .button.danger {
+  background: var(--bad);
+  color: #fff;
+}
+.site .button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 85%, black);
+}
+.site .button.danger-outline {
+  background: none;
+  color: var(--bad);
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  box-shadow: none;
+}
+.site .button.danger-outline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+.site .danger-zone {
+  margin-top: 8px;
+  padding: 16px 18px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+  background: color-mix(in srgb, var(--bad) 5%, var(--panel));
+}
+.site .danger-zone h3 {
+  color: var(--bad);
+  font-size: 16px;
+}
+.site .danger-zone ul {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+.site .danger-zone li {
+  margin: 5px 0;
+}
+.site .delete-field {
+  max-width: none;
+  margin-top: 14px;
+}
+.site .delete-field strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.site .danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
 }
 .site .button.google {
   display: flex;

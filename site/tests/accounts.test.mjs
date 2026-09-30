@@ -399,6 +399,41 @@ test("the home page hears whether an account's watch-remote is running, and how 
   assert.deepEqual(await watching(other.cookie), {watching: false});
 });
 
+test("deleting an account takes its live shares, its computers' logins and its document, once confirmed", async () => {
+  const owner = await withCli();
+  const {id} = await (await share(owner.token)).json();
+  const remove = (cookie, confirm) =>
+    fetch(`${BASE}/api/account`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        ...FROM_SITE,
+        ...(cookie ? {Cookie: cookie} : {}),
+      },
+      body: JSON.stringify({confirm}),
+    });
+  assert.equal((await remove(null, owner.email)).status, 401, "not logged in");
+  assert.equal(
+    (await remove(owner.cookie, "someone@else.test")).status,
+    400,
+    "not confirmed",
+  );
+  assert.ok(await userDoc(owner.uid), "still there");
+
+  const res = await remove(owner.cookie, owner.email.toUpperCase());
+  assert.equal(res.status, 204, await res.clone().text());
+  assert.ok(
+    res.headers.getSetCookie().some(c => c.startsWith("__session=;")),
+    "this browser's logged out",
+  );
+  assert.equal(await userDoc(owner.uid), null, "its document's gone");
+  assert.equal((await share(owner.token)).status, 401, "its CLI login's gone");
+  const content = await fetch(`${BASE}/api/logs/${id}/content`, {
+    headers: {Cookie: owner.cookie},
+  });
+  assert.ok([401, 404, 410].includes(content.status), "its live share's gone");
+});
+
 test("logging the CLI out ends its login", async () => {
   const {token} = await withCli();
   assert.equal((await share(token)).status, 201);

@@ -5,9 +5,11 @@ import {Fragment} from "react";
 import cliHelp from "@/lib/cli-help.json";
 import {type Help, Inline} from "@/lib/help-render";
 
+import {DeletedNotice} from "./deleted-notice";
 import {Examples} from "./examples";
 import {Install} from "./install";
 import {SiteHeader} from "./site-header";
+import {SiteFooter} from "./site-footer";
 import {Uploader} from "./uploader";
 import {WatchCard} from "./watch-card";
 
@@ -42,6 +44,8 @@ export default function Home() {
             <strong>Agent Graph</strong> solves this.
           </p>
         </section>
+
+        <DeletedNotice />
 
         <WatchCard
           loggedOutContent={
@@ -182,11 +186,11 @@ export default function Home() {
           </p>
         </section>
 
-        <footer className="foot">
+        <SiteFooter>
           A pasted or uploaded log can be viewed by anyone with its link, unless
           you set a password; a live share is only yours. By default Agent Graph
           records task names and agent descriptions, not prompts or tool output.
-        </footer>
+        </SiteFooter>
       </div>
     </div>
   );

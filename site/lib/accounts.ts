@@ -97,7 +97,9 @@ export async function setStripeCustomer(
   uid: string,
   customer: string,
 ): Promise<void> {
-  await users().doc(uid).set({stripeCustomer: customer}, {merge: true});
+  // (Updated, never made: its document's made when it logs in, and one
+  // that's gone has been deleted, and stays so.)
+  await users().doc(uid).update({stripeCustomer: customer});
 }
 
 export type Subscription = {
@@ -124,10 +126,12 @@ export async function setSubscription(
   const paid = sub.status === "active" || sub.status === "trialing";
   const ts = (ms: number | null) =>
     ms === null ? null : Timestamp.fromMillis(ms);
-  await users()
-    .doc(uid)
-    .set(
-      {
+  try {
+    // (Updated, never made: an account that's been deleted stays deleted,
+    // though Stripe tells of its subscription's end after.)
+    await users()
+      .doc(uid)
+      .update({
         status: paid ? "active" : "unpaid",
         stripeCustomer: customer,
         subscription: {
@@ -137,9 +141,27 @@ export async function setSubscription(
           periodEnd: ts(sub.periodEnd),
           cancelAt: ts(sub.cancelAt),
         },
-      },
-      {merge: true},
-    );
+      });
+  } catch (err) {
+    // Firestore's NOT_FOUND: there's no such account (any more).
+    if ((err as {code?: unknown}).code !== 5) {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Deletes what's kept for account `uid` (but its live shares, which
+ * lib/cleanup.ts's deleteLogsOf deletes, and its login, which Firebase
+ * keeps): its computers' logins, any login codes waiting, and its
+ * document.
+ */
+export async function deleteAccountRecords(uid: string): Promise<void> {
+  for (const collection of [tokens(), codes()]) {
+    const mine = await collection.where("uid", "==", uid).get();
+    await Promise.all(mine.docs.map(doc => doc.ref.delete()));
+  }
+  await users().doc(uid).delete();
 }
 
 /** Account `uid`'s subscription, as last recorded, if it's had one. */

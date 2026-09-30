@@ -14,7 +14,8 @@ import {billingConfig} from "@/lib/billing";
 import {finishCheckout} from "@/lib/stripe";
 
 import {SiteHeader} from "../site-header";
-import {Computers, LogOut, StripeButton} from "./actions";
+import {SiteFooter} from "../site-footer";
+import {Computers, DeleteAccount, LogOut, StripeButton} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -43,10 +44,14 @@ export default async function Account({
     await finishCheckout(user.uid, checkout).catch(() => {});
     redirect("/account");
   }
-  const [computers, share] = await Promise.all([
+  const [computers, share, sub] = await Promise.all([
     computersOf(user.uid),
     watchLog(user.uid),
+    subscriptionOf(user.uid),
   ]);
+  // A subscription deleting the account would cancel.
+  const subscribed =
+    sub !== null && !["canceled", "incomplete_expired"].includes(sub.status);
   return (
     <div className="site">
       <div className="page">
@@ -73,8 +78,17 @@ export default async function Account({
             <h2>Computers</h2>
             <Computers computers={computers} />
             <LogOut />
+            <h2 id="delete" className="delete-heading">
+              Delete your account
+            </h2>
+            <p>
+              Deletes your account, your live shares and your computers&rsquo;
+              logins, and cancels any subscription.
+            </p>
+            <DeleteAccount email={user.email} subscribed={subscribed} />
           </div>
         </div>
+        <SiteFooter />
       </div>
     </div>
   );
