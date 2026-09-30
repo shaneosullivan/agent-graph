@@ -32,6 +32,8 @@ export function loadViewer(
   const {window} = dom;
   t.after(() => window.close());
   window.matchMedia = () => ({matches: false, addEventListener() {}});
+  // No canvas here: the page measures text at about 7px a character instead.
+  window.HTMLCanvasElement.prototype.getContext = () => null;
   window.HTMLElement.prototype.scrollIntoView = function () {
     window.__scrolls = (window.__scrolls || 0) + 1;
   };

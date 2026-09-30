@@ -13,7 +13,7 @@
   <header class="topbar">
     <button id="back" class="back-btn" type="button" hidden>
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
-      Sessions
+      <span id="back-label">Sessions</span>
     </button>
     <div class="brand">
       <img src="/icon.svg" alt="" width="24" height="24">
@@ -59,6 +59,9 @@
   </div>
 
   <footer class="timeline" aria-label="Timeline">
+    <button id="timeline-hide" class="timeline-hide" type="button" aria-label="Hide the timeline" title="Hide the timeline">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6"/></svg>
+    </button>
     <div class="steppers">
       <button id="prev" class="icon-btn" aria-label="Previous step" title="Previous step (←)">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5" /></svg>

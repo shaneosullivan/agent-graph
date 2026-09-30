@@ -75,6 +75,10 @@ body {
   height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  /* Never wider than the window: text cut short to fit (a node's id, the
+     step's label) mustn't widen the page to its full length, which a phone
+     would show zoomed in. */
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
 }
 button { font: inherit; color: inherit; }
@@ -207,7 +211,7 @@ main { padding: 22px 28px 40px; }
   border: 1px solid color-mix(in srgb, var(--failed) 30%, transparent);
 }
 .view-head { margin-bottom: 18px; }
-.title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
 .btn {
   flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px;
   border: 1px solid var(--line-strong); background: var(--panel); color: var(--text);
@@ -350,6 +354,12 @@ main { padding: 22px 28px 40px; }
   border-top: 1px solid var(--line);
 }
 .steppers { grid-area: steppers; display: flex; gap: 4px; }
+/* The timeline drawer's controls, for a phone only (see the narrow styles). */
+.timeline-hide, .timeline-open { display: none; }
+.timeline-open { place-items: center; flex: none; width: 34px; height: 30px; padding: 0; }
+.timeline-open svg { width: 22px; height: 22px; }
+.timeline-open .track-line { stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; }
+.timeline-open .track-thumb { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
 .icon-btn {
   width: 32px; height: 32px; display: grid; place-items: center; cursor: pointer;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
@@ -400,8 +410,9 @@ main { padding: 22px 28px 40px; }
 
 .hover-tip {
   position: absolute; bottom: 40px; transform: translateX(-50%);
-  max-width: 360px; padding: 6px 10px; border-radius: 8px; pointer-events: none; z-index: 5;
-  background: var(--text); color: var(--bg); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* At most 80% of the window: a long label's cut in the middle (see `showTip`). */
+  max-width: 80vw; padding: 6px 10px; border-radius: 8px; pointer-events: none; z-index: 5;
+  background: var(--text); color: var(--bg); font-size: 12px; white-space: nowrap; overflow: hidden;
   box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
 }
 .hover-tip .t { opacity: 0.7; margin-right: 6px; }
@@ -434,11 +445,11 @@ main { padding: 22px 28px 40px; }
 .swatch.message { background: var(--cat-message); }
 
 /* The Cards / Graph switch, in the view's heading */
-.title-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.title-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .view-switch { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
 .view-option {
   font: inherit; font-size: 12.5px; font-weight: 600; padding: 4px 12px; border: none; border-radius: 7px;
-  background: none; color: var(--muted); cursor: pointer;
+  background: none; color: var(--muted); cursor: pointer; white-space: nowrap;
 }
 .view-option:hover { color: var(--text); }
 .view-option.on { background: var(--accent-soft); color: var(--accent); }
@@ -502,6 +513,9 @@ main { padding: 22px 28px 40px; }
 .wait-head { fill: var(--cat-wait); }
 .graph-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; }
 .graph-tools .btn[hidden] { display: none; }
+/* Another session needs you: the All button's orange, and pulses when one first does. */
+.graph-tools .show-others.needs-you { border-color: var(--input); color: var(--input); }
+.graph-tools .show-others.pulse { animation: needs-you 0.5s ease-in-out 4; }
 .graph-tools .icon-fit { display: grid; place-items: center; padding: 4px 7px; }
 .graph-tools .icon-fit img { display: block; width: 20px; height: 20px; }
 
@@ -530,9 +544,14 @@ main { padding: 22px 28px 40px; }
 .onode.needs-you .ostatus { fill: var(--input); font-weight: 650; }
 /* Going to one: everything else fades as the view zooms into it. */
 .graph-host.choosing .nodes, .graph-host.choosing .links, .graph-host.choosing .onode:not(.chosen) { opacity: 0; transition: opacity 0.45s; }
+.graph-foot {
+  position: absolute; left: 10px; right: 10px; bottom: 10px;
+  display: flex; align-items: flex-end; gap: 8px; pointer-events: none;
+}
+.graph-foot > * { pointer-events: auto; }
 .graph-legend {
-  position: absolute; bottom: 10px; left: 10px; margin: 0; padding: 5px 10px; list-style: none;
-  display: flex; flex-wrap: wrap; gap: 4px 12px; max-width: calc(100% - 20px); pointer-events: none;
+  margin: 0; padding: 5px 10px; list-style: none; min-width: 0;
+  display: flex; flex-wrap: wrap; gap: 4px 12px; pointer-events: none;
   font-size: 12px; color: var(--muted);
   background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 8px;
   transition: opacity 0.4s ease;
@@ -615,12 +634,40 @@ main { padding: 22px 28px 40px; }
   .layout > * { overflow: visible; }
   .sessions { border-right: none; border-bottom: 1px solid var(--line); }
   main { padding: 16px; }
-  .timeline { grid-template-areas: "steppers live" "track track" "caption caption"; grid-template-columns: auto 1fr; position: sticky; bottom: 0; }
+  /* On a phone, the timeline's a drawer at the bottom of the screen:
+     hidden at first, shown by the Timeline pill, hidden again by the
+     arrow atop it (see `setTimelineOpen`). What's on the page leaves room
+     for it (--timeline-room, set to its height while it's open). */
+  .timeline {
+    grid-template-areas: "steppers live" "track track" "caption caption"; grid-template-columns: auto 1fr;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    padding-top: 22px; padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 24px rgb(0 0 0 / 0.08);
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  body.timeline-closed .timeline { transform: translateY(calc(100% + 12px)); }
+  .timeline-hide {
+    display: grid; place-items: center;
+    position: absolute; top: 2px; left: 50%; transform: translateX(-50%);
+    width: 44px; height: 20px; padding: 0; border: none; border-radius: 10px;
+    background: none; color: var(--muted); cursor: pointer;
+  }
+  .timeline-hide svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .timeline-hide:hover { color: var(--text); background: var(--panel-2); }
+  /* Shown while the timeline's hidden. */
+  body.paged.timeline-closed .timeline-open { display: grid; }
+  /* The page's own content clear of the drawer, while it's up. */
+  body.paged .layout { padding-bottom: var(--timeline-room, 0px); }
   .legend { display: none; }
 
   /* One page at a time: the list, or a session's page (its tree, details
      and timeline), with a way back. */
   body.paged .sessions, body.paged .brand { display: none; }
+  /* A session's page is its tree; a node's details, tapped there, are a
+     page of their own (see `nodePaged`), with Back to the session. */
+  body.paged:not(.node-page) .detail { display: none; }
+  body.node-page main { display: none; }
+  body.node-page .layout > .detail { border-top: none; }
   body:not(.paged) main, body:not(.paged) .detail, body:not(.paged) .timeline { display: none; }
   body.paged .topbar { position: sticky; top: 0; z-index: 10; }
 

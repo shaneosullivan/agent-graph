@@ -19,7 +19,7 @@ const out = join(site, "../src/view/assets/d3.min.js");
 // What app.js uses as `d3.…` (d3-transition adds `.transition()` to
 // selections, so it's imported for that alone).
 const entry = `
-export {forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY} from "d3-force";
+export {forceLink, forceManyBody, forceSimulation, forceX, forceY} from "d3-force";
 export {select} from "d3-selection";
 import "d3-transition";
 export {zoom, zoomIdentity, zoomTransform} from "d3-zoom";

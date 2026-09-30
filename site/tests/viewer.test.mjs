@@ -1654,6 +1654,12 @@ test("zoomed out, the other sessions show round this one, and choosing one shows
 
   const button = doc.querySelector("#view .show-others");
   assert.equal(button.hidden, false, "there's another session to show");
+  assert.equal(button.textContent, "All");
+  // Another needs you: it says so, is orange, and pulsed when that began.
+  assert.equal(button.title, "All sessions: another needs you");
+  assert.ok(button.classList.contains("needs-you"));
+  assert.ok(button.classList.contains("pulse"));
+  await until(() => !button.classList.contains("pulse"), 3000);
   button.click();
   await until(() => others().length === 1);
   const [other] = others();
@@ -1674,4 +1680,33 @@ test("zoomed out, the other sessions show round this one, and choosing one shows
   await until(() => v.S.root === "x:s");
   await until(() => doc.querySelectorAll("#view .gnode").length === 3);
   if (v.G.sim) v.G.sim.stop();
+});
+
+test("a long step's hover tip keeps its start and end, cut in the middle to 80% of the window", async t => {
+  const label =
+    "Message to general-purpose aabbdc8b about the payments test suite and what it found in the retry path";
+  const stops = stopsOf(["e1", "e2", "e3"]).map(s => ({...s, label}));
+  const g = graph([node("x:a")]);
+  const window = loadViewer(t, {
+    graph: async () => g,
+    timeline: async () => ({stops}),
+  });
+  const doc = window.document;
+  await until(() => window.__viewer.S.stops.length === 3);
+  Object.defineProperty(window, "innerWidth", {value: 375, configurable: true});
+  doc
+    .querySelector("#slider")
+    .dispatchEvent(
+      new window.MouseEvent("mousemove", {clientX: 0, bubbles: true}),
+    );
+  const tip = doc.querySelector("#hover-tip");
+  const text = [...tip.childNodes]
+    .slice(1)
+    .map(n => n.textContent)
+    .join("");
+  assert.ok(text.includes("…"), text);
+  assert.ok(text.startsWith("Message to"), text);
+  assert.ok(text.endsWith("retry path"), text);
+  // About 7px a character here: no more than 80% of 375px.
+  assert.ok(text.length * 7 <= 375 * 0.8, `${text.length} characters`);
 });

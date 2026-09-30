@@ -41,6 +41,7 @@ const S = {
   showNeedsYou: null, // a session whose node that needs you is to be brought into view and pulsed, once drawn (see `stepAttention`)
   view: savedViewMode(), // 'cards' or 'graph': how the tree's drawn (see the graph view)
   modal: null, // the node the details dialog shows, when it's open (see `openModal`)
+  timelineOpen: false, // on a phone, whether the timeline drawer's up (see `setTimelineOpen`)
 };
 
 // ---------- helpers ----------
@@ -566,17 +567,100 @@ function closePage() {
   else renderPage();
 }
 
+/**
+ * On a phone the timeline's a drawer: hidden at first, shown with the
+ * Timeline pill, hidden with the arrow atop it. The page leaves room for
+ * it while it's up (--timeline-room), and the graph's resized to fit what's
+ * left (see `sizeGraph`).
+ */
+/**
+ * The button that shows the timeline on a phone, while it's hidden: beside
+ * the graph's legend, or in the cards view, beside the view switch. Its icon
+ * is the timeline's slider: a line with the thumb on it.
+ */
+function timelineButton() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const line = document.createElementNS(ns, 'line');
+  for (const [k, v] of Object.entries({ x1: 3, y1: 12, x2: 21, y2: 12, class: 'track-line' })) line.setAttribute(k, v);
+  const thumb = document.createElementNS(ns, 'circle');
+  for (const [k, v] of Object.entries({ cx: 15, cy: 12, r: 4.5, class: 'track-thumb' })) thumb.setAttribute(k, v);
+  svg.append(line, thumb);
+  return h(
+    'button',
+    { type: 'button', class: 'btn timeline-open', title: 'Show the timeline', 'aria-label': 'Show the timeline', onclick: () => setTimelineOpen(true) },
+    svg,
+  );
+}
+
+function setTimelineOpen(open) {
+  S.timelineOpen = open;
+  renderTimelineDrawer();
+}
+
+function renderTimelineDrawer() {
+  const drawer = NARROW.matches;
+  const closed = drawer && !S.timelineOpen;
+  document.body.classList.toggle('timeline-closed', closed);
+  const room = !drawer || closed ? 0 : $('.timeline').offsetHeight + 8;
+  document.documentElement.style.setProperty('--timeline-room', `${room}px`);
+  sizeGraph();
+}
+
+/**
+ * Sizes the graph to the room it has on screen: from its top to the
+ * bottom of the view, or to the timeline's top where that's over it, so
+ * nothing's drawn out of sight (and zoomed out, every other session's in
+ * view). It's fitted again as its size changes (see `buildGraph`).
+ */
+function sizeGraph() {
+  const host = document.querySelector('#view .graph-host');
+  if (!host || !host.isConnected) return;
+  const top = host.getBoundingClientRect().top + (NARROW.matches ? window.scrollY : 0);
+  let bottom;
+  if (NARROW.matches) {
+    // The page scrolls: the window, less the timeline drawer (or its pill).
+    const room = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--timeline-room')) || 0;
+    bottom = window.innerHeight - room;
+  } else {
+    // The middle column scrolls: its bottom, less its padding.
+    const main = $('#main');
+    bottom = main.getBoundingClientRect().bottom - 16;
+  }
+  const height = Math.round(Math.max(NARROW.matches ? 300 : 380, bottom - top - 12));
+  if (Math.abs(host.offsetHeight - height) > 1) host.style.height = `${height}px`;
+}
+
 function renderPage() {
   const on = paged();
+  const node = nodePaged();
   document.body.classList.toggle('paged', on);
+  document.body.classList.toggle('node-page', node);
   $('#back').hidden = !on;
-  $('#page-toggles').hidden = !on;
+  // From a node's details, back is to its session; from a session, to the list.
+  const root = node && S.live && (S.live.nodes[S.root] || S.live.sessions[S.root]);
+  $('#back-label').textContent = node ? (root ? nodeName(root) : 'Back') : 'Sessions';
+  $('#page-toggles').hidden = !on || node;
+  renderTimelineDrawer();
+}
+
+/**
+ * Whether a node's details are open as a page of their own, on a narrow
+ * screen: a card tapped in a session's page opens them (see `selectNode`),
+ * a history entry after the session's, so Back returns to the session.
+ */
+function nodePaged() {
+  return paged() && Boolean(history.state && history.state.agentGraphNode);
 }
 
 /** Shows the tree under `id`: live, until its timeline comes. */
 function switchTo(id) {
   if (id === S.root) return;
   closeModal();
+  // Another session's tree: its page, not the node's details.
+  if (nodePaged()) history.replaceState({ agentGraphPage: true }, '', location.href);
   forgetLoads();
   S.root = id;
   S.selected = id;
@@ -595,9 +679,16 @@ function selectNode(id) {
   S.selected = id;
   // One named in the details dialog is shown in it.
   if (S.modal) S.modal = id;
+  // On a phone, its details open as a page of their own (one opened from
+  // another's details takes that one's place, so Back is to the session).
+  if (paged() && !S.modal) {
+    const state = { agentGraphPage: true, agentGraphNode: id };
+    if (nodePaged()) history.replaceState(state, '', location.href);
+    else history.pushState(state, '', location.href);
+    renderPage();
+    window.scrollTo(0, 0);
+  }
   renderView();
-  // Stacked, its details are below the tree: brought into view.
-  if (NARROW.matches) $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /**
@@ -1071,6 +1162,7 @@ function renderMain() {
   redraw(view, kids);
   const host = view.querySelector('.graph-host');
   if (host && graph) {
+    sizeGraph();
     renderGraph(host, graph, keep, ringed, flash);
     return;
   }
@@ -1168,7 +1260,13 @@ function mainView() {
       { class: 'title-row' },
       // Named as it was at the step being viewed: sessions get renamed.
       h('h1', null, h('span', { class: 'h-name' }, nodeName(root || liveRoot)), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
-      h('div', { class: 'title-tools' }, root ? viewSwitch() : null, root ? saveImageLink(stop) : null),
+      h(
+        'div',
+        { class: 'title-tools' },
+        root ? viewSwitch() : null,
+        root && S.view === 'cards' ? timelineButton() : null,
+        root ? saveImageLink(stop) : null,
+      ),
     ),
     h(
       'div',
@@ -1441,6 +1539,9 @@ function renderGraph(host, graph, keep, ringed, flash) {
     n.room = Math.max(n.r + 22, n.label.length * 3.3 + 10, n.tasks ? n.r + 10 + n.pillW : 0);
     return n;
   });
+  const rowsBefore = new Map(nodes.map((n) => [n.id, n.ty]));
+  arrangeRows(nodes);
+  const moved = nodes.some((n) => rowsBefore.get(n.id) !== undefined && rowsBefore.get(n.id) !== n.ty);
   const now = new Set(nodes.map((n) => n.id));
   for (const id of G.byId.keys()) if (!now.has(id)) G.byId.delete(id);
   const changed = nodes.length !== before.size || nodes.some((n) => !before.has(n.id));
@@ -1560,16 +1661,18 @@ function renderGraph(host, graph, keep, ringed, flash) {
   const sim = G.sim;
   sim.nodes(nodes);
   sim.force('link').links(links);
-  // Working nodes keep it moving, gently: it's alive while they are.
-  const busy = !still && nodes.some((n) => n.node.state === 'working' || n.node.state === 'input_required');
-  sim.alphaTarget(busy ? 0.02 : 0);
+  // Once it's settled, it stays still: it moves when something changes.
+  sim.alphaTarget(0);
   if (still) {
     sim.stop();
     for (let i = 0; i < 300; i++) sim.tick();
     tick();
     fitGraph(false);
   } else {
-    sim.alpha(changed ? 0.7 : Math.max(sim.alpha(), 0.12)).restart();
+    // Woken only when its shape changes: nodes come or go, or rows move.
+    // Otherwise (a node chosen, its state changed) it stays as it is.
+    if (changed) sim.alpha(0.7).restart();
+    else if (moved) sim.alpha(Math.max(sim.alpha(), 0.35)).restart();
   }
   if (G.focus) focusNode();
   drawOthers();
@@ -1628,6 +1731,106 @@ function scaleFrom(a, b) {
   return (t) => `scale(${a + (b - a) * t})`;
 }
 
+/** How far apart a generation's rows are, when it has more than one. */
+const SUBROW = 54;
+
+/**
+ * Where each node sits, top to bottom (`n.ty`). Each generation is a band;
+ * a generation with more nodes than fit well across is spread over several
+ * rows in its band, taking turns (so neighbours, which are mostly
+ * brothers and sisters, sit in different rows and close up across). How
+ * many rows is chosen so the graph can be drawn as large as its space
+ * allows: a tall phone gets more than a wide window, and a small graph
+ * keeps to one.
+ */
+function arrangeRows(nodes) {
+  // Each generation's nodes, in the order they're drawn in (depth first,
+  // so each family together, in its parent's place).
+  const byDepth = [];
+  for (const n of nodes) (byDepth[n.depth] ||= []).push(n);
+  const box = G.svg && G.svg.node().getBoundingClientRect();
+  const W = box && box.width ? box.width : 900;
+  const H = box && box.height ? box.height : 560;
+  const rowsAt = (count, r) => Math.max(1, Math.min(r, Math.ceil(count / 2)));
+  // The rows that let it be drawn largest: as many as it takes for its
+  // height, not its width, to be what it's fitted by (and no more, since
+  // more only make it taller).
+  let best = 1;
+  let bestScale = 0;
+  for (let r = 1; r <= 12; r++) {
+    let width = 0;
+    let height = 0;
+    for (const level of byDepth) {
+      if (!level) continue;
+      const rows = rowsAt(level.length, r);
+      // Its rows share its names' width.
+      const across = level.reduce((sum, n) => sum + 2 * n.room, 0) / rows;
+      width = Math.max(width, across);
+      height += LEVEL + (rows - 1) * SUBROW;
+    }
+    // (No larger than it's ever drawn: a graph that fits anyway keeps to one row.)
+    const scale = Math.min(1.4, W / (width + 80), H / (height + 60));
+    // One row that's drawn about full size already stays one row.
+    if (r === 1 && scale >= 0.9) {
+      best = 1;
+      break;
+    }
+    if (scale > bestScale * 1.03) {
+      best = r;
+      bestScale = scale;
+    }
+  }
+  let top = 0;
+  for (const level of byDepth) {
+    if (!level) continue;
+    const rows = rowsAt(level.length, best);
+    level.forEach((n, k) => (n.ty = top + (k % rows) * SUBROW));
+    top += LEVEL + (rows - 1) * SUBROW;
+  }
+}
+
+/**
+ * Keeps nodes apart by the room they take up, a box as wide as their name
+ * and as tall as their shape and name, rather than a circle, so rows can
+ * sit close. Each overlap's undone along the shorter way out.
+ */
+function boxCollide() {
+  let nodes = [];
+  const force = () => {
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        const dx = b.x + b.vx - (a.x + a.vx);
+        const ox = a.room + b.room - Math.abs(dx);
+        if (ox <= 0) continue;
+        const dy = b.y + b.vy - (a.y + a.vy);
+        const oy = a.r + b.r + 32 - Math.abs(dy);
+        if (oy <= 0) continue;
+        if (ox < oy) {
+          const push = (dx < 0 ? -1 : 1) * ox * 0.35;
+          a.vx -= push;
+          b.vx += push;
+        } else {
+          const push = (dy < 0 ? -1 : 1) * oy * 0.35;
+          a.vy -= push;
+          b.vy += push;
+        }
+      }
+    }
+  };
+  force.initialize = (n) => (nodes = n);
+  return force;
+}
+
+/** Each node drawn toward its parent, across, so a family stays under it. */
+function family(alpha) {
+  for (const n of G.sim ? G.sim.nodes() : []) {
+    const parent = n.parent && G.byId.get(n.parent);
+    if (parent) n.vx += (parent.x - n.x) * 0.1 * alpha;
+  }
+}
+
 /** Sets up the SVG, its zoom and the simulation, once for each host. */
 function buildGraph(d3, host) {
   const svg = d3.select(host).append('svg').attr('class', 'graph').attr('role', 'img').attr('aria-label', 'The session’s agents, as a network');
@@ -1649,6 +1852,18 @@ function buildGraph(d3, host) {
   viewport.append('g').attr('class', 'links');
   viewport.append('g').attr('class', 'nodes');
   G.svg = svg;
+  // Fitted again whenever its space changes size (shown at last, turned, the
+  // timeline shown or hidden), unless the reader's moved it themselves.
+  if (window.ResizeObserver) {
+    let last = '';
+    new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      const size = `${Math.round(width)}x${Math.round(height)}`;
+      if (size === last || !width || !height) return;
+      last = size;
+      if (!G.userMoved) fitGraph(false);
+    }).observe(svg.node());
+  }
 
   G.zoom = d3
     .zoom()
@@ -1672,8 +1887,8 @@ function buildGraph(d3, host) {
     { class: 'graph-tools' },
     h(
       'button',
-      { type: 'button', class: 'btn show-others', title: 'Zoom out to the other sessions', hidden: true, onclick: showOthers },
-      'All sessions',
+      { type: 'button', class: 'btn show-others', title: 'All sessions', 'aria-label': 'All sessions', hidden: true, onclick: showOthers },
+      'All',
     ),
     h(
       'button',
@@ -1690,7 +1905,7 @@ function buildGraph(d3, host) {
     h('li', null, h('span', { class: 'glyph k-tasks' }), 'Tasks done'),
     h('li', null, h('span', { class: 'glyph k-wait' }), 'Waiting on'),
   );
-  host.append(tools, legend, h('div', { class: 'graph-tip', hidden: true }));
+  host.append(tools, h('div', { class: 'graph-foot' }, legend, timelineButton()), h('div', { class: 'graph-tip', hidden: true }));
 
   G.sim = d3
     .forceSimulation()
@@ -1702,24 +1917,18 @@ function buildGraph(d3, host) {
         .distance((l) => (l.kind === 'wait' ? 150 : 80))
         .strength((l) => (l.kind === 'wait' ? 0.02 : 0.6)),
     )
-    .force('charge', d3.forceManyBody().strength(-320))
-    .force('collide', d3.forceCollide((n) => n.room).strength(0.9))
-    // Top down: each generation on its level, the tree centred.
-    .force('y', d3.forceY((n) => n.depth * LEVEL).strength(0.9))
+    // Pushing apart, less the more there are (boxes keep them from
+    // overlapping; more push only spreads a big graph thin).
+    .force('charge', d3.forceManyBody().strength(() => -Math.max(60, 320 * Math.min(1, Math.sqrt(12 / Math.max(1, G.sim ? G.sim.nodes().length : 1))))).distanceMax(400))
+    .force('collide', boxCollide())
+    .force('family', family)
+    // Top down: each generation in its band, on its row (see `arrangeRows`),
+    // the tree centred.
+    .force('y', d3.forceY((n) => n.ty ?? n.depth * LEVEL).strength(0.9))
     .force('x', d3.forceX(0).strength(0.04))
-    .force('jiggle', jiggle)
     .alphaDecay(0.03)
     .on('tick', tick)
     .on('end', () => fitGraph(false));
-}
-
-/** A little drift for working nodes, so the graph looks alive while they are. */
-function jiggle(alpha) {
-  for (const n of G.sim ? G.sim.nodes() : []) {
-    if (n.node.state !== 'working' && n.node.state !== 'input_required') continue;
-    n.vx += (Math.random() - 0.5) * 0.6 * Math.max(alpha, 0.02) * 10;
-    n.vy += (Math.random() - 0.5) * 0.4 * Math.max(alpha, 0.02) * 10;
-  }
 }
 
 /** Moves the drawing to the simulation's positions. */
@@ -1744,7 +1953,9 @@ function tick() {
     const back = t.r + 6;
     return `M${s.x},${s.y}L${t.x - (dx / len) * back},${t.y - (dy / len) * back}`;
   });
-  if (!G.userMoved && G.sim && G.sim.alpha() > 0.25) fitGraph(false);
+  // Kept fitted to its space as it settles, until it has, unless the
+  // reader's moved it.
+  if (!G.userMoved && G.sim && G.sim.alpha() > 0.03) fitGraph(false);
 }
 
 /** Zooms to fit the whole graph in view (smoothly when asked, by the Fit button). */
@@ -1761,7 +1972,7 @@ function fitGraph(smooth) {
   const box = G.svg.node().getBoundingClientRect();
   if (!box.width || !box.height) return;
   // Each node with its name under it (as wide as `room` allows for), and a margin.
-  const pad = 24;
+  const pad = 36;
   const x0 = Math.min(...nodes.map((n) => n.x - n.room)) - pad;
   const x1 = Math.max(...nodes.map((n) => n.x + n.room)) + pad;
   const y0 = Math.min(...nodes.map((n) => n.y - n.r - 10)) - pad;
@@ -2150,9 +2361,33 @@ function drawOthers() {
       g.select('text.oname').text(fitText(nodeName(d.session), width));
       g.select('text.ostatus').text(fitText(d.session.needs_you ? 'Needs you' : STATE_LABEL[sessionState(d.session)] || '', width));
     });
-  // The button that zooms out to them: only with some to show.
+  // The button that zooms out to them: only with some to show, and orange
+  // while one needs you (pulsing when one first does).
   const button = G.host && G.host.querySelector('.show-others');
-  if (button) button.hidden = !otherSessions().length;
+  if (button) {
+    const others = otherSessions();
+    button.hidden = !others.length;
+    const needing = new Set(others.filter((s) => s.needs_you).map((s) => s.id));
+    button.classList.toggle('needs-you', needing.size > 0);
+    button.title = !needing.size
+      ? 'All sessions'
+      : `All sessions: ${needing.size === 1 ? 'another needs you' : `${needing.size} others need you`}`;
+    button.setAttribute('aria-label', button.title);
+    if ([...needing].some((id) => !othersNeeding.has(id))) pulseButton(button);
+    othersNeeding = needing;
+  }
+}
+
+/** The other sessions that needed you when last drawn: one that newly does pulses the All button. */
+let othersNeeding = new Set();
+
+/** Makes the All button pulse, for two seconds. */
+function pulseButton(button) {
+  button.classList.remove('pulse');
+  void button.offsetWidth;
+  button.classList.add('pulse');
+  clearTimeout(button.pulseTimer);
+  button.pulseTimer = setTimeout(() => button.classList.remove('pulse'), 2000);
 }
 
 /** The summary of another session, beside the pointer (or the session, from the keyboard). */
@@ -2686,13 +2921,17 @@ function renderTimeline() {
   const stop = S.stops[S.pos];
   slider.setAttribute('aria-valuetext', stop ? `Step ${S.pos + 1} of ${n}: ${clean(stop.label)}` : 'No events');
 
-  // Ticks only change when the stops do.
-  const key = `${S.root}|${n}|${n ? S.stops[n - 1].id : ''}`;
+  // Ticks only change when the stops do (or the track's width). Too many
+  // for the track to show apart (under about 5px each) would only be a
+  // solid block: then there are none.
+  const width = $('#track').clientWidth;
+  const crowded = n > 1 && width > 0 && width / n < 5;
+  const key = `${S.root}|${n}|${n ? S.stops[n - 1].id : ''}|${crowded}`;
   const ticks = $('#ticks');
   if (key !== tickKey) {
     tickKey = key;
     ticks.replaceChildren(
-      ...S.stops.map((s, i) => {
+      ...(crowded ? [] : S.stops).map((s, i) => {
         const t = h('span', { class: `tick ${s.category}` });
         t.style.left = `${n > 1 ? (i / (n - 1)) * 100 : 100}%`;
         return t;
@@ -2728,10 +2967,43 @@ function showTip(e) {
   const i = stopAt(e.clientX);
   const stop = S.stops[i];
   const rect = $('#track').getBoundingClientRect();
-  tip.replaceChildren(h('span', { class: 't' }, `${i + 1} · ${clock(stop.ts)}`), clean(stop.label));
+  const when = h('span', { class: 't' }, `${i + 1} · ${clock(stop.ts)}`);
+  tip.replaceChildren(when);
   tip.hidden = false;
+  // At most 80% of the window's width: a long label keeps its start and its
+  // end, with an ellipsis in the middle.
+  const style = getComputedStyle(tip);
+  const room = window.innerWidth * 0.8 - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0) - when.offsetWidth - 6;
+  tip.append(middleEllipsis(clean(stop.label), room, style.font));
+  // Over its step, but on the screen.
   const x = THUMB / 2 + (i / (S.stops.length - 1)) * (rect.width - THUMB);
-  tip.style.left = `${clamp(x, 120, rect.width - 120)}px`;
+  const half = tip.offsetWidth / 2;
+  const lo = half + 8 - rect.left;
+  const hi = window.innerWidth - rect.left - half - 8;
+  tip.style.left = `${clamp(x, lo, Math.max(lo, hi))}px`;
+}
+
+/** Text measured in `font`, from a canvas (about 7px a character where there's none). */
+function textWidth(text, font) {
+  const ctx = (textWidth.ctx ||= document.createElement('canvas').getContext('2d'));
+  if (!ctx) return text.length * 7;
+  ctx.font = font;
+  return ctx.measureText(text).width;
+}
+
+/** `text` cut to `px` wide in `font`, if it's wider: its start and end, with an ellipsis between. */
+function middleEllipsis(text, px, font) {
+  if (textWidth(text, font) <= px) return text;
+  // The most characters that fit, half from each end.
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const n = Math.ceil((lo + hi) / 2);
+    const cut = `${text.slice(0, Math.ceil(n / 2))}…${text.slice(text.length - Math.floor(n / 2))}`;
+    if (textWidth(cut, font) <= px) lo = n;
+    else hi = n - 1;
+  }
+  return `${text.slice(0, Math.ceil(lo / 2)).trimEnd()}…${text.slice(text.length - Math.floor(lo / 2)).trimStart()}`;
 }
 
 // ---------- wiring ----------
@@ -2754,6 +3026,12 @@ function wire() {
   $('#prev').addEventListener('click', () => goTo(S.pos - 1));
   $('#next').addEventListener('click', () => goTo(S.pos + 1));
   $('#live').addEventListener('click', goLive);
+  // The timeline drawer, on a phone.
+  $('#timeline-hide').addEventListener('click', () => setTimelineOpen(false));
+  window.addEventListener('resize', () => {
+    renderTimelineDrawer();
+    renderTimeline();
+  });
   // "Completed", in the list's head and, on a session's page (where the
   // list isn't shown), in the top bar: one setting, two boxes kept alike.
   const showDone = [$('#show-done'), $('#show-done-page')];
@@ -2816,7 +3094,8 @@ function wire() {
     const was = document.body.classList.contains('paged');
     const update = () => {
       // The list, as left: a reload stays on it.
-      if (!history.state) history.replaceState({ agentGraphList: true }, '', location.href);
+      const ours = history.state && (history.state.agentGraphPage || history.state.agentGraphList);
+      if (!ours) history.replaceState({ ...history.state, agentGraphList: true }, '', location.href);
       renderPage();
       if (paged()) window.scrollTo(0, 0);
       else {
@@ -2852,7 +3131,23 @@ async function main() {
   // On a phone, a session named in the address opens as its page, with the
   // list a step back; not where the list was left (reloaded, say), whose
   // address names the session last shown.
-  if (NARROW.matches && hashId() && !history.state) history.pushState({ agentGraphPage: true }, '', location.href);
+  // (The site's framework keeps state of its own in the entry: only ours
+  // counts. It can also write the entry over as it starts, dropping ours:
+  // then it's put back, unless the reader has moved on meanwhile.)
+  const ours = history.state && (history.state.agentGraphPage || history.state.agentGraphList);
+  if (NARROW.matches && hashId() && !ours) {
+    history.pushState({ ...history.state, agentGraphPage: true }, '', location.href);
+    let moved = false;
+    window.addEventListener('popstate', () => (moved = true), { once: true });
+    for (const ms of [200, 800, 2000, 5000]) {
+      setTimeout(() => {
+        if (moved || paged() || !NARROW.matches) return;
+        history.replaceState({ ...history.state, agentGraphPage: true }, '', location.href);
+        renderPage();
+        renderView();
+      }, ms);
+    }
+  }
   renderAll();
   try {
     S.info = await source.info();
