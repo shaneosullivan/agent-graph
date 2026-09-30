@@ -32,7 +32,7 @@ export function AccountLink() {
   return signedIn ? (
     <>
       {admin ? (
-        <a className="account-link" href="/admin">
+        <a className="account-link nav-admin" href="/admin">
           Admin
         </a>
       ) : null}

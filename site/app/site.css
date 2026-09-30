@@ -90,6 +90,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 18px 0;
   margin-bottom: 20px;
 }
@@ -100,6 +101,9 @@ body {
   font-weight: 650;
   color: var(--text);
   text-decoration: none;
+  /* On one line, whatever the width. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .site .brand img {
   width: 28px;
@@ -107,8 +111,124 @@ body {
 }
 .site .top nav {
   display: flex;
+  align-items: center;
   gap: 18px;
   font-size: 14px;
+}
+
+/* The header's menu, on a narrow screen (app/site-menu.tsx): its button,
+   and a panel that slides in from the right over a backdrop. */
+.site .menu-button,
+.site .menu-backdrop,
+.site .menu-panel {
+  display: none;
+}
+@media (max-width: 640px) {
+  .site .top nav a.nav-page,
+  .site .top nav a.nav-admin {
+    display: none;
+  }
+  .site .top nav {
+    gap: 12px;
+  }
+  .site .menu-button {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    margin-right: -8px;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .site .menu-button svg,
+  .site .menu-close svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  .site .menu-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgb(0 0 0 / 0.45);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .site .menu-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .site .menu-panel {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 51;
+    width: min(280px, 82vw);
+    padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    box-shadow: -12px 0 32px rgb(0 0 0 / 0.18);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition:
+      transform 0.25s ease,
+      visibility 0s linear 0.25s;
+  }
+  .site .menu-panel.open {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.25s ease;
+  }
+  .site .menu-close {
+    align-self: flex-end;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .site .menu-panel ul {
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .site .top nav .menu-panel a {
+    display: block;
+    padding: 12px 12px;
+    border-radius: 8px;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .site .top nav .menu-panel a:hover,
+  .site .top nav .menu-panel a:focus-visible {
+    background: var(--panel-2);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .site .menu-backdrop,
+  .site .menu-panel,
+  .site .menu-panel.open {
+    transition: none;
+  }
 }
 .site .top nav a {
   color: var(--muted);
@@ -216,22 +336,34 @@ body {
 }
 
 /* A command with a button that copies it (app/copy-command.tsx): at the
-   top right of one of several lines, centred on the right of one line. */
+   top right of one of several lines, centred on the right of one line.
+   The box is the command's frame, and the button sits beside the text in
+   it, so a long command scrolls beside the button, never under it. */
 .site .command-box {
-  display: block;
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin: 12px 0;
+  padding-right: 6px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.site .command-box.multi {
+  align-items: flex-start;
 }
 .site .install-steps .command-box {
   margin: 6px 0 0;
 }
 .site .command-box .command {
+  flex: 1;
+  min-width: 0;
   margin: 0;
-  padding-right: 44px;
+  border: none;
+  background: none;
 }
 .site .copy-command {
-  position: absolute;
-  right: 6px;
+  flex-shrink: 0;
   display: grid;
   place-items: center;
   width: 28px;
@@ -244,11 +376,7 @@ body {
   opacity: 0.6;
 }
 .site .command-box.multi .copy-command {
-  top: 6px;
-}
-.site .command-box.single .copy-command {
-  top: 50%;
-  transform: translateY(-50%);
+  margin-top: 6px;
 }
 .site .copy-command:hover,
 .site .copy-command:focus-visible {
