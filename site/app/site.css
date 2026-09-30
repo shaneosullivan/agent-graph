@@ -1785,25 +1785,9 @@ body {
     grid-template-columns: minmax(0, 1fr);
     gap: 20px;
   }
+  /* No navigation: the page is short enough to scroll through. */
   .site .acct-nav {
-    position: static;
-    flex-direction: row;
-    gap: 6px;
-    overflow-x: auto;
-    margin: 0 -20px;
-    padding: 0 20px 4px;
-    scrollbar-width: none;
-  }
-  .site .acct-nav::-webkit-scrollbar {
     display: none;
-  }
-  .site .acct-nav a {
-    flex: none;
-    border: 1px solid var(--line);
-    background: var(--panel);
-  }
-  .site .acct-nav .acct-nav-danger {
-    margin-top: 0;
   }
   .site .acct-tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
