@@ -1307,6 +1307,7 @@ fn says_it_is_still_running() {
 }
 
 /// Where `--autostart` puts its service, under `home` (as $HOME).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_file(home: &std::path::Path) -> std::path::PathBuf {
     if cfg!(target_os = "macos") {
         home.join("Library/LaunchAgents/com.chofter.agent-graph.watch-remote.plist")
