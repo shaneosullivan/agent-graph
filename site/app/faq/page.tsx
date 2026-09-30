@@ -86,10 +86,10 @@ export default function Faq() {
       <p>
         For now, <strong>macOS</strong> (Apple silicon and Intel) and{" "}
         <strong>Linux</strong> (x86_64 and ARM64), with{" "}
-        <strong>Claude Code</strong>: it records Claude Code&rsquo;s sessions,
-        and the agents they start. We&rsquo;re still testing it on the other
-        platforms and coding agents, so Windows, installing from npm, and
-        recording Codex and Cursor are coming, but not ready yet.{" "}
+        <strong>Claude Code</strong> and <strong>Codex</strong>: it records
+        their sessions, and the agents they start. We&rsquo;re still testing it
+        on the other platforms and coding agents, so Windows, installing from
+        npm, and recording Cursor are coming, but not ready yet.{" "}
         <a href="/#install">Install it</a> with Homebrew, or the install script.
       </p>
 

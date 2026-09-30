@@ -282,6 +282,13 @@ pub fn install_claude_code_cloud(settings: &mut Value, site: &str) -> Result<(),
 /// Removes our hooks from Claude Code `settings`. Returns how many handlers
 /// were removed. Other handlers, and groups that still have any, are kept.
 pub fn uninstall_claude_code(settings: &mut Value) -> Result<usize, String> {
+    remove_handlers(settings, is_ours)
+}
+
+/// Removes the handlers `ours` picks from a hooks file (Claude Code's or
+/// Codex's, which have the same shape). Other handlers, and groups that
+/// still have any, are kept.
+fn remove_handlers(settings: &mut Value, ours: fn(&Value) -> bool) -> Result<usize, String> {
     let Some(hooks) = settings.get_mut("hooks") else {
         return Ok(0);
     };
@@ -300,7 +307,7 @@ pub fn uninstall_claude_code(settings: &mut Value) -> Result<usize, String> {
                 return true;
             };
             let before = handlers.len();
-            handlers.retain(|h| !is_ours(h));
+            handlers.retain(|h| !ours(h));
             removed_here += before - handlers.len();
             // Drop a group only if we emptied it.
             !(handlers.is_empty() && before > 0)
@@ -342,6 +349,10 @@ fn hooks_object(settings: &mut Value) -> Result<&mut Map<String, Value>, String>
 
 /// The events that have one of our handlers, for showing what changed.
 pub fn our_events(settings: &Value) -> Vec<String> {
+    events_with(settings, is_ours)
+}
+
+fn events_with(settings: &Value, ours: fn(&Value) -> bool) -> Vec<String> {
     let Some(hooks) = settings.get("hooks").and_then(Value::as_object) else {
         return Vec::new();
     };
@@ -352,12 +363,353 @@ pub fn our_events(settings: &Value) -> Vec<String> {
                 groups.iter().any(|g| {
                     g.get("hooks")
                         .and_then(Value::as_array)
-                        .is_some_and(|hs| hs.iter().any(is_ours))
+                        .is_some_and(|hs| hs.iter().any(ours))
                 })
             })
         })
         .map(|(event, _)| event.clone())
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Codex (docs/codex.md)
+
+/// One Codex hook registration.
+struct CodexHook {
+    event: &'static str,
+    matcher: Option<&'static str>,
+    background: bool,
+    timeout: u64,
+}
+
+/// The tools the graph needs to hear about: shell commands (to see another
+/// agent started, and approvals given), edits (approvals), subagents, the
+/// plan, and questions for you. `wait_agent` is named with its namespace
+/// run into it (`multi_agent_v1wait_agent`). Plain names match exactly.
+const CODEX_TOOLS: &str = "Bash|apply_patch|spawn_agent|wait_agent|multi_agent_v1wait_agent|update_plan|request_user_input";
+
+/// The Codex hooks Agent Graph needs. SessionStart is synchronous, so it's
+/// recorded before anything else in the session, and so is SessionEnd,
+/// which Codex always runs synchronously (for at most 3 s).
+const CODEX_HOOKS: &[CodexHook] = &[
+    CodexHook {
+        event: "SessionStart",
+        matcher: None,
+        background: false,
+        timeout: SYNC_TIMEOUT_SECS,
+    },
+    CodexHook {
+        event: "SessionEnd",
+        matcher: None,
+        background: false,
+        timeout: 3,
+    },
+    CodexHook {
+        event: "UserPromptSubmit",
+        matcher: None,
+        background: true,
+        timeout: SYNC_TIMEOUT_SECS,
+    },
+    CodexHook {
+        event: "Stop",
+        matcher: None,
+        background: true,
+        timeout: SYNC_TIMEOUT_SECS,
+    },
+    CodexHook {
+        event: "Interrupt",
+        matcher: None,
+        background: true,
+        timeout: 3,
+    },
+    CodexHook {
+        event: "SubagentStart",
+        matcher: None,
+        background: true,
+        timeout: SYNC_TIMEOUT_SECS,
+    },
+    CodexHook {
+        event: "SubagentStop",
+        matcher: None,
+        background: true,
+        timeout: SYNC_TIMEOUT_SECS,
+    },
+    CodexHook {
+        event: "PermissionRequest",
+        matcher: None,
+        background: true,
+        timeout: SYNC_TIMEOUT_SECS,
+    },
+    CodexHook {
+        event: "PreToolUse",
+        matcher: Some(CODEX_TOOLS),
+        background: true,
+        timeout: SYNC_TIMEOUT_SECS,
+    },
+    CodexHook {
+        event: "PostToolUse",
+        matcher: Some(CODEX_TOOLS),
+        background: true,
+        timeout: SYNC_TIMEOUT_SECS,
+    },
+];
+
+/// Identifies our Codex handlers, whatever path the command starts with.
+pub const CODEX_MARKER: &str = "emit --provider codex";
+
+/// Codex's hooks file: `$CODEX_HOME/hooks.json` (`~/.codex`), or a
+/// project's `.codex/hooks.json`. Codex has no file of a project's that
+/// isn't committed, so there's none for `Scope::Local`.
+pub fn codex_hooks_path(scope: Scope, project_dir: &Path) -> Option<PathBuf> {
+    match scope {
+        Scope::User => Some(crate::adapter::codex::codex_home()?.join("hooks.json")),
+        Scope::Project => Some(project_dir.join(".codex").join("hooks.json")),
+        Scope::Local => None,
+    }
+}
+
+/// Codex's own settings, where hooks are trusted: `$CODEX_HOME/config.toml`.
+pub fn codex_config_path() -> Option<PathBuf> {
+    Some(crate::adapter::codex::codex_home()?.join("config.toml"))
+}
+
+/// Adds our hooks to a Codex hooks file, replacing any earlier copy.
+/// `command` must contain `CODEX_MARKER`.
+pub fn install_codex(hooks_file: &mut Value, command: &str) -> Result<(), String> {
+    if !command.contains(CODEX_MARKER) {
+        return Err(format!(
+            "the hook command must contain `{CODEX_MARKER}`, which is how Agent Graph \
+             finds its hooks again (to replace or remove them), so nothing was changed: \
+             {command}"
+        ));
+    }
+    uninstall_codex(hooks_file)?;
+    let hooks = hooks_object(hooks_file)?;
+    for spec in CODEX_HOOKS {
+        let mut handler = Map::new();
+        handler.insert("type".into(), json!("command"));
+        handler.insert("command".into(), json!(command));
+        handler.insert("timeout".into(), json!(spec.timeout));
+        if spec.background {
+            handler.insert("async".into(), json!(true));
+        }
+        let mut group = Map::new();
+        if let Some(matcher) = spec.matcher {
+            group.insert("matcher".into(), json!(matcher));
+        }
+        group.insert("hooks".into(), json!([handler]));
+        let groups = hooks.entry(spec.event).or_insert_with(|| json!([]));
+        let groups = groups
+            .as_array_mut()
+            .ok_or_else(|| format!("hooks.{} isn't a list", spec.event))?;
+        groups.push(Value::Object(group));
+    }
+    Ok(())
+}
+
+/// Removes our hooks from a Codex hooks file. Returns how many handlers
+/// were removed.
+pub fn uninstall_codex(hooks_file: &mut Value) -> Result<usize, String> {
+    remove_handlers(hooks_file, is_ours_codex)
+}
+
+fn is_ours_codex(handler: &Value) -> bool {
+    handler
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|c| c.contains(CODEX_MARKER))
+}
+
+/// The events with one of our Codex handlers.
+pub fn our_codex_events(hooks_file: &Value) -> Vec<String> {
+    events_with(hooks_file, is_ours_codex)
+}
+
+/// How Codex names an event in its trust keys, for those it has.
+fn codex_label(event: &str) -> Option<&'static str> {
+    Some(match event {
+        "PreToolUse" => "pre_tool_use",
+        "PermissionRequest" => "permission_request",
+        "PostToolUse" => "post_tool_use",
+        "PreCompact" => "pre_compact",
+        "PostCompact" => "post_compact",
+        "SessionStart" => "session_start",
+        "SessionEnd" => "session_end",
+        "UserPromptSubmit" => "user_prompt_submit",
+        "SubagentStart" => "subagent_start",
+        "SubagentStop" => "subagent_stop",
+        "Stop" => "stop",
+        "Interrupt" => "interrupt",
+        _ => return None,
+    })
+}
+
+/// A handler in a Codex hooks file: where it is, as Codex's trust keys
+/// place it, and whether it's ours.
+struct Placed<'a> {
+    label: &'static str,
+    group: usize,
+    index: usize,
+    matcher: Option<&'a str>,
+    handler: &'a Value,
+    ours: bool,
+}
+
+fn placed(hooks_file: &Value) -> Vec<Placed<'_>> {
+    let mut out = Vec::new();
+    let Some(hooks) = hooks_file.get("hooks").and_then(Value::as_object) else {
+        return out;
+    };
+    for (event, groups) in hooks {
+        let (Some(label), Some(groups)) = (codex_label(event), groups.as_array()) else {
+            continue;
+        };
+        for (g, group) in groups.iter().enumerate() {
+            let matcher = group.get("matcher").and_then(Value::as_str);
+            let Some(handlers) = group.get("hooks").and_then(Value::as_array) else {
+                continue;
+            };
+            for (h, handler) in handlers.iter().enumerate() {
+                out.push(Placed {
+                    label,
+                    group: g,
+                    index: h,
+                    matcher,
+                    handler,
+                    ours: is_ours_codex(handler),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Codex's trust key for a handler in the hooks file at `source`.
+fn trust_key(source: &str, p: &Placed) -> String {
+    format!("{source}:{}:{}:{}", p.label, p.group, p.index)
+}
+
+/// The hash Codex trusts one of our handlers by: SHA-256 over the handler,
+/// as Codex normalizes it (its timeout filled in and clamped; the matcher
+/// only for events that take one), as compact JSON with sorted keys.
+fn codex_trust_hash(label: &str, matcher: Option<&str>, handler: &Value) -> String {
+    let (default, max) = match label {
+        "session_end" | "interrupt" => (1, Some(3)),
+        _ => (600, None),
+    };
+    let timeout = handler
+        .get("timeout")
+        .and_then(Value::as_u64)
+        .unwrap_or(default)
+        .max(1);
+    let timeout = max.map_or(timeout, |max: u64| timeout.min(max));
+    let mut normalized = json!({
+        "type": "command",
+        "command": handler.get("command").cloned().unwrap_or(Value::Null),
+        "timeout": timeout,
+        "async": handler.get("async").and_then(Value::as_bool).unwrap_or(false),
+    });
+    if let Some(message) = handler.get("statusMessage") {
+        normalized["statusMessage"] = message.clone();
+    }
+    let mut identity = json!({ "event_name": label, "hooks": [normalized] });
+    if !matches!(label, "user_prompt_submit" | "stop" | "interrupt") {
+        if let Some(matcher) = matcher {
+            identity["matcher"] = json!(matcher);
+        }
+    }
+    let bytes = sorted_json(&identity);
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes.as_bytes());
+    let hex: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
+/// Compact JSON with every object's keys sorted.
+fn sorted_json(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let fields: Vec<String> = keys
+                .into_iter()
+                .map(|k| format!("{}:{}", Value::String(k.clone()), sorted_json(&map[k])))
+                .collect();
+            format!("{{{}}}", fields.join(","))
+        }
+        Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(sorted_json).collect();
+            format!("[{}]", items.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Codex's `config.toml` (as `config`, empty if there's none) with its
+/// hook trust brought in line with a hooks file (at `source`, as Codex
+/// names it) going from `before` to `after`: our handlers trusted where
+/// they now are, and the rest's trust (or anything else Codex keeps for
+/// them) moved with them, as our handlers coming or going shifts their
+/// places. Everything else in the file is kept as it was.
+pub fn codex_trust(
+    config: &str,
+    source: &str,
+    before: &Value,
+    after: &Value,
+) -> Result<String, String> {
+    use toml_edit::{DocumentMut, Item, Table, value};
+    let mut doc: DocumentMut = config
+        .parse()
+        .map_err(|e| format!("Codex's config.toml isn't valid TOML, so it wasn't changed: {e}"))?;
+    let root = doc.as_table_mut();
+    if !root.contains_key("hooks") {
+        let mut hooks = Table::new();
+        hooks.set_implicit(true);
+        root.insert("hooks", Item::Table(hooks));
+    }
+    let hooks = root["hooks"]
+        .as_table_like_mut()
+        .ok_or("hooks in Codex's config.toml isn't a table")?;
+    if !hooks.contains_key("state") {
+        let mut state = Table::new();
+        state.set_implicit(true);
+        hooks.insert("state", Item::Table(state));
+    }
+    let state = hooks
+        .get_mut("state")
+        .and_then(Item::as_table_like_mut)
+        .ok_or("hooks.state in Codex's config.toml isn't a table")?;
+
+    // Take out what's kept for every handler as it was, the rest's in order.
+    let mut theirs: std::collections::BTreeMap<&str, std::collections::VecDeque<Option<Item>>> =
+        Default::default();
+    for p in placed(before) {
+        let item = state.remove(&trust_key(source, &p));
+        if !p.ours {
+            theirs.entry(p.label).or_default().push_back(item);
+        }
+    }
+    // And put it back where each now is.
+    for p in placed(after) {
+        let key = trust_key(source, &p);
+        if p.ours {
+            let mut entry = Table::new();
+            entry.insert(
+                "trusted_hash",
+                value(codex_trust_hash(p.label, p.matcher, p.handler)),
+            );
+            state.insert(&key, Item::Table(entry));
+        } else if let Some(Some(item)) = theirs.get_mut(p.label).and_then(|q| q.pop_front()) {
+            state.insert(&key, item);
+        }
+    }
+    let state_empty = state.is_empty();
+    if state_empty {
+        hooks.remove("state");
+    }
+    if hooks.is_empty() {
+        doc.as_table_mut().remove("hooks");
+    }
+    Ok(doc.to_string())
 }
 
 #[cfg(test)]
@@ -492,6 +844,110 @@ mod tests {
         install_claude_code(&mut settings, CMD).unwrap();
         uninstall_claude_code(&mut settings).unwrap();
         assert_eq!(settings, json!({ "model": "opus" }));
+    }
+
+    const CODEX_CMD: &str = "\"/usr/local/bin/agent-graph\" emit --provider codex";
+
+    /// Codex's own test vector (codex-rs/config/src/fingerprint_tests.rs, as
+    /// the hook discovery uses it): a command handler with no timeout,
+    /// matcher or async.
+    #[test]
+    fn the_trust_hash_is_codexs() {
+        let handler = json!({"type": "command", "command": "python3 /tmp/user.py"});
+        assert_eq!(
+            codex_trust_hash("session_start", None, &handler),
+            "sha256:775a1a39423c99333a34296e0b7c23c35bd26a3f709d4df4fbb3d15304ae8adc"
+        );
+    }
+
+    #[test]
+    fn codex_hooks_go_in_keep_the_rest_and_come_out_again() {
+        let original = json!({
+            "hooks": {
+                "Stop": [{ "hooks": [{ "type": "command", "command": "say done" }] }]
+            }
+        });
+        let mut hooks = original.clone();
+        install_codex(&mut hooks, CODEX_CMD).unwrap();
+        let stop = hooks["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"][0]["command"], "say done");
+        assert_eq!(stop[1]["hooks"][0]["async"], true);
+        // Codex runs SessionEnd synchronously, for at most 3 s.
+        let end = &hooks["hooks"]["SessionEnd"][0]["hooks"][0];
+        assert_eq!(end["timeout"], 3);
+        assert!(end.get("async").is_none());
+        assert_eq!(our_codex_events(&hooks).len(), CODEX_HOOKS.len());
+        let once = hooks.clone();
+        install_codex(&mut hooks, CODEX_CMD).unwrap();
+        assert_eq!(hooks, once, "installing again changes nothing");
+        assert_eq!(uninstall_codex(&mut hooks).unwrap(), CODEX_HOOKS.len());
+        assert_eq!(hooks, original);
+        // A command it couldn't find again is refused.
+        assert!(install_codex(&mut json!({}), "my-wrapper").is_err());
+    }
+
+    #[test]
+    fn codex_trust_follows_the_handlers() {
+        let source = "/home/me/.codex/hooks.json";
+        // Your own Stop hook, trusted (and one you turned off), and a comment.
+        let before = json!({
+            "hooks": {
+                "Stop": [{ "hooks": [{ "type": "command", "command": "say done" }] }],
+                "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "lint" }] }]
+            }
+        });
+        let config = "# mine\nmodel = \"gpt-5.5\"\n\n[hooks.state.\"/home/me/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"sha256:mine\"\n\n[hooks.state.\"/home/me/.codex/hooks.json:pre_tool_use:0:0\"]\nenabled = false\n";
+        let mut after = before.clone();
+        install_codex(&mut after, CODEX_CMD).unwrap();
+        let trusted = codex_trust(config, source, &before, &after).unwrap();
+        let doc: toml_edit::DocumentMut = trusted.parse().unwrap();
+        let state = doc["hooks"]["state"].as_table_like().unwrap();
+        assert!(
+            trusted.starts_with("# mine\nmodel = \"gpt-5.5\""),
+            "{trusted}"
+        );
+        // Yours stay as they were; each of ours is trusted, where it is.
+        assert_eq!(
+            state.get(&format!("{source}:stop:0:0")).unwrap()["trusted_hash"].as_str(),
+            Some("sha256:mine")
+        );
+        assert_eq!(
+            state.get(&format!("{source}:pre_tool_use:0:0")).unwrap()["enabled"].as_bool(),
+            Some(false)
+        );
+        for p in placed(&after).iter().filter(|p| p.ours) {
+            let entry = state.get(&trust_key(source, p)).expect("trusted");
+            assert_eq!(
+                entry["trusted_hash"].as_str().unwrap(),
+                codex_trust_hash(p.label, p.matcher, p.handler)
+            );
+        }
+        assert_eq!(state.len(), 2 + CODEX_HOOKS.len());
+
+        // Uninstalled, ours go and yours stay.
+        let mut removed = after.clone();
+        uninstall_codex(&mut removed).unwrap();
+        let untrusted = codex_trust(&trusted, source, &after, &removed).unwrap();
+        assert_eq!(untrusted, config);
+
+        // Our hooks removed from before yours: your trust moves with them.
+        let ours_first = json!({
+            "hooks": {
+                "Stop": [
+                    { "hooks": [{ "type": "command", "command": CODEX_CMD, "async": true }] },
+                    { "hooks": [{ "type": "command", "command": "say done" }] }
+                ]
+            }
+        });
+        let config = "[hooks.state.\"/s:stop:1:0\"]\ntrusted_hash = \"sha256:mine\"\n";
+        let mut gone = ours_first.clone();
+        uninstall_codex(&mut gone).unwrap();
+        let moved = codex_trust(config, "/s", &ours_first, &gone).unwrap();
+        assert!(moved.contains("\"/s:stop:0:0\""), "{moved}");
+        assert!(!moved.contains("stop:1:0"), "{moved}");
+        // Nothing to trust, in an empty file, leaves it empty.
+        assert_eq!(codex_trust("", "/s", &json!({}), &json!({})).unwrap(), "");
     }
 
     #[test]

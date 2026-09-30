@@ -22,6 +22,10 @@ const SETUP: Command = {
   command: "agent-graph install claude-code",
   copied: "claude-code",
 };
+const SETUP_CODEX: Command = {
+  command: "agent-graph install codex",
+  copied: "codex",
+};
 
 type Way = {
   label: string;
@@ -292,6 +296,10 @@ export function Install() {
           <li>
             Start recording Claude Code sessions:
             <Copyable {...SETUP} />
+            <span className="install-or">
+              Using Codex? Record its sessions too:
+            </span>
+            <Copyable {...SETUP_CODEX} />
           </li>
         </ol>
       )}

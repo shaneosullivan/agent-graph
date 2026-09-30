@@ -303,7 +303,7 @@ The hook runs on the agent's critical path, possibly hundreds of times per sessi
 | Provider | Mechanism | Payload | Subagent + parent link | Todo list | Waiting signals |
 |---|---|---|---|---|---|
 | **Claude Code** | Command hooks in `settings.json` or plugin `hooks/hooks.json` | stdin JSON, snake_case | `SubagentStart`/`Stop` with `agent_id`; `session_id` is the parent's | `TaskCreate`/`TaskUpdate` (legacy `TodoWrite`) via `PostToolUse` | `Notification` (permission/idle), `Stop` |
-| **Codex CLI** | `~/.codex/hooks.json` or `[hooks]` in `config.toml`, plus project `.codex/` (trusted projects only) | stdin JSON, snake_case; adds `turn_id`, `model` | `SubagentStart`/`Stop` with `agent_id`; docs say `session_id` is the parent's | Plan tool via `PostToolUse` (verify) | `PermissionRequest`, `Stop`, `Interrupt` |
+| **Codex CLI** (built: `src/adapter/codex.rs`, [codex.md](codex.md)) | `~/.codex/hooks.json` or `[hooks]` in `config.toml`, plus project `.codex/` (trusted projects only). Each hook runs only once trusted (`hooks.state` in the user's `config.toml`), which `install codex` does | stdin JSON, snake_case; adds `turn_id`, `model` | `SubagentStart`/`Stop` with `agent_id` (the child's thread); `session_id` is the **root** thread's, even in a nested agent, whose parent is in its rollout | `update_plan` via `PostToolUse` (off unless `[tools.update_plan] enabled`) | `PermissionRequest` (no event when it's answered), `request_user_input`, `Stop`, `Interrupt` |
 | **Gemini CLI** | `hooks` in `.gemini/settings.json` | stdin JSON; `GEMINI_SESSION_ID` env var | **No subagent events.** Subagents are tools named after the agent, so we infer them from `BeforeTool`/`AfterTool` | Todo tool via `AfterTool` (verify) | `Notification` (`ToolPermission`), `AfterAgent` |
 | **Cursor** | `.cursor/hooks.json` / `~/.cursor/hooks.json` | stdin JSON; `conversation_id`, `generation_id` | `subagentStart` has `parent_conversation_id` and `tool_call_id`, the best parent data of any tool here | Unknown | `stop` with `status` |
 | **Copilot CLI** | `.github/hooks/*.json`, `~/.copilot/hooks/` | stdin JSON, **camelCase** | `subagentStart`/`subagentStop` | Unknown | `notification`, `permissionRequest` |
@@ -315,7 +315,7 @@ The hook runs on the agent's critical path, possibly hundreds of times per sessi
 Known gaps to check by hand:
 
 - Whether Cursor's CLI (`cursor-agent`) fires hooks at all; sources disagree.
-- Whether Codex hooks fire under `codex exec`.
+- Codex hooks do fire under `codex exec` (checked with Codex 0.159.2), but untrusted ones are skipped silently.
 
 For plugin-based tools (OpenCode, Amp), the adapter is a ~50-line plugin that calls `agent-graph emit` or writes the JSONL line directly.
 
@@ -337,6 +337,7 @@ Subagents are easy because the provider tells us the parent (§5.2). **Separate 
    - Variables: `AGENT_GRAPH_PARENT=<node id>`, plus a W3C `TRACEPARENT` following OpenTelemetry's environment-variable spec for passing trace context to child processes. The child continues the parent's trace, and its own `traceparent` goes in its envelope's `trace`.
    - Claude Code: the `SessionStart` hook appends `export …` lines to the file named by `$CLAUDE_ENV_FILE`, and Claude Code applies them to the session's later shell commands. Checked with Claude Code in September 2026: a `claude -p` started from a session's shell linked itself to it and continued its trace.
    - Adapters say which variable names such a file (`Adapter::env_file_var`). Other providers need the equivalent; where none exists, use method 2 or 3.
+   - Codex has no such file, but the commands it runs carry `CODEX_THREAD_ID` (the thread running them) and `CODEX_SESSION_ID` (its root), which name the Codex session, or subagent, whose shell it is. A child reads those as its parent. Claude Code's exports also say which `CODEX_THREAD_ID` the session saw (`AGENT_GRAPH_PARENT_CODEX`, as does `agent-graph run`), so a child that sees both can tell which is nearer: if `CODEX_THREAD_ID` is the one the exporting session saw, that session is below the Codex thread and nearer; otherwise Codex is (`link::parent_in`). Checked with Codex 0.159.2 (`scripts/codex-e2e.sh`).
    - A value that isn't a well-formed node id, or is the session's own id (its own later hooks may see it), is ignored.
 2. **Wrapper.** `agent-graph run -- <any command>` (`run.rs`) is a node of its own (`run:<ulid>`, named after the program or `--name`), linked to whatever started it, and it sets the variables for the command. It's working until the command exits, then completed, or failed with the exit code, which it passes on. This works for any tool, including ones with no hooks at all, and groups the sessions a script starts. It waits out Ctrl+C (which the command gets too) so its end is always recorded, and passes on a `kill` or hang-up sent to it alone. A signal it was started with ignored (under `nohup`, or as a background job) stays ignored, for it and the command.
 3. **Process tree (fallback).** `session.started` records the agent's process and the processes above it (`process.rs`), each as `<pid>@<start time>`, so a reused pid never matches.
@@ -411,7 +412,7 @@ Serves port 7777, and prints its link with this run's key, `http://127.0.0.1:777
   - It runs `claude --resume <id>` in the session's folder, which is where Claude Code files it. When the agent exits, the window is left with a shell in that folder.
   - A session that hasn't ended is probably still open in another terminal, and two processes on one conversation would both write to it. So for those the button says **Open a copy** and adds `--fork-session`, which branches the conversation instead.
   - The window: macOS opens a one-off `.command` script (in Terminal, or whatever the user has chosen for those), which deletes itself. Windows uses `start` to run `cmd /K`. Linux uses `$TERMINAL`, or the first common terminal it finds. If none works, the page shows the error and the command to run by hand.
-  - Codex and others get the button when their adapters land (`codex resume <id>`).
+  - Codex sessions get the same button: `codex resume <id>`, or `codex fork <id>` for one that hasn't ended. Others get it when their adapters land.
   - Only sessions on the machine agent-graph runs on can be reopened, so the shared site never offers it (below).
 
 How it works:
@@ -582,7 +583,7 @@ Viewers can step through the log exactly as they can locally, over its recent hi
 | **2** | `view` (live web UI with timeline), `tail`, `snapshot` images, example logs | Most of the idea doc's questions answered for Claude Code | Done |
 | **2b** | Sharing site (paste, upload, `watch-remote`, passwords), viewer via WebAssembly | Share a live graph by link; view it on a phone | Done; tested against the Firestore emulator |
 | **2c** | An `/agent-graph` command installed with the hooks (a skill in Claude Code, Codex and Cursor; a TOML command in Gemini CLI): a snapshot plus a summary, or a live link | Check on agents from any session, or a phone | Done; tested with a live Claude Code session |
-| **3** | Codex adapter, then Gemini | Proves the design works across providers | |
+| **3** | Codex adapter, then Gemini | Proves the design works across providers | Codex built ([codex.md](codex.md)), and tested end to end against a real Codex CLI with a stand-in model; Gemini to do |
 | **4** | Correlation methods 1–3, `agent-graph run`, shell-launched session waits | Cross-session links and waits | Done; checked with Claude Code starting `claude -p` from its shell |
 | **5** | Cursor/Copilot/OpenCode adapters, optional LLM summaries, `gc` | Wider coverage | |
 
@@ -602,6 +603,6 @@ Viewers can step through the log exactly as they can locally, over its recent hi
 - **Items still to verify:**
   - Hooks on real Windows: the quoted, forward-slash hook command under Claude Code's Windows shell (CI covers our code on Windows, but not Claude Code itself)
   - Claude Code's hook `if` filter for narrowing `Bash` matches
-  - Codex and Gemini todo/plan tool names
+  - Gemini's todo/plan tool names
   - Cursor CLI hook support
-  - Codex hooks under `codex exec`
+  - Codex's hooks in its desktop app, IDE extension and cloud (chatgpt.com/codex); approvals in the TUI (the payload shape is from Codex's source)

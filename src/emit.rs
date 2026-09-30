@@ -118,7 +118,7 @@ fn link_session(draft: &mut Draft, env_file: Option<&Path>) {
     };
     let var = |name: &str| std::env::var(name).ok();
     if draft.parent.is_none() {
-        if let Some(parent) = link::parent_from(var(link::PARENT_VAR).as_deref(), &draft.node) {
+        if let Some(parent) = link::parent_here(&draft.node) {
             started.link_method = Some(link::method_for(&parent).to_string());
             draft.parent = Some(parent);
         }
@@ -131,9 +131,11 @@ fn link_session(draft: &mut Draft, env_file: Option<&Path>) {
     draft.trace = Some(serde_json::json!({ "traceparent": traceparent }));
     if let Some(file) = env_file {
         let exports = format!(
-            "export {}={}\nexport {}={}\n",
+            "export {}={}\nexport {}={}\nexport {}={}\n",
             link::PARENT_VAR,
             sh_quote(&draft.node),
+            link::PARENT_CODEX_VAR,
+            sh_quote(&link::codex_thread_here()),
             link::TRACEPARENT_VAR,
             sh_quote(&traceparent),
         );

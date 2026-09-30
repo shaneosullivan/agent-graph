@@ -520,8 +520,7 @@ fn scenarios() -> BTreeMap<&'static str, Log> {
     out.insert("deadlock-b", b);
 
     // A Claude Code session waiting on a Codex session it launched from its
-    // shell; Codex linked itself through the environment. (Illustrative: the
-    // Codex adapter doesn't exist yet.)
+    // shell; Codex linked itself through the environment.
     let mut c = Log::new("claude-code", 7);
     let mut x = Log::new("codex", 8);
     let (sc, sx) = (c.node(), x.node());

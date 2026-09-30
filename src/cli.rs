@@ -418,9 +418,19 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
         if let Some(change) = hooks_change(scope, &cwd, &opts)? {
             changes.push(change);
         }
+    } else if client == Client::Codex {
+        match codex_hooks_changes(scope, &cwd, &opts)? {
+            Some(codex) => changes.extend(codex),
+            None if scope == Scope::Local => notes.push(
+                "Codex has no project settings that aren't committed, so its hooks go in \
+                 your own (--scope user) or the project's (--scope project)."
+                    .into(),
+            ),
+            None => {}
+        }
     } else if opts.add {
         notes.push(format!(
-            "{} sessions aren't recorded yet: only Claude Code has hooks so far. \
+            "{} sessions aren't recorded yet: only Claude Code and Codex have hooks so far. \
              The command shows the sessions that are.",
             slash::client_name(client)
         ));
@@ -557,6 +567,18 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                 println!("Installed. New Claude Code sessions will be recorded in {data}.");
                 offer_autostart(opts.yes);
             }
+        } else if client == Client::Codex && scope != Scope::Local {
+            let data = paths::data_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default();
+            println!("Installed. New Codex sessions will be recorded in {data}.");
+            if scope == Scope::Project {
+                println!(
+                    "Codex only runs a project's hooks once the project is trusted in Codex \
+                     (it asks, the first time you open it)."
+                );
+            }
+            offer_autostart(opts.yes);
         } else {
             println!("Installed.");
         }
@@ -746,6 +768,163 @@ fn hooks_change(scope: Scope, cwd: &Path, opts: &InstallOptions) -> Result<Optio
     }))
 }
 
+/// The changes to Codex's hooks file, and to its `config.toml` to trust
+/// them (see `install::codex_trust`), if any. None for `--scope local`:
+/// Codex has nowhere for it.
+fn codex_hooks_changes(
+    scope: Scope,
+    cwd: &Path,
+    opts: &InstallOptions,
+) -> Result<Option<Vec<Change>>, String> {
+    let Some(link) = install::codex_hooks_path(scope, cwd) else {
+        if scope == Scope::Local {
+            return Ok(None);
+        }
+        return Err("can't find your home directory".into());
+    };
+    inside_project(scope, cwd, &link)?;
+    let is_link = std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink());
+    let path = if is_link {
+        std::fs::canonicalize(&link)
+            .map_err(|e| format!("{} is a link that can't be followed: {e}", link.display()))?
+    } else {
+        link.clone()
+    };
+    let existed = path.exists();
+    let before: Value = if existed {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        serde_json::from_str(&text).map_err(|e| {
+            format!(
+                "{} isn't valid JSON, so it wasn't changed: {e}",
+                path.display()
+            )
+        })?
+    } else {
+        serde_json::json!({})
+    };
+    let command = match &opts.hook_command {
+        Some(c) => c.clone(),
+        None if scope == Scope::Project => install::path_command("codex"),
+        None => install::default_command("codex")?,
+    };
+    let mut after = before.clone();
+    if opts.add {
+        install::install_codex(&mut after, &command)?;
+    } else {
+        install::uninstall_codex(&mut after)?;
+    }
+
+    // Codex trusts each hook by where it is in the file, by the file's full
+    // path as Codex sees it (with links followed).
+    let source = as_codex_sees(&link).display().to_string();
+    let config_path = install::codex_config_path().ok_or("can't find your home directory")?;
+    let config_existed = config_path.exists();
+    let config_before = if config_existed {
+        std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("reading {}: {e}", config_path.display()))?
+    } else {
+        String::new()
+    };
+    let config_after = install::codex_trust(&config_before, &source, &before, &after)?;
+
+    let mut changes = Vec::new();
+    if after != before {
+        let mut summary = vec![if is_link {
+            format!(
+                "Codex hooks file: {} (a link to {})",
+                link.display(),
+                path.display()
+            )
+        } else {
+            format!("Codex hooks file: {}", path.display())
+        }];
+        if opts.add {
+            summary.push(format!("Hook command:  {command}"));
+            summary.push(format!(
+                "Adds hooks for: {}",
+                install::our_codex_events(&after).join(", ")
+            ));
+            if !install::our_codex_events(&before).is_empty() {
+                summary.push("(Replaces the Agent Graph hooks already there.)".into());
+            }
+            if scope == Scope::Project && opts.hook_command.is_none() {
+                summary.push(
+                    "Project settings are shared, so the hooks run `agent-graph` from PATH: \
+                     everyone who uses the project needs it installed."
+                        .into(),
+                );
+            }
+        } else {
+            summary.push(format!(
+                "Removes hooks for: {}",
+                install::our_codex_events(&before).join(", ")
+            ));
+        }
+        let backup = link.with_extension("json.agent-graph.bak");
+        let remove = !opts.add
+            && !is_link
+            && after == serde_json::json!({})
+            && std::fs::symlink_metadata(&backup).is_err();
+        if remove {
+            summary.push("Removes the hooks file: nothing else is in it.".into());
+        }
+        changes.push(Change {
+            path,
+            contents: (!remove)
+                .then(|| serde_json::to_string_pretty(&after).expect("serializable") + "\n"),
+            summary,
+            backup: (existed && install::our_codex_events(&before).is_empty()).then_some(backup),
+        });
+    }
+    if config_after != config_before {
+        let backup = config_path.with_extension("toml.agent-graph.bak");
+        changes.push(Change {
+            summary: vec![
+                format!("Codex settings: {}", config_path.display()),
+                if opts.add {
+                    "Trusts Agent Graph's hooks, as Codex's /hooks would, so Codex runs them \
+                     (it won't run a hook until it's trusted). Nothing else is changed."
+                        .into()
+                } else {
+                    "Removes the trust Agent Graph's hooks had.".into()
+                },
+            ],
+            backup: (config_existed && std::fs::symlink_metadata(&backup).is_err())
+                .then_some(backup),
+            path: config_path,
+            contents: Some(config_after),
+        });
+    }
+    Ok(Some(changes).filter(|c: &Vec<Change>| !c.is_empty()))
+}
+
+/// `path` as Codex names it in its trust keys: absolute, with links
+/// followed as far as the path exists.
+fn as_codex_sees(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|d| d.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut existing = absolute.as_path();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            return rest.iter().rev().fold(real, |p, part| p.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return absolute,
+        }
+    }
+}
+
 /// Whether `path` (in `dir`) is committed in the git repository `dir` is
 /// in: in its last commit, not just staged. Without git, outside a
 /// repository, or before its first commit, it isn't. An error says git
@@ -808,7 +987,9 @@ fn apply(change: &Change) -> Result<(), String> {
             let _ = std::fs::remove_dir(d);
             dir = d.parent();
         }
-        if let Some(d) = dir.filter(|d| named(d, &[".claude", ".agents", ".gemini", ".cursor"])) {
+        if let Some(d) =
+            dir.filter(|d| named(d, &[".claude", ".agents", ".codex", ".gemini", ".cursor"]))
+        {
             let _ = std::fs::remove_dir(d);
         }
         return Ok(());
@@ -886,7 +1067,7 @@ fn tree_cmd(all: bool, stale_minutes: u64) -> Result<(), String> {
         .collect();
     if roots.is_empty() {
         let hint = if graph.roots.is_empty() {
-            "Run `agent-graph install claude-code`, then start a new Claude Code session."
+            "Run `agent-graph install claude-code` (or `install codex`), then start a new session."
         } else {
             "Nothing in the last 24 hours; use --all to see older sessions."
         };
@@ -946,7 +1127,7 @@ fn snapshot_cmd(
     let (mut graph, root) = load_graph(stale_minutes)?;
     let none = || {
         format!(
-            "no sessions recorded yet in {}. Run `agent-graph install claude-code`, then start a new session.",
+            "no sessions recorded yet in {}. Run `agent-graph install claude-code` (or `install codex`), then start a new session.",
             root.display()
         )
     };
@@ -1136,12 +1317,20 @@ pub fn pick_roots(
     Ok(graph.roots.iter().take(1).cloned().collect())
 }
 
-/// The session this runs in, if it's recorded. Inside Claude Code, commands
-/// can see it (`CLAUDE_CODE_SESSION_ID`).
+/// The session this runs in, if it's recorded: the one whose shell this is,
+/// as a session started here would find its parent (Codex's shell names its
+/// thread; Agent Graph's hooks give Claude Code's its session), or else, in
+/// Claude Code, `CLAUDE_CODE_SESSION_ID`.
 pub(crate) fn running_in(graph: &Graph) -> Option<String> {
-    let id = std::env::var("CLAUDE_CODE_SESSION_ID").ok()?;
-    let node = format!("claude-code:{id}");
-    graph.nodes.contains_key(&node).then_some(node)
+    let shell =
+        crate::link::parent_here("").and_then(|node| node.split('/').next().map(str::to_string));
+    let claude = std::env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .map(|id| format!("claude-code:{id}"));
+    [shell, claude]
+        .into_iter()
+        .flatten()
+        .find(|node| graph.nodes.contains_key(node))
 }
 
 /// `find_node`, among sessions only.

@@ -387,7 +387,7 @@ pub fn title_of(path: &std::path::Path) -> Option<String> {
 }
 
 /// A file, or its last `tail` bytes (from a line's start).
-fn read_file(path: &std::path::Path, tail: Option<u64>) -> Option<String> {
+pub(crate) fn read_file(path: &std::path::Path, tail: Option<u64>) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();

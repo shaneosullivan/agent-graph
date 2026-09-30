@@ -34,7 +34,12 @@ pub fn fixture(path: &str) -> Vec<Value> {
 
 /// Runs each payload through the Claude Code adapter, one second apart.
 pub fn translate(payloads: &[Value], capture: Capture) -> Vec<Envelope> {
-    let adapter = adapter::by_name("claude-code").unwrap();
+    translate_as("claude-code", payloads, capture)
+}
+
+/// Runs each payload through `provider`'s adapter, one second apart.
+pub fn translate_as(provider: &str, payloads: &[Value], capture: Capture) -> Vec<Envelope> {
+    let adapter = adapter::by_name(provider).unwrap();
     let source = Source {
         provider: adapter.provider().into(),
         provider_version: None,

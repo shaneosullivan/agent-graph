@@ -152,7 +152,7 @@ fn frame(tail: &Tail, opts: &Options, all: bool, live: bool) -> Result<Vec<Line>
     ];
     if roots.is_empty() {
         let hint = if graph.roots.is_empty() {
-            "No sessions yet. Run `agent-graph install claude-code`, then start a new Claude Code session."
+            "No sessions yet. Run `agent-graph install claude-code` (or `install codex`), then start a new session."
         } else {
             "Nothing in the last 24 hours. Press a to show older sessions."
         };

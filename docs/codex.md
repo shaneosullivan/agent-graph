@@ -40,7 +40,7 @@ Node ids: `codex:<session_id>` for a session, and `codex:<session_id>/<agent_id>
 | Interrupt | `status: idle` |
 | SubagentStart | `agent.spawned` (`agent_type`), under its parent: the session, or, for a nested agent, the agent its rollout names |
 | SubagentStop | `agent.finished: completed` (with its last message as the summary only when bodies are captured) |
-| PermissionRequest | `status: input_required`, "Needs approval: <description or command>" |
+| PermissionRequest | `status: input_required`, "Needs approval: <Codex's description of it>", or "Needs approval to run a command" (never the command itself) |
 | PreToolUse `request_user_input` | `status: input_required`, "Asks: <first question>" |
 | PreToolUse `Bash` that starts an agent | `spawn.requested` (kind session), as for Claude Code, from the same shell parser |
 | PreToolUse `spawn_agent` | `spawn.requested` (kind agent, background: `spawn_agent` never blocks) |
@@ -62,7 +62,7 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 
 ### Installing (`agent-graph install codex`)
 
-- Writes the hooks to `~/.codex/hooks.json` (`--scope project`: `.codex/hooks.json`), keeping anything else there, and backing the file up first, as for Claude Code. Tool hooks only match what matters: `Bash|apply_patch|spawn_agent|wait_agent|update_plan|request_user_input`. SessionStart is synchronous (10 s), SessionEnd is synchronous as Codex requires (with a 3 s timeout), and the rest are in the background.
+- Writes the hooks to `~/.codex/hooks.json` (`--scope project`: `.codex/hooks.json`), keeping anything else there, and backing the file up first, as for Claude Code. Tool hooks only match what matters: `Bash|apply_patch|spawn_agent|wait_agent|multi_agent_v1wait_agent|update_plan|request_user_input` (a plain list is matched exactly, and multi-agent v1's `wait_agent` reaches hooks with its namespace run into its name). SessionStart is synchronous (10 s), SessionEnd is synchronous as Codex requires (with a 3 s timeout), and the rest are in the background.
 - **Trusts them**, as `/hooks` would: writes each handler's `trusted_hash` to `~/.codex/config.toml` (`$CODEX_HOME`), editing it in place so its comments and layout stay. Uninstalling removes them. Without this, `codex exec` would skip them silently, and the TUI would ask. The summary says it's doing this, and `--dry-run` shows it.
 - A project's hooks also need the project trusted in Codex; the installer says so.
 - Keeps adding the `$agent-graph` skill.
@@ -72,7 +72,8 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 
 - The adapter registry (`codex` alongside `claude-code`), the reducer's provider programs (`codex` runs `codex`), and the tree's provider name.
 - **Resume:** `codex resume <id>` in the session's folder, or `codex fork <id>` for one still running.
-- **"This session"** for the `$agent-graph` skill: `CODEX_SESSION_ID`/`CODEX_THREAD_ID`, as `CLAUDE_CODE_SESSION_ID` is for Claude Code.
+- **"This session"** for the `$agent-graph` skill: the session whose shell it runs in, found as a child session would find its parent (so `CODEX_THREAD_ID`/`CODEX_SESSION_ID` in Codex), then `CLAUDE_CODE_SESSION_ID`.
+- **Names:** a subagent is shown by its Codex nickname ("explorer Noether"), from its rollout, where Claude Code's show their id.
 - Messages that say "run `agent-graph install claude-code`" mention Codex too. The viewer already has Codex's name and mark.
 - The README, `docs/design.md` (§5.4) and `docs/cli-help.json`; the site's FAQ ("Codex is coming") and the install tabs. The site's WebAssembly is rebuilt, since the reducer changes.
 
@@ -87,4 +88,5 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 
 - **Unit:** the adapter, with payloads captured from a real Codex (`tests/fixtures/codex/`), through the reducer (`tests/codex.rs`); installing, trusting and uninstalling (`src/install.rs`), including the trust hash against Codex's own test vector; linking from `CODEX_THREAD_ID`.
 - **End to end, automated:** `scripts/codex-e2e.sh` runs the real Codex CLI against a stand-in model (`scripts/codex-mock-model.mjs`, which scripts the model's replies over the Responses API), with a temporary `CODEX_HOME` and `AGENT_GRAPH_HOME`. It installs the hooks with `agent-graph install codex`, runs `codex exec` **without** bypassing trust (so the trust entries are tested), and checks the graph: the session, its plan, a subagent, a command that starts another agent, and waiting.
-- **By hand, with a real model** (for the morning): `agent-graph install codex`, then a Codex session that makes a plan, spawns a subagent and runs `claude -p` from its shell; watch it in `agent-graph view`.
+- **The TUI, by hand against the stand-in model:** driven through a pseudo-terminal with approvals on (`approval_policy = "on-request"`), a command asking for escalation fired PermissionRequest, and the session showed as "Needs approval: <Codex's reason>" until it was interrupted (idle). The TUI's automatic session name isn't covered, since the stand-in model can't answer its naming request; reading `session_index.jsonl` is unit tested.
+- **By hand, with a real model** (still to do): `agent-graph install codex`, then a Codex session that makes a plan (`[tools.update_plan] enabled = true` in `~/.codex/config.toml`), spawns a subagent and runs `claude -p` from its shell; watch it in `agent-graph view`.

@@ -1,5 +1,6 @@
 //! Reopening a session in the agent that ran it: for Claude Code,
-//! `claude --resume <id>` in the session's folder.
+//! `claude --resume <id>` in the session's folder; for Codex, `codex resume
+//! <id>`.
 //!
 //! Only the local viewer offers this (see `timeline::Environment`), and
 //! `view::open` runs the command in a new terminal window. Everything here is
@@ -45,6 +46,19 @@ pub fn resume(node: &Node) -> Option<Resume> {
                 app: "Claude Code",
                 program: "claude",
                 args,
+                cwd,
+                copy,
+                desktop: None,
+            })
+        }
+        // A copy of one still open is a fork.
+        "codex" => {
+            let id = session_id(&node.id, "codex:")?;
+            let verb = if copy { "fork" } else { "resume" };
+            Some(Resume {
+                app: "Codex",
+                program: "codex",
+                args: vec![verb.to_string(), id.to_string()],
                 cwd,
                 copy,
                 desktop: None,

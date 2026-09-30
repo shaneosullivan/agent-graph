@@ -39,6 +39,7 @@ export const COPIED = [
   "install-script",
   "claude-code",
   "claude-code-cloud",
+  "codex",
 ] as const;
 export type Copied = (typeof COPIED)[number];
 

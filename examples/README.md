@@ -43,7 +43,7 @@ Each session's folder name, shown as its title in the viewer, says what it's abo
 | `e0000003` | mobile-app | **Crashed session:** working, then silence for 2½ hours, with no Stop or SessionEnd | `stale?` |
 | `e0000004` | infra-terraform | **Unanswered permission prompt** for 3 hours | **Needs you**, and *not* stale: waiting on you isn't a hang |
 | `e0000005`, `e0000006` | api-gateway, auth-service | **Deadlock:** each session waits on the other | Both marked `DEADLOCK` |
-| `e0000007` + `e0000008` | web-frontend | A Claude Code session waiting on a Codex session it **launched from its shell**, which linked itself through the environment | The Codex session nested under it; the wait counts Codex's 2 open tasks. Illustrative only: the Codex adapter isn't built yet |
+| `e0000007` + `e0000008` | web-frontend | A Claude Code session waiting on a Codex session it **launched from its shell**, which linked itself through the environment | The Codex session nested under it; the wait counts Codex's 2 open tasks |
 | `e0000009` | docs-site | **Three parallel agents** start in a different order than requested; one fails, one is still running | Each agent matched to its own request and purpose, and the session waiting only on the running one |
 | `e000000a` | ml-pipeline | **Agents three levels deep** (Plan → Explore → worker) | Each agent under the one that asked for it, not flat under the session |
 | `e000000b` | data-migration | **Session ended with a background agent still running** | The agent is `canceled` |

@@ -15,7 +15,7 @@
     { "text": "Everything is recorded on your local machine, the one agent-graph runs on. Nothing leaves it unless you share it, with `watch-remote` or at https://agentgraph.chofter.com." }
   ],
   "quickStart": [
-    "Get started: `agent-graph install claude-code`, then start a new Claude Code session.",
+    "Get started: `agent-graph install claude-code` (or `codex`), then start a new session.",
     "Run `agent-graph --help` for examples, where data lives, and settings."
   ],
   "sections": [
@@ -25,7 +25,7 @@
         {
           "steps": [
             { "command": "agent-graph install claude-code", "text": "Add the recording hooks and the /agent-graph command." },
-            { "text": "Start a new Claude Code session. Sessions that were already running aren't recorded." },
+            { "text": "Start a new Claude Code session. Sessions that were already running aren't recorded. Using Codex? `agent-graph install codex` records its sessions too." },
             { "command": "agent-graph tail", "text": "Watch it live in this terminal, or in your browser with `agent-graph view --open`." }
           ]
         }
@@ -37,7 +37,7 @@
         { "command": "agent-graph tree --all", "text": "Every session, once, as text." },
         { "command": "agent-graph snapshot", "text": "A picture of this session, sized for a phone." },
         { "command": "agent-graph watch-remote", "text": "Share it live, to your account; prints where to see it." },
-        { "command": "agent-graph install codex", "text": "Add the command to Codex as well." }
+        { "command": "agent-graph install codex", "text": "Record Codex's sessions as well." }
       ]
     },
     {
@@ -80,7 +80,8 @@
             { "text": "Adds an /agent-graph command (a skill). Run it in any session for a picture of the session and a short summary of what needs you, what looks stuck and what's in progress. `/agent-graph all` covers every session from the last day, and `/agent-graph share` gives you a live link. Claude can also use it by itself when you ask how your agents are doing." }
           ]
         },
-        { "text": "For Codex, Gemini CLI and Cursor it adds just the command for now. Their own sessions aren't recorded yet, so it shows the Claude Code sessions that are." },
+        { "text": "For Codex it does the same: hooks in Codex's hooks file (~/.codex/hooks.json, or $CODEX_HOME's), with the file as it was backed up beside it (hooks.json.agent-graph.bak), and the $agent-graph command. Codex only runs a hook once it's trusted, so it also trusts Agent Graph's, in Codex's config.toml, as Codex's /hooks would (backing that file up too, as config.toml.agent-graph.bak), and nothing else there changes. A Codex session's plan (update_plan), the subagents it starts and waits for, when it needs your approval or an answer, and sessions it starts from its shell are all recorded." },
+        { "text": "For Gemini CLI and Cursor it adds just the command for now. Their own sessions aren't recorded yet, so it shows the Claude Code and Codex sessions that are." },
         { "heading": "Where the command goes (with --scope user)" },
         {
           "table": [
@@ -94,8 +95,8 @@
         {
           "table": [
             ["user", "Every project: files in your home folder. The default."],
-            ["project", "Just this project: .claude/ (or .agents/, .gemini/, .cursor/) in this folder, which you'd usually commit. Its hooks run `agent-graph` from PATH, so everyone who uses the project needs it installed."],
-            ["local", "Like project, but Claude Code's hooks go in .claude/settings.local.json, which isn't committed. (The command still goes in the project's folder: there's nowhere else. Uninstalling with --scope local leaves it if it's committed, since it's then the project's.)"]
+            ["project", "Just this project: .claude/ (or .codex/ and .agents/, .gemini/, .cursor/) in this folder, which you'd usually commit. Its hooks run `agent-graph` from PATH, so everyone who uses the project needs it installed. Codex only runs a project's hooks once you've trusted the project in Codex."],
+            ["local", "Like project, but Claude Code's hooks go in .claude/settings.local.json, which isn't committed. Codex has no such file, so its hooks aren't added. (The command still goes in the project's folder: there's nowhere else. Uninstalling with --scope local leaves it if it's committed, since it's then the project's.)"]
           ]
         },
         { "text": "It lists what it will change and asks before writing: --yes skips the question, and --dry-run only shows the changes. Installing again changes nothing unless something is out of date. A command file of the same name that you wrote yourself is never overwritten." }
@@ -105,7 +106,7 @@
         { "id": "scope", "flag": "--scope <user|project|local>", "text": "Every project (user, the default), or just this one (project, or local to keep Claude Code's hooks out of version control)." },
         { "id": "dry_run", "flag": "--dry-run", "text": "Show what would change, and change nothing." },
         { "id": "yes", "flag": "-y, --yes", "text": "Don't ask before making the changes." },
-        { "id": "command", "flag": "--command <COMMAND>", "text": "The command the hooks run, which must contain `emit --provider claude-code` (it's how they're found again). Defaults to this executable's `emit`, or with --scope project, `agent-graph emit` from PATH." },
+        { "id": "command", "flag": "--command <COMMAND>", "text": "The command the hooks run, which must contain `emit --provider claude-code` (or `codex`: it's how they're found again). Defaults to this executable's `emit`, or with --scope project, `agent-graph emit` from PATH." },
         { "id": "no_slash_command", "flag": "--no-slash-command", "text": "Don't add the /agent-graph command; just the hooks." },
         { "id": "cloud", "flag": "--cloud", "text": "Claude Code only: add the hooks for Claude Code's cloud (claude.ai/code) to this project's settings (.claude/settings.json), to commit. They do nothing on a computer; in a cloud session they install agent-graph if it isn't there, record the session, and share it live to the account whose API token the cloud environment gives as AGENT_GRAPH_TOKEN. The environment's network access must allow agentgraph.chofter.com and firebasestorage.googleapis.com." }
       ],
@@ -115,7 +116,7 @@
         { "command": "agent-graph install claude-code --scope project", "text": "Just this project, in .claude/ (usually committed)." },
         { "command": "agent-graph install claude-code --cloud", "text": "Record and share this project's sessions in Claude Code's cloud (claude.ai/code): commit .claude/settings.json, and give the cloud environment an API token." },
         { "command": "agent-graph install claude-code --no-slash-command", "text": "Just the hooks." },
-        { "command": "agent-graph install codex", "text": "Add the command to Codex too. `gemini` and `cursor` work the same way." },
+        { "command": "agent-graph install codex", "text": "Record Codex's sessions too, and add $agent-graph to it. (`gemini` and `cursor` add just the command.)" },
         { "command": "agent-graph install claude-code --command \"/opt/bin/agent-graph emit --provider claude-code\"", "text": "Register a different path for the hooks. They use this executable by default." }
       ]
     },
@@ -137,7 +138,7 @@
         { "command": "agent-graph uninstall claude-code", "text": "Remove the hooks and the command from your user settings." },
         { "command": "agent-graph uninstall claude-code --scope project", "text": "Remove them from this project." },
         { "command": "agent-graph uninstall claude-code --dry-run", "text": "Show what would be removed, and remove nothing." },
-        { "command": "agent-graph uninstall codex", "text": "Remove the command from Codex." }
+        { "command": "agent-graph uninstall codex", "text": "Remove the hooks, their trust and the command from Codex." }
       ]
     },
     {
@@ -197,7 +198,7 @@
             ["Details", "Click any session or agent: its tasks, what it's waiting on, the agents it started, its messages, and when things happened."],
             ["Timeline", "Every event in the session is a stop on a slider. Drag it, click it, or use ← and → to see the graph exactly as it was at that moment; the node that step changed is ringed. \"Live\" (or L, or End) jumps back to now."],
             ["Save image", "A picture of the session as it is at the step you're on."],
-            ["Resume", "A Claude Code session's details have a button that reopens it in a new terminal window, in its folder (`claude --resume`). One that hasn't ended is probably still open somewhere, so that opens a copy of its conversation instead. If it can't open a window, it tells you the command to run. The shared site doesn't have this."]
+            ["Resume", "A Claude Code or Codex session's details have a button that reopens it in a new terminal window, in its folder (`claude --resume`, `codex resume`). One that hasn't ended is probably still open somewhere, so that opens a copy of its conversation instead (`codex fork`). If it can't open a window, it tells you the command to run. The shared site doesn't have this."]
           ]
         },
         { "text": "The page updates as events arrive, without reloading." }
@@ -241,7 +242,7 @@
           "table": [
             ["--session <id>", "That session: its id, or the first few characters of it."],
             ["--all", "Every session active in the last day, one after another."],
-            ["--session current", "The Claude Code session this runs in, then the latest session in this folder, then the latest anywhere. This is also the default for a picture."]
+            ["--session current", "The Claude Code or Codex session this runs in, then the latest session in this folder, then the latest anywhere. This is also the default for a picture."]
           ]
         },
         { "text": "Only the file's path is printed, so scripts can use it. By default the picture goes in ~/.agent-graph/images/ with a new name each time. --out chooses the file, and its extension chooses the format: .png, .svg, or .json. As .json, it's the graph as data: with --session or --all, just the sessions they choose and any they exchanged messages with, plus any of those wait on (directly or not); with neither, every session, as --json prints. It won't replace a file that's already there unless you add --force." }
@@ -288,7 +289,7 @@
       ],
       "options": [
         { "id": "url", "flag": "--url <URL>", "text": "The site to share on." },
-        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code session this runs in; if that isn't recorded, it stops rather than guess)." },
+        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code or Codex session this runs in; if that isn't recorded, it stops rather than guess)." },
         { "id": "new", "flag": "--new", "text": "Start a new share, rather than carry on with the last one." },
         { "id": "logout", "flag": "--logout", "text": "Log this computer out of the site, and forget the login. The next run asks you to log in again." },
         { "id": "autostart", "flag": "--autostart", "text": "Share every session whenever you log in to this computer, without running this yourself: it's started now, and at every login (on macOS and Linux). If you aren't logged in, you log in first, in the browser." },
@@ -315,7 +316,7 @@
           "list": [
             "Started from an agent's shell (or anywhere `AGENT_GRAPH_PARENT` is set), it goes under that session.",
             "The command gets `AGENT_GRAPH_PARENT` and `TRACEPARENT` for the new node, so agents it starts that have Agent Graph's hooks go under it.",
-            "When a Claude Code session runs it in its shell, the session waits on it, as on any agent it starts."
+            "When a Claude Code or Codex session runs it in its shell, the session waits on it, as on any agent it starts."
           ]
         },
         { "text": "Put the command after `--`, so its own options aren't read as `run`'s." }

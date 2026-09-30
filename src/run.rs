@@ -37,7 +37,7 @@ pub fn run(opts: Options) -> ExitCode {
     let mut log = Log::new(&id);
 
     let var = |name: &str| std::env::var(name).ok();
-    let parent = link::parent_from(var(link::PARENT_VAR).as_deref(), &node);
+    let parent = link::parent_here(&node);
     let traceparent = link::traceparent(&node, var(link::TRACEPARENT_VAR).as_deref());
     let lineage = process::lineage(std::process::id());
     let title = opts
@@ -67,6 +67,7 @@ pub fn run(opts: Options) -> ExitCode {
     command
         .args(&opts.command[1..])
         .env(link::PARENT_VAR, &node)
+        .env(link::PARENT_CODEX_VAR, link::codex_thread_here())
         .env(link::TRACEPARENT_VAR, &traceparent);
     signals::stay_for_the_child();
     let outcome = command.spawn().and_then(|mut child| {

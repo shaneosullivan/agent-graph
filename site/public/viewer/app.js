@@ -302,7 +302,8 @@ function nodeName(node) {
     if (node.parent) return `${PROVIDER_NAME[node.provider] || node.provider} session ${short(node.id)}`;
     return basename(node.cwd) || `Session ${short(node.id)}`;
   }
-  return `${node.agent_type || 'Agent'} ${short(node.id)}`;
+  // Its name, where its agent gives it one (Codex's nicknames), else its id.
+  return `${node.agent_type || 'Agent'} ${node.title || short(node.id)}`;
 }
 
 /** Node `id` of `graph`: of its tree, or (only what names it) one the tree refers to. */

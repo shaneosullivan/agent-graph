@@ -11,10 +11,26 @@ use common::fixture;
 /// The binary, without any link to a session this test run is inside.
 fn bin() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agent-graph"));
-    for var in ["AGENT_GRAPH_PARENT", "TRACEPARENT", "CLAUDE_ENV_FILE"] {
+    for var in [
+        "AGENT_GRAPH_PARENT",
+        "AGENT_GRAPH_PARENT_CODEX",
+        "TRACEPARENT",
+        "CLAUDE_ENV_FILE",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+    ] {
         command.env_remove(var);
     }
+    // Installing for Codex trusts its hooks in Codex's own config.toml, even
+    // for a project's: never the real one.
+    command.env("CODEX_HOME", codex_home());
     command
+}
+
+/// A Codex home for the tests, shared, so `bin()` never touches the real one.
+fn codex_home() -> &'static Path {
+    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| tempfile::tempdir().unwrap()).path()
 }
 
 fn emit(home: &Path, args: &[&str], stdin: &str, extra_env: &[(&str, &str)]) -> Output {
@@ -478,7 +494,9 @@ fn a_starting_session_links_to_its_parent_and_passes_itself_on() {
     let node = "claude-code:5f2c1e8a-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
     assert_eq!(
         read(&env_file),
-        format!("export AGENT_GRAPH_PARENT='{node}'\nexport TRACEPARENT='{traceparent}'\n"),
+        format!(
+            "export AGENT_GRAPH_PARENT='{node}'\nexport AGENT_GRAPH_PARENT_CODEX=''\nexport TRACEPARENT='{traceparent}'\n"
+        ),
         "sessions it starts will link back to it"
     );
 }
@@ -1490,7 +1508,8 @@ fn uninstall_leaves_no_empty_folders_behind() {
     for client in clients {
         run(&["install", client]);
     }
-    assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 4);
+    // .claude, .codex (the hooks) and .agents (its command), .gemini, .cursor.
+    assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 5);
     for client in clients {
         run(&["uninstall", client]);
     }
@@ -1610,4 +1629,59 @@ fn a_viewer_never_stops_another_program_on_its_port() {
     // Still listening.
     other.set_nonblocking(true).unwrap();
     let _ = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+}
+
+/// `install codex` puts the hooks in Codex's hooks file and trusts them in
+/// its config.toml, keeping what's there; `uninstall codex` takes both out.
+#[test]
+fn codex_hooks_are_installed_trusted_and_removed() {
+    let codex = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let config = codex.path().join("config.toml");
+    std::fs::write(&config, "# Mine.\nmodel = \"gpt-5.5\"\n").unwrap();
+    let run = |args: &[&str]| {
+        let out = bin()
+            .args(args)
+            .arg("--yes")
+            .env("CODEX_HOME", codex.path())
+            .env("HOME", project.path())
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let said = run(&["install", "codex"]);
+    assert!(said.contains("Trusts Agent Graph's hooks"), "{said}");
+    let hooks: serde_json::Value =
+        serde_json::from_str(&read(codex.path().join("hooks.json"))).unwrap();
+    let start = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(start.ends_with("emit --provider codex"), "{start}");
+    let trusted = read(&config);
+    assert!(
+        trusted.starts_with("# Mine.\nmodel = \"gpt-5.5\"\n"),
+        "{trusted}"
+    );
+    let source = std::fs::canonicalize(codex.path())
+        .unwrap()
+        .join("hooks.json");
+    assert!(
+        trusted.contains(&format!("\"{}:session_start:0:0\"", source.display())),
+        "{trusted}"
+    );
+    assert_eq!(trusted.matches("trusted_hash").count(), 10);
+
+    // Again: nothing to do.
+    assert!(run(&["install", "codex"]).contains("Nothing to do"));
+
+    run(&["uninstall", "codex"]);
+    assert_eq!(read(&config), "# Mine.\nmodel = \"gpt-5.5\"\n");
+    assert!(!codex.path().join("hooks.json").exists(), "only ever ours");
+    assert!(!project.path().join(".agents").exists(), "nor its command");
 }

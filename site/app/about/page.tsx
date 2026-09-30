@@ -28,9 +28,9 @@ export default function About() {
       <ul>
         <li>
           The <code>agent-graph</code> command records your agents&rsquo;
-          sessions on your own computer, through Claude Code&rsquo;s hooks. By
-          default it records task names and agent descriptions, not your prompts
-          or what tools return.
+          sessions on your own computer, through Claude Code&rsquo;s and
+          Codex&rsquo;s hooks. By default it records task names and agent
+          descriptions, not your prompts or what tools return.
         </li>
         <li>
           <code>agent-graph view</code> opens a viewer on your computer, in your

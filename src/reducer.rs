@@ -1541,7 +1541,8 @@ fn within(earlier: &str, later: &str, max: Duration) -> bool {
 }
 
 /// The agent CLIs the sessions of each provider (that has an adapter) run.
-const PROVIDER_PROGRAMS: &[(&str, &[&str])] = &[("claude-code", &["claude"])];
+const PROVIDER_PROGRAMS: &[(&str, &[&str])] =
+    &[("claude-code", &["claude"]), ("codex", &["codex"])];
 
 /// Whether session `node` surely isn't running `program`, the command a
 /// spawn request named: `node`'s provider is one whose CLIs are known, and

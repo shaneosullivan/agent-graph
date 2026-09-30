@@ -1285,7 +1285,7 @@ fn pick_session(events: &Path, want: &str) -> Result<(String, String), String> {
     let node = if want == "current" {
         crate::cli::running_in(&graph).ok_or(
             "can't tell which session this is, because it isn't recorded (Agent Graph \
-             records Claude Code sessions started after it's installed), so nothing was \
+             records Claude Code and Codex sessions started after it's installed), so nothing was \
              shared. Choose a session yourself with --session <id>; don't guess.",
         )?
     } else if !loaded.unreadable.is_empty() && !graph.nodes.contains_key(want) {

@@ -239,10 +239,11 @@ pub fn name(node: &Node) -> String {
             .or_else(|| node.purpose.clone())
             .or_else(|| folder(node))
             .unwrap_or_else(|| format!("session {}", short(local))),
+        // Its name, where its agent gives it one (Codex's nicknames), else its id.
         NodeKind::Agent => format!(
             "{} {}",
             node.agent_type.as_deref().unwrap_or("agent"),
-            short(local)
+            node.title.as_deref().unwrap_or_else(|| short(local))
         ),
     }
 }
