@@ -42,6 +42,7 @@ const S = {
   view: savedViewMode(), // 'cards' or 'graph': how the tree's drawn (see the graph view)
   modal: null, // the node the details dialog shows, when it's open (see `openModal`)
   timelineOpen: false, // on a phone, whether the timeline drawer's up (see `setTimelineOpen`)
+  legendOpen: false, // on a phone, whether the graph's legend is shown (see `legendButton`)
 };
 
 // ---------- helpers ----------
@@ -1166,6 +1167,8 @@ function renderMain() {
     renderGraph(host, graph, keep, ringed, flash);
     return;
   }
+  // (Kept while a session chosen in it comes: sized as it was.)
+  if (host) sizeGraph();
   // Not drawing the graph: its simulation stops, and starts afresh when it is.
   if (G.sim) {
     G.sim.stop();
@@ -1251,6 +1254,10 @@ function mainView() {
   const liveRoot = S.live.nodes[S.root] || S.live.sessions[S.root] || (S.live.others || {})[S.root];
   if (!liveRoot) return { kids: [h('p', { class: 'empty-note' }, 'Loading…')] };
   const stop = S.stops[S.pos];
+  // Chosen from the others in the graph, and its tree still to come.
+  const arriving = !root && S.view === 'graph' && S.following && G.arrive && G.arrive.id === S.root;
+  // Its state: at the step, or while its tree comes, as it is now.
+  const state = root ? root.state : arriving ? liveRoot.state : null;
 
   const head = h(
     'div',
@@ -1259,13 +1266,13 @@ function mainView() {
       'div',
       { class: 'title-row' },
       // Named as it was at the step being viewed: sessions get renamed.
-      h('h1', null, h('span', { class: 'h-name' }, nodeName(root || liveRoot)), root ? h('span', { class: `state ${root.state}` }, STATE_LABEL[root.state]) : null),
+      h('h1', null, h('span', { class: 'h-name' }, nodeName(root || liveRoot)), state ? h('span', { class: `state ${state}` }, STATE_LABEL[state]) : null),
       h(
         'div',
         { class: 'title-tools' },
-        root ? viewSwitch() : null,
+        root || arriving ? viewSwitch() : null,
         root && S.view === 'cards' ? timelineButton() : null,
-        root ? saveImageLink(stop) : null,
+        root || arriving ? saveImageLink(stop) : null,
       ),
     ),
     h(
@@ -1282,6 +1289,11 @@ function mainView() {
   );
 
   if (!root) {
+    // Chosen from the others in the graph, while its tree comes: the graph
+    // stays as it is (the one chosen at its middle), not a note in its place.
+    if (arriving) {
+      return { kids: [head, h('div', { class: 'graph-host', 'data-keep': '' })] };
+    }
     const note = S.following ? 'Loading…' : 'This session hadn’t started yet at this point.';
     return { kids: [head, h('p', { class: 'empty-note' }, note)] };
   }
@@ -1471,10 +1483,19 @@ function pillPath(w, h) {
   return `M${-x},${-r}H${x}A${r},${r} 0 0,1 ${x},${r}H${-x}A${r},${r} 0 0,1 ${-x},${-r}Z`;
 }
 
-/** A name short enough to sit under a node (the whole one's in its summary): the session's too, as its heading has it. */
+/** The most of a name shown under a node, in characters. */
+const LABEL_MAX = 16;
+
+/**
+ * A name short enough to sit under a node (the whole one's in its summary
+ * and hover tip): a long one keeps its start and its end, with an ellipsis
+ * between, since names often differ only at the end ("worker-1", "worker-2").
+ */
 function graphLabel(n) {
   const name = nodeName(n);
-  return name.length > 26 ? `${name.slice(0, 25)}…` : name;
+  if (name.length <= LABEL_MAX) return name;
+  const tail = Math.floor((LABEL_MAX - 1) / 2.5);
+  return `${name.slice(0, LABEL_MAX - 1 - tail).trimEnd()}…${name.slice(-tail).trimStart()}`;
 }
 
 /**
@@ -1499,7 +1520,15 @@ function renderGraph(host, graph, keep, ringed, flash) {
 
   // A new host (the view switched, or the page redrawn) starts afresh; so
   // does another session's tree.
-  if (G.host !== host || G.key !== S.root) {
+  const fresh = G.host !== host || G.key !== S.root;
+  // Chosen from the others (see `goToSession`): it comes from where it was.
+  const arrive = fresh && !still && G.arrive && G.arrive.id === S.root ? G.arrive : null;
+  if (fresh) {
+    // (Nothing's arriving under the copy of what was chosen: it goes.)
+    if (!arrive) dropGhost();
+    G.arrive = null;
+    if (G.arriving) G.arriving.stop();
+    G.arriving = null;
     if (G.sim) G.sim.stop();
     G.host = host;
     G.key = S.root;
@@ -1668,13 +1697,15 @@ function renderGraph(host, graph, keep, ringed, flash) {
     for (let i = 0; i < 300; i++) sim.tick();
     tick();
     fitGraph(false);
+  } else if (arrive) {
+    arriveFrom(arrive, nodes);
   } else {
     // Woken only when its shape changes: nodes come or go, or rows move.
     // Otherwise (a node chosen, its state changed) it stays as it is.
     if (changed) sim.alpha(0.7).restart();
     else if (moved) sim.alpha(Math.max(sim.alpha(), 0.35)).restart();
   }
-  if (G.focus) focusNode();
+  if (G.focus && !G.arriving) focusNode();
   drawOthers();
   // A link can ask for the other sessions to be shown (?zoom=out): once,
   // when the graph's first drawn and has settled a little.
@@ -1724,6 +1755,116 @@ function focusNode() {
   step();
   const g = G.svg.selectAll('g.gnode').filter((d) => d.id === id).node();
   if (g) pulse(g);
+}
+
+/**
+ * A session chosen from the others arrives: laid out first, where it'll be,
+ * then its node glides from where it was chosen (`a`, on screen) to its
+ * place, as large as it was shrinking to its own size; then its children
+ * spread down out of it, and theirs out of them, each generation a moment
+ * after the one before.
+ */
+function arriveFrom(a, nodes) {
+  const d3 = window.d3;
+  const sim = G.sim;
+  const top = G.byId.get(S.root);
+  const box = G.svg.node().getBoundingClientRect();
+  if (!top || !box.width || !box.height) {
+    sim.alpha(0.7).restart();
+    return;
+  }
+  // Where everything ends up, and the view that fits it.
+  sim.stop();
+  for (let i = 0; i < 300; i++) sim.tick();
+  G.userMoved = false;
+  fitGraph(false);
+  const t = d3.zoomTransform(G.svg.node());
+  const end = new Map(nodes.map((n) => [n, { x: n.x, y: n.y }]));
+  const [sx, sy] = t.invert([a.x - box.left, a.y - box.top]);
+  const MOVE = 600;
+  const STEP = 140;
+  const SPREAD = 650;
+  const deepest = Math.max(0, ...nodes.map((n) => n.depth));
+  const total = MOVE + Math.max(0, deepest - 1) * STEP + (deepest ? SPREAD : 0);
+  // When each generation's under way: the session's at once, its children's
+  // once it's there, and each after them a step later.
+  const startOf = (n) => (n === top ? 0 : MOVE + (n.depth - 1) * STEP);
+  const lengthOf = (n) => (n === top ? MOVE : SPREAD);
+
+  const g = G.svg.selectAll('g.gnode');
+  g.select('g.grow')
+    .interrupt()
+    .attr('transform', (n) => (n === top ? `scale(${a.r / (top.r * t.k)})` : 'scale(0.01)'))
+    .transition()
+    .delay(startOf)
+    .duration(lengthOf)
+    .ease(d3.easeCubicInOut)
+    .attrTween('transform', (n) => (n === top ? scaleFrom(a.r / (top.r * t.k), 1) : scaleFrom(0.01, 1)));
+  // Its colours turn from those it was chosen in to its own as it goes.
+  const shape = g.filter((n) => n === top).select('path.shape');
+  const own = shape.node() && getComputedStyle(shape.node());
+  if (own && a.fill && (a.fill !== own.fill || a.stroke !== own.stroke)) {
+    const [fill, stroke] = [own.fill, own.stroke];
+    shape
+      // (Its own easing of colour changes would lag behind this one.)
+      .style('transition', 'none')
+      .style('fill', a.fill)
+      .style('stroke', a.stroke)
+      .transition('colour')
+      .duration(MOVE)
+      .ease(d3.easeCubicInOut)
+      .style('fill', fill)
+      .style('stroke', stroke)
+      .on('end interrupt', function () {
+        this.style.fill = '';
+        this.style.stroke = '';
+        this.style.transition = '';
+      });
+  }
+  // Lines come in with what they lead to.
+  G.svg
+    .selectAll('path.link')
+    .interrupt()
+    .attr('opacity', 0)
+    .transition()
+    .delay((l) => (typeof l.target === 'object' ? startOf(l.target) : MOVE))
+    .duration(SPREAD / 2)
+    .attr('opacity', 1);
+
+  const ease = d3.easeCubicInOut;
+  const progress = (n, ms) => ease(Math.max(0, Math.min(1, (ms - startOf(n)) / lengthOf(n))));
+  const place = (ms) => {
+    // Depth first, so each node's parent is placed before it.
+    for (const n of nodes) {
+      const e = end.get(n);
+      const p = progress(n, ms);
+      if (n === top) {
+        n.x = sx + (e.x - sx) * p;
+        n.y = sy + (e.y - sy) * p;
+        continue;
+      }
+      // Out of its parent, as that moves, by more and more of how far it
+      // ends up from it.
+      const parent = (n.parent && G.byId.get(n.parent)) || top;
+      const pe = end.get(parent) || e;
+      n.x = parent.x + (e.x - pe.x) * p;
+      n.y = parent.y + (e.y - pe.y) * p;
+    }
+    tick();
+  };
+  place(0);
+  // Its node's under the copy of what was chosen now: that fades away.
+  dropGhost();
+  G.arriving = d3.timer((ms) => {
+    const done = ms >= total;
+    place(done ? total : ms);
+    if (!done) return;
+    G.arriving.stop();
+    G.arriving = null;
+    for (const n of nodes) Object.assign(n, end.get(n), { vx: 0, vy: 0 });
+    tick();
+    if (G.focus) focusNode();
+  });
 }
 
 /** A transition's `transform`, from scale `a` to `b` (said outright, not parsed from the element). */
@@ -1898,14 +2039,20 @@ function buildGraph(d3, host) {
   );
   const legend = h(
     'ul',
-    { class: 'graph-legend', 'aria-label': 'Legend' },
+    // On a phone, tapping it hides it again (see `legendButton`).
+    { class: 'graph-legend', 'aria-label': 'Legend', onclick: () => setLegendOpen(false) },
     h('li', null, h('span', { class: 'glyph k-session' }), 'Session'),
     h('li', null, h('span', { class: 'glyph k-agent' }), 'Agent'),
     h('li', null, h('span', { class: 'glyph k-command' }), 'Command'),
     h('li', null, h('span', { class: 'glyph k-tasks' }), 'Tasks done'),
     h('li', null, h('span', { class: 'glyph k-wait' }), 'Waiting on'),
   );
-  host.append(tools, h('div', { class: 'graph-foot' }, legend, timelineButton()), h('div', { class: 'graph-tip', hidden: true }));
+  host.classList.toggle('legend-open', S.legendOpen);
+  host.append(
+    tools,
+    h('div', { class: 'graph-foot' }, legendButton(), legend, timelineButton()),
+    h('div', { class: 'graph-tip', hidden: true }),
+  );
 
   G.sim = d3
     .forceSimulation()
@@ -1929,6 +2076,36 @@ function buildGraph(d3, host) {
     .alphaDecay(0.03)
     .on('tick', tick)
     .on('end', () => fitGraph(false));
+}
+
+/**
+ * On a phone the graph's legend is hidden at first, and this button shows
+ * it: its icon is the graph's four shapes (a session's square, an agent's
+ * circle, a command's diamond, a tasks pill), set round like a game pad's
+ * buttons. Tapping the legend hides it again.
+ */
+function legendButton() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const shapes = [
+    ['rect', { x: 9, y: 1.5, width: 6, height: 6, rx: 1.2, class: 'k-session' }],
+    ['circle', { cx: 19.5, cy: 12, r: 3.2, class: 'k-agent' }],
+    ['path', { d: 'M12 15.8 15.7 19.5 12 23.2 8.3 19.5Z', class: 'k-command' }],
+    ['rect', { x: 0.8, y: 9.8, width: 7.4, height: 4.4, rx: 2.2, class: 'k-tasks' }],
+  ];
+  for (const [tag, attrs] of shapes) {
+    const el = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    svg.append(el);
+  }
+  return h('button', { type: 'button', class: 'btn legend-show', title: 'Show the legend', 'aria-label': 'Show the legend', onclick: () => setLegendOpen(true) }, svg);
+}
+
+function setLegendOpen(open) {
+  S.legendOpen = open;
+  if (G.host) G.host.classList.toggle('legend-open', open);
 }
 
 /** Moves the drawing to the simulation's positions. */
@@ -1966,7 +2143,7 @@ function fitGraph(smooth) {
     G.userMoved = false;
     setOverview(false);
   }
-  else if (G.userMoved) return;
+  else if (G.userMoved || G.arriving) return;
   const nodes = G.sim.nodes();
   if (!nodes.length) return;
   const box = G.svg.node().getBoundingClientRect();
@@ -2053,17 +2230,52 @@ function showGraphTip(e, n) {
 function placeTip(tip, e) {
   tip.hidden = false;
   const area = G.host.getBoundingClientRect();
-  const at =
-    e && 'clientX' in e && e.clientX
-      ? { x: e.clientX, y: e.clientY }
-      : (() => {
-          const r = e.currentTarget.getBoundingClientRect();
-          return { x: r.right, y: r.top + r.height / 2 };
-        })();
-  const x = Math.min(at.x - area.left + 14, area.width - tip.offsetWidth - 8);
-  const y = Math.min(at.y - area.top + 14, area.height - tip.offsetHeight - 8);
-  tip.style.left = `${Math.max(8, x)}px`;
-  tip.style.top = `${Math.max(8, y)}px`;
+  const item = itemBox(e && e.currentTarget);
+  const w = tip.offsetWidth;
+  const hgt = tip.offsetHeight;
+  const gap = 10;
+  const edge = 8;
+  if (!item) {
+    tip.style.left = `${edge}px`;
+    tip.style.top = `${edge}px`;
+    return;
+  }
+  // The item, in the graph's own coordinates.
+  const box = { x0: item.left - area.left, y0: item.top - area.top, x1: item.right - area.left, y1: item.bottom - area.top };
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
+  const midX = clamp((box.x0 + box.x1) / 2 - w / 2, edge, area.width - w - edge);
+  const midY = clamp((box.y0 + box.y1) / 2 - hgt / 2, edge, area.height - hgt - edge);
+  // Beside it, never over it: to its right, left, below or above, the
+  // first where the tip fits in the graph; failing all, where the least of
+  // it is out of the graph.
+  const spots = [
+    { x: box.x1 + gap, y: midY },
+    { x: box.x0 - gap - w, y: midY },
+    { x: midX, y: box.y1 + gap },
+    { x: midX, y: box.y0 - gap - hgt },
+  ];
+  const outside = (p) =>
+    Math.max(0, edge - p.x) + Math.max(0, p.x + w - (area.width - edge)) + Math.max(0, edge - p.y) + Math.max(0, p.y + hgt - (area.height - edge));
+  const best = spots.find((p) => outside(p) === 0) || spots.reduce((a, b) => (outside(b) < outside(a) ? b : a));
+  tip.style.left = `${best.x}px`;
+  tip.style.top = `${best.y}px`;
+}
+
+/**
+ * The part of a graph item the tip mustn't cover, on screen: its shape, its
+ * name and its tasks' pill (not the whole cell an other session can be
+ * pointed at in).
+ */
+function itemBox(el) {
+  if (!el || !el.getBoundingClientRect) return null;
+  const parts = [...el.querySelectorAll('path.shape, text, g.pill:not([display="none"])')].map((p) => p.getBoundingClientRect()).filter((r) => r.width || r.height);
+  if (!parts.length) return el.getBoundingClientRect();
+  return {
+    left: Math.min(...parts.map((r) => r.left)),
+    top: Math.min(...parts.map((r) => r.top)),
+    right: Math.max(...parts.map((r) => r.right)),
+    bottom: Math.max(...parts.map((r) => r.bottom)),
+  };
 }
 
 function hideGraphTip() {
@@ -2253,7 +2465,8 @@ function fitText(text, px) {
 /** Draws (or updates) the other sessions: only while zoomed out, flying in and out. */
 function drawOthers() {
   const d3 = window.d3;
-  if (!d3 || !G.svg) return;
+  // (Not while one's being gone to: that's all in hand, see `goToSession`.)
+  if (!d3 || !G.svg || G.switching) return;
   let items = [];
   if (G.overview) {
     // Where they were put stays (the reader may be reading one); only
@@ -2292,17 +2505,13 @@ function drawOthers() {
           })
           .on('pointerenter pointermove focus', (e, d) => showOtherTip(e, d))
           .on('pointerleave blur', hideGraphTip);
-        // Each drifts a little, out of step with the rest.
-        const drift = g.append('g').attr('class', 'drift');
-        drift.each(function (d) {
-          this.style.animationDelay = `${-(d.i % 7) * 0.9}s`;
-        });
+        const body = g.append('g').attr('class', 'obody');
         // Something to point at across its whole cell, not just its shape.
-        drift.append('rect').attr('class', 'hit');
-        drift.append('circle').attr('class', 'halo').attr('r', 22).attr('cy', -12);
-        drift.append('path').attr('class', 'shape').attr('transform', 'translate(0,-12)').attr('d', shapePath('session', 15));
-        drift.append('text').attr('class', 'oname').attr('y', 20);
-        drift.append('text').attr('class', 'ostatus').attr('y', 36);
+        body.append('rect').attr('class', 'hit');
+        body.append('circle').attr('class', 'halo').attr('r', 22).attr('cy', -12);
+        body.append('path').attr('class', 'shape').attr('transform', 'translate(0,-12)').attr('d', shapePath('session', 15));
+        body.append('text').attr('class', 'oname').attr('y', 20);
+        body.append('text').attr('class', 'ostatus').attr('y', 36);
         // …into place, one after another, overshooting a touch as it settles.
         g.transition()
           .delay((d, i) => (ms ? i * 45 : 0))
@@ -2418,13 +2627,38 @@ function goToSession(d) {
   if (!d3 || !G.svg || G.switching) return;
   G.switching = true;
   G.following = null;
-  G.host.classList.add('choosing');
   const chosen = G.svg.selectAll('g.onode').classed('chosen', (o) => o.id === d.id).filter((o) => o.id === d.id);
+  // Everything else fades at once, and stays gone, whatever redraws the
+  // page meanwhile (said on the elements, not by the host's class).
+  const fade = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 250;
+  G.svg
+    .selectAll('g.onode')
+    .filter((o) => o.id !== d.id)
+    .classed('gone', true)
+    .interrupt()
+    .transition('fade')
+    .duration(fade)
+    .ease(d3.easeCubicOut)
+    .style('opacity', 0);
+  G.svg.selectAll('g.nodes, g.links').transition('fade').duration(fade).ease(d3.easeCubicOut).style('opacity', 0);
   let went = false;
   const go = () => {
     if (went) return;
     went = true;
     G.switching = false;
+    // Where it is on screen, and how large, for its tree to come from (see `arriveFrom`).
+    const shape = chosen.select('path.shape').node();
+    const at = shape && shape.getBoundingClientRect();
+    // And its colours, which its own node's may not be (it's orange while
+    // something in it needs you, its node the colour of its own state).
+    const look = shape && getComputedStyle(shape);
+    G.arrive =
+      at && at.width
+        ? { id: d.id, x: at.left + at.width / 2, y: at.top + at.height / 2, r: at.width / 2, fill: look && look.fill, stroke: look && look.stroke }
+        : null;
+    // A copy of it stays on screen while its tree comes (which can take a
+    // moment), until its own node's drawn under it.
+    showGhost(chosen.node());
     selectRoot(d.id);
   };
   const box = G.svg.node().getBoundingClientRect();
@@ -2438,12 +2672,53 @@ function goToSession(d) {
     .interrupt()
     .transition()
     .duration(550)
-    .ease(d3.easeBackIn.overshoot(0.8))
+    // Coming to rest there, as its own node sets off from rest.
+    .ease(d3.easeCubicInOut)
     .attrTween('transform', function () {
       const k = (this.agPos && this.agPos.k) || d.s;
       return moveTo(this, mx, my, k * 2.2);
     })
     .on('end interrupt', go);
+}
+
+/**
+ * A copy of `el` (a session chosen from the others), drawn over the page just
+ * where it is, so nothing flickers while the graph's redrawn under it. It's
+ * faded out by `dropGhost`: when the session's own node's in its place, or
+ * after a while, whatever happens.
+ */
+function showGhost(el) {
+  dropGhost(true);
+  const svg = G.svg && G.svg.node();
+  const viewport = svg && svg.querySelector('g.viewport');
+  if (!el || !viewport) return;
+  const box = svg.getBoundingClientRect();
+  const ns = 'http://www.w3.org/2000/svg';
+  const ghost = document.createElementNS(ns, 'svg');
+  ghost.setAttribute('class', 'graph-ghost');
+  ghost.setAttribute('aria-hidden', 'true');
+  Object.assign(ghost.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` });
+  const g = document.createElementNS(ns, 'g');
+  g.setAttribute('transform', viewport.getAttribute('transform') || '');
+  g.append(el.cloneNode(true));
+  ghost.append(g);
+  document.body.append(ghost);
+  G.ghost = ghost;
+  G.ghostTimer = setTimeout(() => dropGhost(), 3000);
+}
+
+/** Fades the copy `showGhost` made away (at once, when `now`). */
+function dropGhost(now) {
+  const ghost = G.ghost;
+  G.ghost = null;
+  clearTimeout(G.ghostTimer);
+  if (!ghost) return;
+  if (now || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    ghost.remove();
+    return;
+  }
+  ghost.classList.add('gone');
+  setTimeout(() => ghost.remove(), 300);
 }
 
 /** Zooms the tree out into the middle of the graph, and shows the other sessions round it (the "All sessions" button). */

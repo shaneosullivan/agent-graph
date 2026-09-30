@@ -1710,3 +1710,40 @@ test("a long step's hover tip keeps its start and end, cut in the middle to 80% 
   // About 7px a character here: no more than 80% of 375px.
   assert.ok(text.length * 7 <= 375 * 0.8, `${text.length} characters`);
 });
+
+test("a long name under a graph node keeps its start and end, with an ellipsis between", async t => {
+  const window = loadViewer(t, {graph: async () => graph([node("x:a")])});
+  await until(() => window.document.querySelector("#view .node"));
+  const {graphLabel} = window.__viewer;
+  const short = node("x:a/1", {agent_type: "Explore"});
+  assert.equal(graphLabel(short), "Explore 1");
+  const long = node("x:a/1", {agent_type: "general-purpose-reviewer"});
+  const label = graphLabel(long);
+  assert.ok(label.length <= 16, label);
+  assert.ok(label.includes("…"), label);
+  assert.ok(label.startsWith("general"), label);
+  assert.ok(label.endsWith("1"), label);
+});
+
+test("the graph's legend button shows the legend, and tapping the legend hides it", async t => {
+  const g = agentsTree();
+  const window = loadViewer(t, {graph: async () => g});
+  const doc = window.document;
+  const v = window.__viewer;
+  window.eval(
+    readFileSync(
+      new URL("../../src/view/assets/d3.min.js", import.meta.url),
+      "utf8",
+    ),
+  );
+  await until(() => doc.querySelector("#view .node"));
+  v.setViewMode("graph");
+  await until(() => doc.querySelector("#view .legend-show"));
+  const host = () => doc.querySelector("#view .graph-host");
+  assert.ok(!host().classList.contains("legend-open"));
+  doc.querySelector("#view .legend-show").click();
+  assert.ok(host().classList.contains("legend-open"));
+  doc.querySelector("#view .graph-legend").click();
+  assert.ok(!host().classList.contains("legend-open"));
+  if (v.G.sim) v.G.sim.stop();
+});

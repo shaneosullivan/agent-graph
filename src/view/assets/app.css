@@ -521,10 +521,10 @@ main { padding: 22px 28px 40px; }
 
 /* The other sessions, round this one when zoomed out (app.js, "the other
    sessions, zoomed out"): coloured by how they're doing, as the list's
-   dots are, pulsing orange where they need you, and drifting a little. */
+   dots are, and pulsing orange where they need you; still once they've
+   flown in. */
 .onode { cursor: pointer; outline: none; }
 .onode.gone { pointer-events: none; }
-.onode .drift { animation: drift 6s ease-in-out infinite; }
 .onode .hit { fill: transparent; stroke: transparent; transition: fill 0.15s, stroke 0.15s; }
 .onode:hover .hit, .onode:focus-visible .hit { fill: color-mix(in srgb, var(--accent) 6%, transparent); stroke: color-mix(in srgb, var(--accent) 40%, transparent); }
 .onode .shape { fill: var(--idle); stroke: var(--cat-lifecycle); stroke-width: 2.5; }
@@ -532,7 +532,7 @@ main { padding: 22px 28px 40px; }
 .onode.completed .shape { fill: var(--completed); }
 .onode.failed .shape { fill: var(--failed); }
 .onode.canceled .shape { fill: var(--canceled); }
-.onode.completed .drift, .onode.canceled .drift { opacity: 0.6; }
+.onode.completed .obody, .onode.canceled .obody { opacity: 0.6; }
 .onode.needs-you .shape { fill: var(--input); stroke: var(--input); }
 .onode .halo { fill: none; stroke: transparent; stroke-width: 3; transform-box: fill-box; transform-origin: center; }
 .onode.needs-you .halo { stroke: var(--input); stroke-width: 4; animation: halo 1s ease-out infinite; }
@@ -542,8 +542,10 @@ main { padding: 22px 28px 40px; }
 }
 .onode .ostatus { font-size: 11.5px; fill: var(--muted); text-anchor: middle; pointer-events: none; }
 .onode.needs-you .ostatus { fill: var(--input); font-weight: 650; }
-/* Going to one: everything else fades as the view zooms into it. */
-.graph-host.choosing .nodes, .graph-host.choosing .links, .graph-host.choosing .onode:not(.chosen) { opacity: 0; transition: opacity 0.45s; }
+/* A copy of the one chosen, over the page while its tree comes (see `showGhost`). */
+.graph-ghost { position: fixed; z-index: 30; overflow: visible; pointer-events: none; transition: opacity 0.25s ease; }
+.graph-ghost.gone { opacity: 0; }
+.graph-ghost .hit { display: none; }
 .graph-foot {
   position: absolute; left: 10px; right: 10px; bottom: 10px;
   display: flex; align-items: flex-end; gap: 8px; pointer-events: none;
@@ -556,6 +558,13 @@ main { padding: 22px 28px 40px; }
   background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 8px;
   transition: opacity 0.4s ease;
 }
+/* Its button, for a phone only (see the narrow styles). */
+.legend-show { display: none; place-items: center; flex: none; width: 34px; height: 30px; padding: 0; }
+.legend-show svg { width: 24px; height: 24px; fill: none; stroke-width: 2.2; }
+.legend-show .k-session { stroke: var(--cat-lifecycle); }
+.legend-show .k-agent { stroke: var(--cat-agent); }
+.legend-show .k-command { stroke: var(--cat-message); stroke-linejoin: round; }
+.legend-show .k-tasks { stroke: var(--cat-task); stroke-width: 1.8; }
 /* Zoomed out to the other sessions, the legend fades away, and back. */
 .graph-host.overview .graph-legend { opacity: 0; }
 .glyph { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 2px solid; background: var(--panel); }
@@ -602,7 +611,6 @@ main { padding: 22px 28px 40px; }
 @keyframes needs-you {
   50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--input) 45%, transparent); border-color: var(--input); }
 }
-@keyframes drift { 0%, 100% { transform: translate(0, 0); } 33% { transform: translate(3px, -4px); } 66% { transform: translate(-3px, 3px); } }
 @keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
 @keyframes flash {
   0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--completed) 45%, transparent); }
@@ -659,6 +667,15 @@ main { padding: 22px 28px 40px; }
   /* The page's own content clear of the drawer, while it's up. */
   body.paged .layout { padding-bottom: var(--timeline-room, 0px); }
   .legend { display: none; }
+  /* The graph's legend, hidden at first behind its button (see
+     `legendButton`); tapping it hides it again. */
+  .graph-host .legend-show { display: grid; }
+  .graph-host.legend-open .legend-show { display: none; }
+  .graph-host:not(.legend-open) .graph-legend { display: none; }
+  .graph-host.legend-open .graph-legend { pointer-events: auto; cursor: pointer; transform-origin: bottom left; animation: legend-in 0.25s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .graph-host.overview .legend-show { opacity: 0; pointer-events: none; }
+  /* The timeline's button, at the other end. */
+  .graph-foot .timeline-open { margin-left: auto; }
 
   /* One page at a time: the list, or a session's page (its tree, details
      and timeline), with a way back. */
@@ -702,3 +719,4 @@ main { padding: 22px 28px 40px; }
 #page-toggles[hidden] { display: none; }
 .back-btn:hover { background: var(--accent-soft); }
 .back-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes legend-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } }

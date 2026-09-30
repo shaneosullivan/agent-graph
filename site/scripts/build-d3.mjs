@@ -24,7 +24,8 @@ export {select} from "d3-selection";
 import "d3-transition";
 export {zoom, zoomIdentity, zoomTransform} from "d3-zoom";
 export {drag} from "d3-drag";
-export {easeBackIn, easeBackOut} from "d3-ease";
+export {easeBackIn, easeBackOut, easeCubicInOut, easeCubicOut} from "d3-ease";
+export {timer} from "d3-timer";
 `;
 
 const result = await build({

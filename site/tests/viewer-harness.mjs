@@ -66,7 +66,7 @@ export function loadViewer(
     };
   }
   window.eval(
-    `${app}\nwindow.__viewer = { S, G, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, renderMain, graphData, setViewMode, openModal, CACHED_STEPS };`,
+    `${app}\nwindow.__viewer = { S, G, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, renderMain, graphData, setViewMode, openModal, graphLabel, CACHED_STEPS };`,
   );
   return window;
 }
