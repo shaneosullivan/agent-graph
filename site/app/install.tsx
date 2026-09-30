@@ -1,9 +1,10 @@
 "use client";
 
-import {useState, useSyncExternalStore} from "react";
+import {useEffect, useRef, useState, useSyncExternalStore} from "react";
 
 import type {Copied, Target} from "@/lib/analytics-core";
 import {track} from "@/lib/analytics-client";
+import {link} from "@/lib/links";
 import {BREW_COMMAND, INSTALL_COMMAND, latestRelease} from "@/lib/release";
 
 import {CopyCommand} from "./copy-command";
@@ -77,32 +78,53 @@ function CloudSteps() {
   return (
     <ol className="card-body install-steps">
       <li>
-        In your project, on your computer (with agent-graph installed), add the
-        hooks for Claude Code&rsquo;s cloud, and commit{" "}
-        <code>.claude/settings.json</code>. They do nothing on a computer:
+        On your computer, with agent-graph installed (the Mac or Linux tab), go
+        to your copy of the GitHub repository you&rsquo;ll open in the cloud,
+        and add the cloud&rsquo;s hooks to its{" "}
+        <code>.claude/settings.json</code>
+        :
         <Copyable
           command="agent-graph install claude-code --cloud"
           copied="claude-code-cloud"
         />
       </li>
       <li>
-        Make an API token on your <a href="/account#api-tokens">account page</a>
-        .
+        Still in that repository, commit the file and push it to the branch
+        cloud sessions start from (usually <code>main</code>). A cloud session
+        works in a fresh clone from GitHub, so that&rsquo;s where it finds the
+        hooks. On your computer they do nothing.
+        <CopyCommand
+          command={
+            'git add .claude/settings.json && git commit -m "Share cloud sessions to Agent Graph" && git push'
+          }
+        />
       </li>
       <li>
-        In your Claude Code cloud environment&rsquo;s settings (claude.ai/code),
-        add the token as an environment variable:
+        In this site&rsquo;s{" "}
+        <a href="/account#api-tokens">account page, under API tokens</a>, make a
+        token, and copy it.
+      </li>
+      <li>
+        At <a {...link("https://claude.ai/code")}>claude.ai/code</a>, open the
+        environment menu beside the repository picker, and open the settings of
+        the environment you&rsquo;ll use. (Not claude.ai&rsquo;s own Settings
+        page: its network settings are for chats, not Claude Code.) There, add
+        the token under environment variables:
         <CopyCommand command="AGENT_GRAPH_TOKEN=agt_…" />
         <span className="install-or">
-          and set network access to Custom, allowing these two:
+          and set network access to Custom, allowing these two domains:
         </span>
         <CopyCommand
           command={"agentgraph.chofter.com\nfirebasestorage.googleapis.com"}
         />
+        <span className="install-or">
+          The environment&rsquo;s setup script can stay empty.
+        </span>
       </li>
       <li>
-        Start a cloud session in the project: it installs agent-graph, records
-        the session, and shares it live, at <a href="/watch">/watch</a>.
+        At claude.ai/code, start a session in that repository, with that
+        environment. It installs agent-graph, records the session, and shares it
+        live: watch it at <a href="/watch">/watch</a>.
       </li>
     </ol>
   );
@@ -129,6 +151,14 @@ function detectOs(): Os {
   return "linux";
 }
 
+/** Marks which of the tab row's edges have tabs past them (`data-more`). */
+function markMore(el: HTMLElement) {
+  const left = el.scrollLeft > 1;
+  const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+  el.dataset.more =
+    left && right ? "both" : left ? "left" : right ? "right" : "";
+}
+
 export function Install() {
   // Start on the visitor's own OS; the server render uses macOS.
   const detected = useSyncExternalStore<Os>(
@@ -152,6 +182,43 @@ export function Install() {
   const [chosen, setOs] = useState<Os | null>(null);
   const os = chosen ?? named ?? detected;
 
+  // On a narrow screen the tabs scroll sideways: each edge fades where
+  // there's more past it (data-more), and the tab chosen is scrolled to.
+  const tabs = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = tabs.current;
+    if (!el) {
+      return;
+    }
+    const mark = () => markMore(el);
+    mark();
+    el.addEventListener("scroll", mark, {passive: true});
+    // (As the row's width changes: the window's, or the fonts loading.)
+    const sized = new ResizeObserver(mark);
+    sized.observe(el);
+    return () => {
+      el.removeEventListener("scroll", mark);
+      sized.disconnect();
+    };
+  }, []);
+  useEffect(() => {
+    const el = tabs.current;
+    const tab = el?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!el || !tab) {
+      return;
+    }
+    // Into view within the row only (the page itself doesn't move).
+    const left = tab.offsetLeft - el.offsetLeft;
+    if (
+      left < el.scrollLeft ||
+      left + tab.offsetWidth > el.scrollLeft + el.clientWidth
+    ) {
+      el.scrollTo({left: left - 24});
+    }
+    // (Its scroll event comes a frame later: the fades are set now.)
+    markMore(el);
+  }, [os]);
+
   const way = ways[os];
   return (
     <section
@@ -162,7 +229,7 @@ export function Install() {
       {(Object.keys(ways) as Array<Os>).map(key => (
         <span key={key} id={`install-${key}`} className="install-anchor" />
       ))}
-      <div className="tabs" role="tablist">
+      <div className="tabs" role="tablist" ref={tabs}>
         {(Object.keys(ways) as Array<Os>).map(key => (
           <button
             key={key}

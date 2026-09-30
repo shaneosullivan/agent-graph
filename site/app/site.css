@@ -296,8 +296,32 @@ body {
   padding: 8px 8px 0;
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
+  /* Too many for the width: they scroll sideways, and each edge with more
+     past it fades (data-more, from app/install.tsx). */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.site .tabs::-webkit-scrollbar {
+  display: none;
+}
+.site .tabs[data-more="right"] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+}
+.site .tabs[data-more="left"] {
+  mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent);
+}
+.site .tabs[data-more="both"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 48px,
+    #000 calc(100% - 48px),
+    transparent
+  );
 }
 .site .tab {
+  flex: none;
+  white-space: nowrap;
   font: inherit;
   font-size: 14px;
   font-weight: 600;
@@ -429,6 +453,13 @@ body {
   margin: 6px 0 0;
   padding: 9px 12px;
   white-space: pre;
+}
+/* Narrow, a long command wraps rather than hiding its end (`--cloud`, say). */
+@media (max-width: 560px) {
+  .site .install-steps .command {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 }
 
 /* A command with a button that copies it (app/copy-command.tsx): at the
