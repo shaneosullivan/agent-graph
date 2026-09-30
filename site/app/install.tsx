@@ -79,8 +79,8 @@ function CloudSteps() {
     <ol className="card-body install-steps">
       <li>
         On your computer, with agent-graph installed (the Mac or Linux tab), go
-        to your copy of the GitHub repository you&rsquo;ll open in the cloud,
-        and add the cloud&rsquo;s hooks to its{" "}
+        to the root folder of your copy of the GitHub repository you&rsquo;ll
+        open in the cloud, and add the cloud&rsquo;s hooks to its{" "}
         <code>.claude/settings.json</code>
         :
         <Copyable

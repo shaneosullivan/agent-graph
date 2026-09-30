@@ -306,8 +306,13 @@ fn random_secret() -> Result<String, String> {
     Ok(base64url(&bytes))
 }
 
-/// What to call this computer on the account page: its host name.
+/// What to call this computer on the account page and at /watch: its host
+/// name, or, in Claude Code's cloud (whose containers are all called "vm"),
+/// "Claude Code cloud".
 pub fn host_name() -> String {
+    if in_claude_code_cloud(std::env::var("CLAUDE_CODE_REMOTE").ok().as_deref()) {
+        return CLAUDE_CODE_CLOUD.to_string();
+    }
     std::process::Command::new("hostname")
         .output()
         .ok()
@@ -317,6 +322,13 @@ pub fn host_name() -> String {
         .or_else(|| std::env::var("COMPUTERNAME").ok())
         .or_else(|| std::env::var("HOSTNAME").ok())
         .unwrap_or_default()
+}
+
+const CLAUDE_CODE_CLOUD: &str = "Claude Code cloud";
+
+/// Whether CLAUDE_CODE_REMOTE says this is Claude Code's cloud.
+fn in_claude_code_cloud(remote: Option<&str>) -> bool {
+    remote == Some("true")
 }
 
 fn percent_decode(s: &str) -> String {
@@ -352,6 +364,14 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_claude_code_cloud_is_called_so() {
+        assert!(in_claude_code_cloud(Some("true")));
+        assert!(!in_claude_code_cloud(Some("false")));
+        assert!(!in_claude_code_cloud(Some("")));
+        assert!(!in_claude_code_cloud(None));
+    }
 
     #[test]
     fn percent_decoding() {
