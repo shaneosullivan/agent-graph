@@ -9,6 +9,7 @@ import {Examples} from "./examples";
 import {Install} from "./install";
 import {SiteHeader} from "./site-header";
 import {Uploader} from "./uploader";
+import {WatchCard} from "./watch-card";
 
 const watchRemote = (cliHelp as unknown as Help).commands.find(
   c => c.name === "watch-remote",
@@ -36,6 +37,8 @@ export default function Home() {
             log is deleted once it has had no new events for a week.
           </p>
         </section>
+
+        <WatchCard />
 
         <Install />
 

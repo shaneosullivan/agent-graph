@@ -292,6 +292,71 @@ body {
   padding: 18px;
 }
 
+/* The logged-in visitor's live share, above the install card
+   (app/watch-card.tsx). */
+.site .watch-card {
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  color: var(--text);
+  text-decoration: none;
+}
+.site .watch-card.live {
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.15s;
+}
+.site .watch-card.live:hover {
+  border-color: var(--good);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.08);
+  transform: translateY(-1px);
+}
+.site .watch-card.live:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.site .watch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.site .watch-sub {
+  color: var(--muted);
+  font-size: 14px;
+}
+.site .watch-card .command-box {
+  margin-top: 8px;
+}
+.site .watch-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 50%, transparent);
+  animation: watch-pulse 2s ease-out infinite;
+}
+@keyframes watch-pulse {
+  70% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.site .watch-go {
+  flex: none;
+  color: var(--good);
+  font-weight: 600;
+  font-size: 14px;
+}
+
 /* The install card, above the paste / upload card */
 .site .install {
   margin-bottom: 20px;
@@ -1019,5 +1084,64 @@ body {
   }
   .site .example:hover {
     transform: none;
+  }
+}
+
+/* View transitions: the home page's cards are named, so when one comes,
+   goes or changes (the watch card, app/watch-card.tsx), each moves to its
+   new place rather than jumping there. */
+.site .watch-card {
+  view-transition-name: watch-card;
+}
+.site #install {
+  view-transition-name: install-card;
+}
+.site .page > form.card {
+  view-transition-name: uploader-card;
+}
+.site #examples {
+  view-transition-name: examples;
+}
+.site #live {
+  view-transition-name: share-live;
+}
+.site .page > .section:not([id]) {
+  view-transition-name: viewer-shows;
+}
+.site #logs {
+  view-transition-name: logs;
+}
+.site .foot {
+  view-transition-name: foot;
+}
+::view-transition-group(*) {
+  animation-duration: 0.45s;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* What doesn't move (the header, the hero) doesn't fade either. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+/* The watch card comes in (and goes out) fading and sliding a little. */
+::view-transition-new(watch-card):only-child {
+  animation: watch-card-in 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) 0.08s both;
+}
+::view-transition-old(watch-card):only-child {
+  animation: watch-card-in 0.25s ease reverse both;
+}
+@keyframes watch-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site .watch-card.live {
+    transition: none;
+  }
+  .site .watch-dot {
+    animation: none;
   }
 }

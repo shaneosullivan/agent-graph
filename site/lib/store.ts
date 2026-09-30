@@ -148,6 +148,43 @@ export async function setUntil(
   });
 }
 
+/**
+ * What a live share's `agent-graph watch-remote` last said of itself (see
+ * `setAlive`): when (ms), and how many sessions it was watching.
+ */
+export type Alive = {at: number; sessions: number};
+
+/**
+ * Notes that log `id`'s `agent-graph watch-remote` is still running,
+ * watching `sessions` sessions: it says so every minute or so. One write.
+ * `LogGone` if the log isn't there.
+ */
+export async function setAlive(id: string, sessions: number): Promise<void> {
+  try {
+    await logDoc(id).update({alive: {at: Timestamp.now(), sessions}});
+  } catch (err) {
+    // (Firestore's NOT_FOUND: there's no such log.)
+    if ((err as {code?: unknown}).code === 5) {
+      throw new LogGone();
+    }
+    throw err;
+  }
+}
+
+/** What log `id`'s `watch-remote` last said of itself, if it has (see `setAlive`). */
+export async function getAlive(id: string): Promise<Alive | null> {
+  const snap = await logDoc(id).get();
+  if (!snap.exists || snap.get("deleting")) {
+    return null;
+  }
+  const alive = snap.get("alive") as
+    {at?: unknown; sessions?: unknown} | undefined;
+  if (!(alive?.at instanceof Timestamp) || typeof alive.sessions !== "number") {
+    return null;
+  }
+  return {at: alive.at.toMillis(), sessions: alive.sessions};
+}
+
 /** How often, at most, a live share's `lastAt` is brought up to date. */
 const LAST_AT_EVERY_MS = 60 * 1000;
 

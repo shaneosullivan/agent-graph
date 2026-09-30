@@ -17,6 +17,10 @@
 //! Bodies are raw JSON Lines, never wrapped in JSON, and are cut only at line
 //! boundaries.
 //!
+//! Every minute or so, it tells the site it's still running, and how many
+//! sessions it's watching (`POST /api/logs/<id>/alive`, with the token): the
+//! site's home page tells its owner, with a link to /watch.
+//!
 //! A share belongs to an account: the user logs in first (see `account`), and
 //! the log is made with their login's token (`Authorization: Bearer`), so
 //! only they can see it, at the site's /watch.
@@ -64,6 +68,12 @@ const RECHECK: Duration = Duration::from_secs(3);
 /// How often to ask the site whether the account's subscribed, while
 /// waiting for it to.
 const SUBSCRIBE_POLL: Duration = Duration::from_secs(5);
+/// How often to tell the site this is still running, and how many sessions
+/// it's watching (see `Client::alive`): the site's home page says so.
+const ALIVE_EVERY: Duration = Duration::from_secs(60);
+/// A session's watched while it's had an event this recently: as the
+/// viewer's list shows sessions, unless asked for older ones.
+const WATCHED_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub struct Options {
     pub url: String,
@@ -185,7 +195,15 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         trims.ask(before, &client, &log)?;
     }
     let mut last_send = Instant::now();
+    let mut last_alive: Option<Instant> = None;
     loop {
+        // Still here, watching so many sessions: said now and then, while
+        // the site can be reached (it's only for the home page, so a
+        // failure's no matter; it's said again next time).
+        if backoff.is_zero() && last_alive.is_none_or(|t| t.elapsed() >= ALIVE_EVERY) {
+            last_alive = Some(Instant::now());
+            let _ = client.alive(&log, source.watching(WATCHED_FOR));
+        }
         let due = retrying.is_some()
             || last_send.elapsed() >= SEND_EVERY
             || stream.pending.len() >= MAX_CHUNK;
@@ -899,6 +917,23 @@ impl Lines {
         }
     }
 
+    /// How many sessions it's reading that have had an event within `within`:
+    /// each has its own file, whose last change is its last event.
+    pub fn watching(&self, within: Duration) -> usize {
+        let files: Vec<&PathBuf> = match &self.tree {
+            Some(tree) => tree.files.iter().collect(),
+            None => self.offsets.keys().collect(),
+        };
+        files
+            .into_iter()
+            .filter(|path| {
+                fs::metadata(path)
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|at| at.elapsed().is_ok_and(|age| age <= within))
+            })
+            .count()
+    }
+
     /// The new whole lines, from every file or the shared tree's.
     ///
     /// For a tree, the lines are read first and the tree worked out again
@@ -1441,6 +1476,23 @@ impl Client {
                     _ => SendError::Fatal(format!("{s}: {text}")),
                 })
             }
+        }
+    }
+
+    /// Tells the site this share's still going, watching `sessions` sessions
+    /// (`POST /api/logs/<id>/alive`, with the log's token).
+    pub fn alive(&self, log: &Created, sessions: usize) -> Result<(), SendError> {
+        let res = self
+            .agent
+            .post(format!("{}/api/logs/{}/alive", self.base, log.id))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", log.write_token))
+            .send(format!(r#"{{"sessions":{sessions}}}"#))
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        match res.status().as_u16() {
+            200 | 204 => Ok(()),
+            s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
+            s => Err(SendError::Fatal(format!("the site returned {s}"))),
         }
     }
 

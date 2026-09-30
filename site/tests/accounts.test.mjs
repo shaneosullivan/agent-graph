@@ -358,6 +358,47 @@ test("carrying on with a share needs its owner's login and its key", async () =>
   assert.ok((await latest()).includes(`"id":"${id}"`));
 });
 
+test("the home page hears whether an account's watch-remote is running, and how many sessions it's watching", async () => {
+  const owner = await withCli();
+  const watching = async cookie => {
+    const res = await fetch(`${BASE}/api/watching`, {
+      headers: cookie ? {Cookie: cookie} : {},
+    });
+    return res.ok ? await res.json() : res.status;
+  };
+  assert.equal(await watching(), 401, "not logged in");
+  assert.deepEqual(await watching(owner.cookie), {watching: false}, "no share");
+
+  const {id, writeToken} = await (await share(owner.token)).json();
+  // Shared, but it hasn't said it's running yet.
+  assert.deepEqual(await watching(owner.cookie), {watching: false});
+
+  const alive = (key, body) =>
+    fetch(`${BASE}/api/logs/${id}/alive`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(key ? {Authorization: `Bearer ${key}`} : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  assert.equal((await alive(null, {sessions: 2})).status, 401, "no key");
+  assert.equal(
+    (await alive(secret(), {sessions: 2})).status,
+    401,
+    "not its key",
+  );
+  assert.equal((await alive(writeToken, {sessions: -1})).status, 400);
+  assert.equal((await alive(writeToken, {sessions: 1.5})).status, 400);
+  assert.equal((await alive(writeToken, {})).status, 400);
+
+  assert.equal((await alive(writeToken, {sessions: 3})).status, 204);
+  assert.deepEqual(await watching(owner.cookie), {watching: true, sessions: 3});
+  // Only its owner hears of it.
+  const other = await loggedIn();
+  assert.deepEqual(await watching(other.cookie), {watching: false});
+});
+
 test("logging the CLI out ends its login", async () => {
   const {token} = await withCli();
   assert.equal((await share(token)).status, 201);

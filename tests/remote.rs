@@ -23,6 +23,9 @@ fn mock_site() -> (u16, mpsc::Receiver<Request>) {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let request = read_request(&stream);
+            if answered_alive(&stream, &request) {
+                continue;
+            }
             let json = |status: &str, body: &str| {
                 format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -63,6 +66,17 @@ fn logged_in_as(home: &std::path::Path, port: u16, email: &str) {
         "email": email,
     });
     std::fs::write(home.join("account.json"), account.to_string()).unwrap();
+}
+
+/// Answers `request` if it's watch-remote saying it's still running (every
+/// minute or so, from the start: see `says_it_is_still_running`), which the
+/// other tests needn't see among what they check.
+fn answered_alive(stream: &TcpStream, request: &Request) -> bool {
+    if !request.path.ends_with("/alive") {
+        return false;
+    }
+    let _ = (&*stream).write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+    true
 }
 
 fn read_request(stream: &TcpStream) -> Request {
@@ -504,6 +518,9 @@ fn scripted_site() -> (u16, mpsc::Receiver<Request>, mpsc::Sender<u16>) {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let request = read_request(&stream);
+            if answered_alive(&stream, &request) {
+                continue;
+            }
             let reply = if request.path == "/api/logs" {
                 let body = r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key","accountStatus":"active"}"#;
                 if tx.send(request).is_err() {
@@ -1131,6 +1148,9 @@ fn waits_for_the_account_to_subscribe() {
         let (mut creates, mut appends) = (0, 0);
         for stream in listener.incoming().flatten() {
             let request = read_request(&stream);
+            if answered_alive(&stream, &request) {
+                continue;
+            }
             let reply = |status: &str, body: &str| {
                 format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1228,4 +1248,60 @@ fn waits_for_the_account_to_subscribe() {
         said.contains(&format!("http://127.0.0.1:{port}/account")),
         "{said}"
     );
+}
+
+/// Every minute or so, from the start, it tells the site it's still
+/// running, with the log's key, and how many sessions it's watching: those
+/// with an event in the last day (a session quiet longer isn't counted).
+#[test]
+fn says_it_is_still_running() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, alive) = mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let request = read_request(&stream);
+            let reply = if request.path == "/api/logs" {
+                let body = r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key","accountStatus":"active"}"#;
+                format!(
+                    "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            } else {
+                "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_string()
+            };
+            (&stream).write_all(reply.as_bytes()).unwrap();
+            if request.path.ends_with("/alive") && tx.send(request).is_err() {
+                return;
+            }
+        }
+    });
+    let home = tempfile::tempdir().unwrap();
+    logged_in(home.path(), port);
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    std::fs::write(events.join("x-s.jsonl"), line(1)).unwrap();
+    let quiet = events.join("x-t.jsonl");
+    std::fs::write(&quiet, line(2).replace("x:s", "x:t")).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&quiet)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60))
+        .unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", &format!("--url=http://127.0.0.1:{port}")])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let said = alive.recv_timeout(Duration::from_secs(10));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let said = said.unwrap();
+    assert_eq!(said.path, "/api/logs/abc123def456/alive");
+    assert_eq!(said.headers["authorization"], "Bearer the-key");
+    assert_eq!(said.body, r#"{"sessions":1}"#);
 }
