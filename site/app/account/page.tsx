@@ -15,7 +15,13 @@ import {finishCheckout} from "@/lib/stripe";
 
 import {SiteHeader} from "../site-header";
 import {SiteFooter} from "../site-footer";
-import {Computers, DeleteAccount, LogOut, StripeButton} from "./actions";
+import {
+  ApiTokens,
+  Computers,
+  DeleteAccount,
+  LogOut,
+  StripeButton,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -76,7 +82,11 @@ export default async function Account({
               </p>
             )}
             <h2>Computers</h2>
-            <Computers computers={computers} />
+            <Computers
+              computers={computers.filter(c => c.kind === "computer")}
+            />
+            <h2 id="api-tokens">API tokens</h2>
+            <ApiTokens tokens={computers.filter(c => c.kind === "api")} />
             <LogOut />
             <h2 id="delete" className="delete-heading">
               Delete your account

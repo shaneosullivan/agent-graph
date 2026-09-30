@@ -75,6 +75,58 @@ fn save(root: &Path, account: &Account) -> Result<(), String> {
         .map_err(|e| format!("saving the login in {}: {e}", path.display()))
 }
 
+/// The environment variable an API token is given in: for a machine that
+/// can't log in in a browser (a cloud instance, say). One's made on the
+/// site's account page.
+pub const TOKEN_VAR: &str = "AGENT_GRAPH_TOKEN";
+
+/// Why `AGENT_GRAPH_TOKEN` couldn't be used.
+pub enum TokenError {
+    /// The site doesn't know it: revoked, or mistyped. Trying again won't help.
+    Unknown(String),
+    /// The site couldn't be asked, or the login couldn't be saved.
+    Other(String),
+}
+
+impl TokenError {
+    pub fn message(self) -> String {
+        match self {
+            TokenError::Unknown(m) | TokenError::Other(m) => m,
+        }
+    }
+}
+
+/// The login `AGENT_GRAPH_TOKEN` gives, if it's set: the site's asked whose
+/// it is (so a wrong one is said now, not when sharing starts), and it's
+/// saved as this computer's login, so a run started without it (by
+/// `--autostart`'s service, say) has it too. One saved already, with the
+/// same token, is used as it is.
+pub fn from_env(root: &Path, site: &str, client: &Client) -> Result<Option<Account>, TokenError> {
+    let Some(token) = std::env::var(TOKEN_VAR)
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+    else {
+        return Ok(None);
+    };
+    if let Some(saved) = load(root, site).filter(|a| a.token == token) {
+        return Ok(Some(saved));
+    }
+    let email = client.account_email(&token).map_err(|e| match e {
+        crate::remote::SendError::LoggedOut(_) => TokenError::Unknown(format!(
+            "{TOKEN_VAR} isn't a login {site} knows: it may have been revoked. Make one on your account page, {site}/account."
+        )),
+        e => TokenError::Other(format!("checking {TOKEN_VAR} with {site}: {}", e.message())),
+    })?;
+    let account = Account {
+        site: site.to_string(),
+        token,
+        email,
+    };
+    save(root, &account).map_err(TokenError::Other)?;
+    Ok(Some(account))
+}
+
 /// Forgets the saved login. Whether there was one.
 pub fn forget(root: &Path) -> Result<bool, String> {
     let path = account_path(root);

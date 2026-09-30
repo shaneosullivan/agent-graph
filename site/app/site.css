@@ -1047,6 +1047,25 @@ body {
   color: var(--text);
   border: 1px solid var(--line-strong);
 }
+/* API tokens, on the account page (app/account/actions.tsx). */
+.site .token-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+.site .token-made {
+  margin: 12px 0;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--good) 45%, var(--line));
+  background: color-mix(in srgb, var(--good) 6%, var(--panel));
+}
+.site .token-made p {
+  margin: 6px 0;
+}
+
 /* After deleting an account (app/deleted-notice.tsx). */
 .site .deleted-notice {
   margin: 0 0 20px;

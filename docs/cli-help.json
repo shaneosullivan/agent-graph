@@ -61,7 +61,7 @@
             ["AGENT_GRAPH_CAPTURE_BODIES=1", "Also record message bodies and final agent messages"],
             ["AGENT_GRAPH_RAW=1", "Also keep raw hook payloads, for building adapters"],
             ["AGENT_GRAPH_NOW=<RFC 3339 time>", "Read logs as if it were this time"],
-            ["AGENT_GRAPH_AGENT_COMMANDS=a,b", "More programs that start an agent session when run from an agent's shell (claude, codex, gemini and other common ones are known)"]
+            ["AGENT_GRAPH_AGENT_COMMANDS=a,b", "More programs that start an agent session when run from an agent's shell (claude, codex, gemini and other common ones are known)"], ["AGENT_GRAPH_TOKEN=<API token>", "Log watch-remote in with an API token from your account page, not the browser: for a cloud instance, say"]
           ]
         }
       ]
@@ -271,6 +271,7 @@
         { "text": "What's shared: every session on the machine agent-graph runs on, or just one with --session (`--session current` for the one this runs in). Agent Graph records task names and agent descriptions, not prompts or tool output (unless you've set AGENT_GRAPH_CAPTURE_BODIES=1). The site stores it encrypted." },
         { "heading": "Logging in" },
         { "text": "The first time, it opens your browser at the site's login page: log in with Google, or an email and password (or create an account), and agent-graph is told when you're done. Its login is kept in ~/.agent-graph/account.json, readable only by you, for next time. `--logout` ends it (on the site too), and you can log a computer out from the site's account page. If it can't open a browser, it prints the address to open yourself." },
+        { "text": "On a machine where you can't log in in a browser (a cloud instance, say), make an API token on your account page instead, and give it as AGENT_GRAPH_TOKEN: `AGENT_GRAPH_TOKEN=agt_… agent-graph watch-remote`. The site's asked whose it is, and it's kept as that machine's login, so `--autostart` works with it too. Revoke it on your account page when you're done with it." },
         { "heading": "Subscribing" },
         { "text": "Where the site charges for sharing live, a new account can share for its first week (or however long the site allows) without paying. After that, it opens your account page in the browser for you to subscribe, and waits: once you have, it carries on sharing by itself. A run that's sharing when the time runs out does the same." },
         { "heading": "Who can see it" },

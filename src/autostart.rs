@@ -170,9 +170,15 @@ pub fn enable(root: &Path, url: &str) -> Result<(), String> {
             "{url} isn't HTTPS, so your login would be sent in the clear. Use an https:// URL."
         ));
     }
-    let account = match crate::account::load(root, url) {
+    let client = crate::remote::Client::new(url);
+    // (An API token given as AGENT_GRAPH_TOKEN is saved as the login, so the
+    // service has it: see `account::from_env`.)
+    let account = match crate::account::from_env(root, url, &client)
+        .map_err(crate::account::TokenError::message)?
+        .or_else(|| crate::account::load(root, url))
+    {
         Some(account) => account,
-        None => crate::account::login(root, url, &crate::remote::Client::new(url))?,
+        None => crate::account::login(root, url, &client)?,
     };
     let exe = crate::install::lasting_exe()?;
     let args = args(url);

@@ -1397,3 +1397,127 @@ fn a_background_run_that_needs_a_login_says_so_and_stops() {
         "nothing's sent to the site"
     );
 }
+
+/// A site that knows one API token (`agt_known`, for me@example.com), makes
+/// shares, and sends on each request.
+fn token_site() -> (u16, mpsc::Receiver<Request>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let request = read_request(&stream);
+            if answered_alive(&stream, &request) {
+                continue;
+            }
+            let json = |status: &str, body: &str| {
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            let known = request.headers.get("authorization").map(String::as_str)
+                == Some("Bearer agt_known");
+            let reply = if request.path == "/api/cli/account" {
+                if known {
+                    json(
+                        "200 OK",
+                        r#"{"email":"me@example.com","accountStatus":"active","canShare":true}"#,
+                    )
+                } else {
+                    json("401 Unauthorized", "")
+                }
+            } else if request.path == "/api/logs" {
+                json(
+                    "201 Created",
+                    r#"{"id":"abc123def456","url":"https://site.example/watch","writeToken":"the-key","accountStatus":"active"}"#,
+                )
+            } else {
+                "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_string()
+            };
+            (&stream).write_all(reply.as_bytes()).unwrap();
+            if tx.send(request).is_err() {
+                return;
+            }
+        }
+    });
+    (port, rx)
+}
+
+/// With an API token in AGENT_GRAPH_TOKEN, and no login yet, it shares with
+/// that, without the browser, and keeps it as the login for next time.
+#[test]
+fn an_api_token_in_the_environment_is_the_login() {
+    let (port, requests) = token_site();
+    let home = tempfile::tempdir().unwrap();
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    std::fs::write(events.join("x-s.jsonl"), line(1)).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args(["watch-remote", &format!("--url=http://127.0.0.1:{port}")])
+        .env("AGENT_GRAPH_HOME", home.path())
+        .env("AGENT_GRAPH_TOKEN", "agt_known")
+        .env("AGENT_GRAPH_NO_BROWSER", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let create = loop {
+        let r = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+        if r.path == "/api/logs" {
+            break r;
+        }
+        assert_eq!(r.path, "/api/cli/account", "only asked whose it is first");
+    };
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(create.headers["authorization"], "Bearer agt_known");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(home.path().join("account.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["token"], "agt_known");
+    assert_eq!(saved["email"], "me@example.com");
+}
+
+/// A token the site doesn't know (revoked, say) is said so; in the
+/// background it stops without failing, so it isn't started again and
+/// again, and nothing's shared.
+#[test]
+fn an_api_token_the_site_doesnt_know_is_refused() {
+    let (port, requests) = token_site();
+    let home = tempfile::tempdir().unwrap();
+    let run = |background: bool| {
+        let mut args = vec![
+            "watch-remote".to_string(),
+            format!("--url=http://127.0.0.1:{port}"),
+        ];
+        if background {
+            args.push("--background".into());
+        }
+        Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+            .args(&args)
+            .env("AGENT_GRAPH_HOME", home.path())
+            .env("AGENT_GRAPH_TOKEN", "agt_revoked")
+            .env("AGENT_GRAPH_NO_BROWSER", "1")
+            .output()
+            .unwrap()
+    };
+    let out = run(false);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("AGENT_GRAPH_TOKEN isn't a login"));
+    let out = run(true);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("revoked"));
+    while let Ok(r) = requests.recv_timeout(Duration::from_millis(300)) {
+        assert_ne!(r.path, "/api/logs", "nothing's shared");
+    }
+    assert!(
+        !home.path().join("account.json").exists(),
+        "and it isn't kept"
+    );
+}

@@ -5,6 +5,8 @@ import {useState} from "react";
 
 import type {Computer} from "@/lib/accounts";
 
+import {CopyCommand} from "../copy-command";
+
 /** The computers agent-graph is logged in on, each with a way to log it out. */
 export function Computers({computers}: {computers: Array<Computer>}) {
   const router = useRouter();
@@ -48,7 +50,8 @@ export function Computers({computers}: {computers: Array<Computer>}) {
               <strong>{c.host || "A computer"}</strong>
               <br />
               <span className="when">
-                Logged in {date(c.createdAt)}, last used {date(c.usedAt)}
+                Logged in {date(c.createdAt)}, last used{" "}
+                {date(c.usedAt ?? c.createdAt)}
               </span>
             </span>
             <button
@@ -286,5 +289,140 @@ export function DeleteAccount({
       )}
       {error ? <p className="error">{error}</p> : null}
     </div>
+  );
+}
+
+/**
+ * API tokens (lib/accounts.ts): for a machine that can't log in in a
+ * browser, such as a cloud instance. Each is named, shown once when it's
+ * made, to copy, and can be revoked; `agent-graph watch-remote` uses one
+ * given as AGENT_GRAPH_TOKEN.
+ */
+export function ApiTokens({tokens}: {tokens: Array<Computer>}) {
+  const router = useRouter();
+  const [name, setName] = useState("");
+  const [made, setMade] = useState<{name: string; token: string} | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy("new");
+    setError(null);
+    try {
+      const res = await fetch("/api/account/tokens", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name}),
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const {token} = (await res.json()) as {token: string};
+      setMade({name: name.trim(), token});
+      setName("");
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : "That didn't work. Try again.",
+      );
+    }
+    setBusy(null);
+  }
+
+  async function revoke(id: string) {
+    setBusy(id);
+    setError(null);
+    const res = await fetch(`/api/account/computers/${id}`, {method: "DELETE"});
+    if (!res.ok) {
+      setError(await res.text());
+    }
+    setBusy(null);
+    router.refresh();
+  }
+
+  const date = (ms: number) =>
+    new Date(ms).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  return (
+    <>
+      <p>
+        For a machine where you can&rsquo;t log in in a browser, such as a cloud
+        instance: make a token here, and give it to{" "}
+        <code>agent-graph watch-remote</code> there as{" "}
+        <code>AGENT_GRAPH_TOKEN</code>. It shares to this account, like a
+        computer you&rsquo;ve logged in on. Anyone who has it can too, so keep
+        it secret, and revoke it when you&rsquo;re done with it.
+      </p>
+      {made ? (
+        <div className="token-made" role="status">
+          <p>
+            <strong>Your token for &ldquo;{made.name}&rdquo;.</strong> Copy it
+            now: it won&rsquo;t be shown again.
+          </p>
+          <CopyCommand command={`export AGENT_GRAPH_TOKEN=${made.token}`} />
+          <p className="muted">
+            Then, on that machine, <code>agent-graph watch-remote</code> (or{" "}
+            <code>--autostart</code>) shares to your account, without logging
+            in.
+          </p>
+          <button
+            className="link-button"
+            type="button"
+            onClick={() => setMade(null)}>
+            Done
+          </button>
+        </div>
+      ) : null}
+      {tokens.length ? (
+        <ul className="computers">
+          {tokens.map(t => (
+            <li key={t.id}>
+              <span>
+                <strong>{t.host || "An API token"}</strong>
+                <br />
+                <span className="when">
+                  Made {date(t.createdAt)},{" "}
+                  {t.usedAt ? `last used ${date(t.usedAt)}` : "not used yet"}
+                </span>
+              </span>
+              <button
+                className="link-button"
+                type="button"
+                onClick={() => revoke(t.id)}
+                disabled={busy === t.id}>
+                {busy === t.id ? "Revoking…" : "Revoke"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <form className="token-form" onSubmit={create}>
+        <label className="field">
+          <span>Name it for where it&rsquo;s used</span>
+          <input
+            type="text"
+            placeholder="e.g. build server"
+            maxLength={100}
+            value={name}
+            onChange={e => setName(e.target.value)}
+            disabled={busy === "new"}
+          />
+        </label>
+        <button
+          className="button secondary"
+          type="submit"
+          disabled={!name.trim() || busy === "new"}>
+          {busy === "new" ? "Making…" : "Make a token"}
+        </button>
+      </form>
+      {error ? <p className="error">{error}</p> : null}
+    </>
   );
 }

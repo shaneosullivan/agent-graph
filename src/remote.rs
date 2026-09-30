@@ -139,7 +139,18 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     }
 
     let client = Client::new(&base);
-    let mut account = match crate::account::load(root, &base) {
+    // An API token, if one's given (AGENT_GRAPH_TOKEN), is the login. One
+    // the site doesn't know stops a background run quietly, as a login
+    // that's ended does (trying again won't help).
+    let from_env = match crate::account::from_env(root, &base, &client) {
+        Ok(account) => account,
+        Err(crate::account::TokenError::Unknown(e)) if opts.background => {
+            eprintln!("{e}");
+            return Ok(());
+        }
+        Err(e) => return Err(e.message()),
+    };
+    let mut account = match from_env.or_else(|| crate::account::load(root, &base)) {
         Some(account) => account,
         None if opts.background => {
             eprintln!("{}", needs_login(&base, "Not logged in"));
@@ -1485,6 +1496,36 @@ impl Client {
                 .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
             401 => Err(SendError::LoggedOut(
                 "The site doesn't know this computer's login any more: run watch-remote again, to log in again.".into(),
+            )),
+            s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
+            s => Err(SendError::Fatal(format!(
+                "the site refused it ({s}): {}",
+                text.trim()
+            ))),
+        }
+    }
+
+    /// The email address of the account a login (`token`) is for: `Ok(None)`
+    /// if it has none. `LoggedOut` if the site doesn't know the login.
+    pub fn account_email(&self, token: &str) -> Result<Option<String>, SendError> {
+        let mut res = self
+            .agent
+            .get(format!("{}/api/cli/account", self.base))
+            .header("Authorization", format!("Bearer {token}"))
+            .call()
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        let status = res.status().as_u16();
+        let text = res.body_mut().read_to_string().unwrap_or_default();
+        #[derive(Deserialize)]
+        struct Account {
+            email: Option<String>,
+        }
+        match status {
+            200 => serde_json::from_str::<Account>(&text)
+                .map(|a| a.email)
+                .map_err(|e| SendError::Fatal(format!("unexpected reply from the site: {e}"))),
+            401 => Err(SendError::LoggedOut(
+                "the site doesn't know that login".into(),
             )),
             s if s >= 500 || s == 429 => Err(SendError::Retry(format!("the site returned {s}"))),
             s => Err(SendError::Fatal(format!(

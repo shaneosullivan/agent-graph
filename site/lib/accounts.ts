@@ -19,7 +19,10 @@ import {firestore} from "./firebase";
  *
  *   users/{uid}             { email, createdAt, lastLoginAt, lastWatchAt?, watch?: <sealed log id>,
  *                             status, stripeCustomer?, subscription?: { id, status, plan, periodEnd, cancelAt } }
- *   cli-tokens/{sha256}     { uid, email, host, createdAt, usedAt }
+ *   cli-tokens/{sha256}     { uid, email, host, createdAt, usedAt, kind?, name? }
+ *                           (kind "api": an API token, named on the account
+ *                           page, for a machine that can't log in in a
+ *                           browser; otherwise a computer's own login)
  *   cli-codes/{sha256}      { uid, email, challenge, expireAt }
  *
  * An account's document is made the first time it logs in to the site (it
@@ -258,6 +261,45 @@ export async function newCliToken(
   return token;
 }
 
+/** The most API tokens an account can have at once. */
+export const MOST_API_TOKENS = 20;
+
+/**
+ * A new API token for `account`, named `name`: for the CLI on a machine
+ * that can't log in in a browser (a cloud instance, say), which is given it
+ * as `AGENT_GRAPH_TOKEN`. It's the same as a computer's login, but made on
+ * the account page. Null if the account has `MOST_API_TOKENS` already.
+ */
+export async function newApiToken(
+  account: Account,
+  name: string,
+): Promise<{token: string; id: string} | null> {
+  const mine = await tokens()
+    .where("uid", "==", account.uid)
+    .where("kind", "==", "api")
+    .count()
+    .get();
+  if (mine.data().count >= MOST_API_TOKENS) {
+    return null;
+  }
+  const token = `agt_${randomBytes(32).toString("base64url")}`;
+  const now = Timestamp.now();
+  const id = hash(token);
+  await tokens()
+    .doc(id)
+    .create({
+      uid: account.uid,
+      email: account.email,
+      kind: "api",
+      name: name.slice(0, 100),
+      host: name.slice(0, 100),
+      createdAt: now,
+      // Not used yet: set when it first is.
+      usedAt: null,
+    });
+  return {token, id};
+}
+
 /** The account a CLI token is for, if it's one. */
 export async function accountOfToken(token: string): Promise<Account | null> {
   if (!/^agt_[A-Za-z0-9_-]{43}$/.test(token)) {
@@ -294,9 +336,13 @@ export async function deleteCliToken(token: string): Promise<void> {
 
 export type Computer = {
   id: string;
+  /** A computer's login, or an API token made on the account page. */
+  kind: "computer" | "api";
+  /** The computer's name, or the API token's. */
   host: string;
   createdAt: number;
-  usedAt: number;
+  /** When it was last used; null for an API token not used yet. */
+  usedAt: number | null;
 };
 
 /** The computers `uid` is logged in on with the CLI, most recently used first. */
@@ -305,14 +351,17 @@ export async function computersOf(uid: string): Promise<Array<Computer>> {
   return snap.docs
     .map(doc => {
       const d = doc.data();
+      const api = d.kind === "api";
+      const used = (d.usedAt ?? (api ? null : d.createdAt)) as Timestamp | null;
       return {
         id: doc.id,
-        host: String(d.host ?? ""),
+        kind: api ? ("api" as const) : ("computer" as const),
+        host: String(d.name ?? d.host ?? ""),
         createdAt: (d.createdAt as Timestamp).toMillis(),
-        usedAt: ((d.usedAt ?? d.createdAt) as Timestamp).toMillis(),
+        usedAt: used ? used.toMillis() : null,
       };
     })
-    .sort((a, b) => b.usedAt - a.usedAt);
+    .sort((a, b) => (b.usedAt ?? b.createdAt) - (a.usedAt ?? a.createdAt));
 }
 
 /** Logs `uid` out of the CLI on one computer (`id`, from `computersOf`). */

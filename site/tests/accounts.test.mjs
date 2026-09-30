@@ -434,6 +434,46 @@ test("deleting an account takes its live shares, its computers' logins and its d
   assert.ok([401, 404, 410].includes(content.status), "its live share's gone");
 });
 
+test("an API token made on the account page shares to the account, until it's revoked", async () => {
+  const owner = await loggedIn();
+  const make = (cookie, name) =>
+    fetch(`${BASE}/api/account/tokens`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...FROM_SITE,
+        ...(cookie ? {Cookie: cookie} : {}),
+      },
+      body: JSON.stringify({name}),
+    });
+  assert.equal((await make(null, "cloud")).status, 401, "not logged in");
+  assert.equal((await make(owner.cookie, "  ")).status, 400, "no name");
+  assert.equal((await make(owner.cookie, "x".repeat(101))).status, 400);
+
+  const res = await make(owner.cookie, "build server");
+  assert.equal(res.status, 201, await res.clone().text());
+  const {token, id} = await res.json();
+  assert.match(token, /^agt_[A-Za-z0-9_-]{43}$/);
+
+  // It's a login like a computer's: it shares, and says whose it is.
+  assert.equal((await share(token)).status, 201);
+  const who = await fetch(`${BASE}/api/cli/account`, {
+    headers: {Authorization: `Bearer ${token}`},
+  });
+  assert.equal((await who.json()).email, owner.email);
+
+  // Only its account can revoke it; then it's no login at all.
+  const other = await loggedIn();
+  const revoke = cookie =>
+    fetch(`${BASE}/api/account/computers/${id}`, {
+      method: "DELETE",
+      headers: {...FROM_SITE, Cookie: cookie},
+    });
+  assert.equal((await revoke(other.cookie)).status, 404, "not theirs");
+  assert.equal((await revoke(owner.cookie)).status, 204);
+  assert.equal((await share(token)).status, 401, "revoked");
+});
+
 test("logging the CLI out ends its login", async () => {
   const {token} = await withCli();
   assert.equal((await share(token)).status, 201);
