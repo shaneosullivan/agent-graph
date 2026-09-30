@@ -307,7 +307,7 @@ fn random_secret() -> Result<String, String> {
 }
 
 /// What to call this computer on the account page: its host name.
-fn host_name() -> String {
+pub fn host_name() -> String {
     std::process::Command::new("hostname")
         .output()
         .ok()

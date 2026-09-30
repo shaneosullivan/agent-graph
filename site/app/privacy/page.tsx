@@ -91,8 +91,10 @@ export default function Privacy() {
       </ul>
       <p>
         While <code>watch-remote</code> is running it tells the site so every
-        minute or so, with how many sessions it&rsquo;s watching, so the home
-        page can show you.
+        minute or so: which computer it&rsquo;s on (its name), and a summary of
+        each session it&rsquo;s watching (its name, folder and state), so the
+        home page and <a href="/watch">/watch</a> can show them, from all your
+        computers together. Like your logs, it&rsquo;s stored encrypted.
       </p>
 
       <h2>Payments</h2>

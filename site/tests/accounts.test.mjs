@@ -474,6 +474,71 @@ test("an API token made on the account page shares to the account, until it's re
   assert.equal((await share(token)).status, 401, "revoked");
 });
 
+test("/watch lists every live share's sessions, from what each says of itself", async () => {
+  const owner = await withCli();
+  const laptop = await (await share(owner.token)).json();
+  const cloud = await (await share(owner.token, line(2))).json();
+  const alive = (log, body) =>
+    fetch(`${BASE}/api/logs/${log.id}/alive`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${log.writeToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+  const summary = (id, state) => ({
+    [id]: {id, kind: "session", provider: "claude-code", state},
+  });
+  assert.equal(
+    (
+      await alive(laptop, {
+        sessions: 1,
+        host: "laptop",
+        summary: summary("claude-code:a", "working"),
+      })
+    ).status,
+    204,
+  );
+  assert.equal(
+    (
+      await alive(cloud, {
+        sessions: 2,
+        host: "cloud box",
+        summary: summary("claude-code:b", "input_required"),
+      })
+    ).status,
+    204,
+  );
+  assert.equal(
+    (await alive(laptop, {sessions: 1, summary: "x".repeat(300_000)})).status,
+    413,
+    "too big",
+  );
+
+  const list = async cookie =>
+    (
+      await (
+        await fetch(`${BASE}/api/watch/shares`, {headers: {Cookie: cookie}})
+      ).json()
+    ).shares;
+  const shares = await list(owner.cookie);
+  assert.deepEqual(
+    shares.map(s => [s.id, s.host, s.live, Object.keys(s.summary)]).sort(),
+    [
+      [cloud.id, "cloud box", true, ["claude-code:b"]],
+      [laptop.id, "laptop", true, ["claude-code:a"]],
+    ].sort(),
+  );
+  assert.deepEqual(await list((await loggedIn()).cookie), [], "only theirs");
+
+  // The home page counts them all.
+  const watching = await (
+    await fetch(`${BASE}/api/watching`, {headers: {Cookie: owner.cookie}})
+  ).json();
+  assert.deepEqual(watching, {watching: true, sessions: 3});
+});
+
 test("logging the CLI out ends its login", async () => {
   const {token} = await withCli();
   assert.equal((await share(token)).status, 201);

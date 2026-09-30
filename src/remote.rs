@@ -74,6 +74,11 @@ const ALIVE_EVERY: Duration = Duration::from_secs(60);
 /// A session's watched while it's had an event this recently: as the
 /// viewer's list shows sessions, unless asked for older ones.
 const WATCHED_FOR: Duration = Duration::from_secs(24 * 60 * 60);
+/// The most sessions whose summaries are sent (the most recent).
+const MOST_SUMMARIES: usize = 100;
+/// When a node's taken to look stuck, in those summaries: as the viewer's
+/// default.
+const SUMMARY_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 
 pub struct Options {
     pub url: String,
@@ -242,7 +247,12 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         // failure's no matter; it's said again next time).
         if backoff.is_zero() && last_alive.is_none_or(|t| t.elapsed() >= ALIVE_EVERY) {
             last_alive = Some(Instant::now());
-            let _ = client.alive(&log, source.watching(WATCHED_FOR));
+            let _ = client.alive(
+                &log,
+                source.watching(WATCHED_FOR),
+                &crate::account::host_name(),
+                &source.summaries(WATCHED_FOR, MOST_SUMMARIES),
+            );
         }
         let due = retrying.is_some()
             || last_send.elapsed() >= SEND_EVERY
@@ -987,6 +997,12 @@ impl Lines {
     /// How many sessions it's reading that have had an event within `within`:
     /// each has its own file, whose last change is its last event.
     pub fn watching(&self, within: Duration) -> usize {
+        self.recent(within).len()
+    }
+
+    /// The files it's reading that have changed within `within`: the
+    /// sessions it's watching.
+    fn recent(&self, within: Duration) -> Vec<&PathBuf> {
         let files: Vec<&PathBuf> = match &self.tree {
             Some(tree) => tree.files.iter().collect(),
             None => self.offsets.keys().collect(),
@@ -998,7 +1014,30 @@ impl Lines {
                     .and_then(|m| m.modified())
                     .is_ok_and(|at| at.elapsed().is_ok_and(|age| age <= within))
             })
-            .count()
+            .collect()
+    }
+
+    /// The summaries of the sessions it's watching (see `watching`), as the
+    /// viewer's list shows them: JSON, session id → summary, the most recent
+    /// `most`. Read afresh from their files: only theirs, so a long history
+    /// isn't read each time.
+    pub fn summaries(&self, within: Duration, most: usize) -> String {
+        let mut events = Vec::new();
+        for path in self.recent(within) {
+            let Ok(bytes) = fs::read(path) else { continue };
+            for line in bytes.split(|&b| b == b'\n') {
+                if let Ok(event) = serde_json::from_slice::<Envelope>(line) {
+                    events.push(crate::timeline::Timed::new(event));
+                }
+            }
+        }
+        crate::timeline::sort(&mut events);
+        crate::timeline::summaries(
+            &events,
+            std::time::SystemTime::now(),
+            SUMMARY_STALE_AFTER,
+            most,
+        )
     }
 
     /// The new whole lines, from every file or the shared tree's.
@@ -1576,15 +1615,27 @@ impl Client {
         }
     }
 
-    /// Tells the site this share's still going, watching `sessions` sessions
-    /// (`POST /api/logs/<id>/alive`, with the log's token).
-    pub fn alive(&self, log: &Created, sessions: usize) -> Result<(), SendError> {
+    /// Tells the site this share's still going, on computer `host`,
+    /// watching `sessions` sessions, whose summaries are `summary` (JSON:
+    /// see `Lines::summaries`): `POST /api/logs/<id>/alive`, with the log's
+    /// token.
+    pub fn alive(
+        &self,
+        log: &Created,
+        sessions: usize,
+        host: &str,
+        summary: &str,
+    ) -> Result<(), SendError> {
+        let body = format!(
+            r#"{{"sessions":{sessions},"host":{},"summary":{summary}}}"#,
+            serde_json::to_string(host).expect("a string")
+        );
         let res = self
             .agent
             .post(format!("{}/api/logs/{}/alive", self.base, log.id))
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", log.write_token))
-            .send(format!(r#"{{"sessions":{sessions}}}"#))
+            .send(body)
             .map_err(|e| SendError::Retry(e.to_string()))?;
         match res.status().as_u16() {
             200 | 204 => Ok(()),

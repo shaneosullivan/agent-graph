@@ -201,6 +201,28 @@ impl<'a> SessionSummary<'a> {
     }
 }
 
+/// Every session's summary, as the list shows it (the `sessions` of a
+/// `graph` reply), after all of `events`, judged at `now`: the most recently
+/// active `most`, as JSON (session id → summary). `watch-remote` sends it to
+/// the site, so the site can list a live share's sessions without reading
+/// its log (the viewer's sidebar, at /watch).
+pub fn summaries(events: &[Timed], now: SystemTime, stale_after: Duration, most: usize) -> String {
+    let graph = reduce(events, now, stale_after);
+    let mut roots: Vec<&Node> = graph
+        .roots
+        .iter()
+        .filter_map(|id| graph.nodes.get(id))
+        .collect();
+    // (ISO 8601 times sort as text.)
+    roots.sort_by(|a, b| b.last_event_at.cmp(&a.last_event_at));
+    let sessions: BTreeMap<&str, SessionSummary> = roots
+        .into_iter()
+        .take(most)
+        .map(|n| (n.id.as_str(), SessionSummary::of(&graph, n)))
+        .collect();
+    to_json(&sessions)
+}
+
 /// Names the sessions in `titles` (session id → name) that `graph` has.
 pub fn retitle(graph: &mut Graph, titles: &BTreeMap<String, String>) {
     for (id, title) in titles {

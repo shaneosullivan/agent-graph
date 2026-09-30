@@ -14,7 +14,14 @@ import {
   UNLOCKS_PER_LOG_AND_ADDRESS,
 } from "./config";
 import {addressKey, safeEqual} from "./crypto";
-import {decryptChunk, encryptChunk, metaTag, storageId} from "./encryption";
+import {
+  decryptChunk,
+  encryptChunk,
+  metaTag,
+  openLogId,
+  sealLogId,
+  storageId,
+} from "./encryption";
 import {firestore} from "./firebase";
 
 /**
@@ -155,13 +162,50 @@ export async function setUntil(
 export type Alive = {at: number; sessions: number};
 
 /**
- * Notes that log `id`'s `agent-graph watch-remote` is still running,
- * watching `sessions` sessions: it says so every minute or so. One write.
- * `LogGone` if the log isn't there.
+ * A live share, as its account's /watch lists it (`sharesOf`): its log's
+ * id, the computer it's shared from, when it last said it was running, how
+ * many sessions it's watching, and their summaries (the viewer's session
+ * list's, session id → summary: see the CLI's `timeline::summaries`).
  */
-export async function setAlive(id: string, sessions: number): Promise<void> {
+export type Share = {
+  id: string;
+  host: string;
+  at: number;
+  sessions: number;
+  summary: Record<string, unknown>;
+};
+
+/** Where a share's summary is sealed (as its chunks are, with its own key). */
+const SUMMARY_CHUNK = "alive-summary";
+
+/**
+ * Notes that log `id` (owned by account `owner`)'s `agent-graph
+ * watch-remote` is still running, on computer `host`, watching `sessions`
+ * sessions, whose summaries are `summary`: it says so every minute or so.
+ * The computer's name and the summaries are encrypted with the log's key;
+ * its id's sealed for its owner, so their shares can be listed
+ * (`sharesOf`). One write. `LogGone` if the log isn't there.
+ */
+export async function setAlive(
+  id: string,
+  owner: string,
+  sessions: number,
+  host = "",
+  summary: Record<string, unknown> = {},
+): Promise<void> {
   try {
-    await logDoc(id).update({alive: {at: Timestamp.now(), sessions}});
+    await logDoc(id).update({
+      alive: {
+        at: Timestamp.now(),
+        sessions,
+        log: sealLogId(owner, id),
+        summary: encryptChunk(
+          id,
+          SUMMARY_CHUNK,
+          JSON.stringify({host, summary}),
+        ),
+      },
+    });
   } catch (err) {
     // (Firestore's NOT_FOUND: there's no such log.)
     if ((err as {code?: unknown}).code === 5) {
@@ -183,6 +227,54 @@ export async function getAlive(id: string): Promise<Alive | null> {
     return null;
   }
   return {at: alive.at.toMillis(), sessions: alive.sessions};
+}
+
+/**
+ * Account `uid`'s live shares that have said they're running (see
+ * `setAlive`), most recent first: one per computer or cloud instance
+ * sharing. A share whose summary can't be read (sealed for another
+ * account, or altered) is left out.
+ */
+export async function sharesOf(uid: string): Promise<Array<Share>> {
+  const owned = await logs().where("owner", "==", uid).get();
+  const shares: Array<Share> = [];
+  for (const doc of owned.docs) {
+    if (doc.get("deleting")) {
+      continue;
+    }
+    const alive = doc.get("alive") as
+      | {at?: unknown; sessions?: unknown; log?: unknown; summary?: unknown}
+      | undefined;
+    if (
+      !(alive?.at instanceof Timestamp) ||
+      !(alive.log instanceof Uint8Array) ||
+      !(alive.summary instanceof Uint8Array)
+    ) {
+      continue;
+    }
+    const id = openLogId(uid, alive.log);
+    if (!id) {
+      continue;
+    }
+    try {
+      const {host, summary} = JSON.parse(
+        decryptChunk(id, SUMMARY_CHUNK, alive.summary),
+      ) as {host?: unknown; summary?: unknown};
+      shares.push({
+        id,
+        host: typeof host === "string" ? host : "",
+        at: alive.at.toMillis(),
+        sessions: typeof alive.sessions === "number" ? alive.sessions : 0,
+        summary:
+          summary && typeof summary === "object"
+            ? (summary as Record<string, unknown>)
+            : {},
+      });
+    } catch {
+      // Not readable: left out.
+    }
+  }
+  return shares.sort((a, b) => b.at - a.at);
 }
 
 /** How often, at most, a live share's `lastAt` is brought up to date. */

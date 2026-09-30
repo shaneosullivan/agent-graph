@@ -1251,8 +1251,9 @@ fn waits_for_the_account_to_subscribe() {
 }
 
 /// Every minute or so, from the start, it tells the site it's still
-/// running, with the log's key, and how many sessions it's watching: those
-/// with an event in the last day (a session quiet longer isn't counted).
+/// running, with the log's key, on which computer, and how many sessions
+/// it's watching, and their summaries: those with an event in the last day
+/// (a session quiet longer isn't counted).
 #[test]
 fn says_it_is_still_running() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1303,7 +1304,17 @@ fn says_it_is_still_running() {
     let said = said.unwrap();
     assert_eq!(said.path, "/api/logs/abc123def456/alive");
     assert_eq!(said.headers["authorization"], "Bearer the-key");
-    assert_eq!(said.body, r#"{"sessions":1}"#);
+    let body: serde_json::Value = serde_json::from_str(&said.body).unwrap();
+    assert_eq!(body["sessions"], 1);
+    assert!(body["host"].is_string(), "the computer it's on");
+    // Its summaries, as the viewer's list shows them: the one it's watching.
+    let summary = body["summary"].as_object().unwrap();
+    assert_eq!(
+        summary.keys().collect::<Vec<_>>(),
+        ["x:s"],
+        "not the quiet one"
+    );
+    assert_eq!(summary["x:s"]["state"], "working");
 }
 
 /// Where `--autostart` puts its service, under `home` (as $HOME).

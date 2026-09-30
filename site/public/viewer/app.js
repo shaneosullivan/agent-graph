@@ -1136,7 +1136,8 @@ function sessionItem(id) {
   const { agents, needs_you: needsYou, deadlocked, stuck, busy } = root;
   const dotState = needsYou ? 'input_required' : busy && root.state === 'idle' ? 'working' : root.state;
   const done = root.tasks - root.open_tasks;
-  const meta = [root.provider, agents ? plural(agents, 'agent') : null, root.tasks ? `tasks ${done}/${root.tasks}` : null]
+  // (On the site's /watch, sharing from several computers, which it's on.)
+  const meta = [root.host || null, root.provider, agents ? plural(agents, 'agent') : null, root.tasks ? `tasks ${done}/${root.tasks}` : null]
     .filter(Boolean)
     .join(' · ');
   const name = listName(root);

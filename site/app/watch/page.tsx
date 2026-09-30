@@ -31,7 +31,7 @@ export default async function Watch() {
   const id = await watchLog(user.uid);
   const meta = id ? await getMeta(id) : null;
   if (id && meta && meta.owner === user.uid) {
-    return <Viewer id={id} live />;
+    return <Viewer id={id} live shares />;
   }
   return (
     <div className="site">
