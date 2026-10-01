@@ -1034,7 +1034,8 @@ fn codex_hooks_changes(
 }
 
 /// `path` as Codex names it in its trust keys: absolute, with links
-/// followed as far as the path exists.
+/// followed as far as the path exists, and on Windows without the `\\?\`
+/// prefix canonical paths get, as Codex has it (it uses `dunce` too).
 fn as_codex_sees(path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -1046,7 +1047,7 @@ fn as_codex_sees(path: &Path) -> PathBuf {
     let mut existing = absolute.as_path();
     let mut rest = Vec::new();
     loop {
-        if let Ok(real) = std::fs::canonicalize(existing) {
+        if let Ok(real) = dunce::canonicalize(existing) {
             return rest.iter().rev().fold(real, |p, part| p.join(part));
         }
         match (existing.parent(), existing.file_name()) {

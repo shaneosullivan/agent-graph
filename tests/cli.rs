@@ -1668,11 +1668,18 @@ fn codex_hooks_are_installed_trusted_and_removed() {
         trusted.starts_with("# Mine.\nmodel = \"gpt-5.5\"\n"),
         "{trusted}"
     );
+    // Keyed by the hooks file as Codex names it: on Windows, without the
+    // `\\?\` that canonical paths there start with.
     let source = std::fs::canonicalize(codex.path())
         .unwrap()
-        .join("hooks.json");
+        .join("hooks.json")
+        .display()
+        .to_string();
+    let source = source.strip_prefix(r"\\?\").unwrap_or(&source);
+    let doc: toml_edit::DocumentMut = trusted.parse().unwrap();
+    let state = doc["hooks"]["state"].as_table_like().unwrap();
     assert!(
-        trusted.contains(&format!("\"{}:session_start:0:0\"", source.display())),
+        state.contains_key(&format!("{source}:session_start:0:0")),
         "{trusted}"
     );
     assert_eq!(trusted.matches("trusted_hash").count(), 10);
