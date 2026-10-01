@@ -1,5 +1,6 @@
 import {cookies} from "next/headers";
 
+import {accountOfRequest} from "@/lib/accounts";
 import {currentUser} from "@/lib/auth";
 import {ID_PATTERN, viewCookieName} from "@/lib/config";
 import {safeEqual, viewToken} from "@/lib/crypto";
@@ -19,7 +20,8 @@ export const dynamic = "force-dynamic";
  *   X-Last-Chunk: the key to pass as `after` next time (absent if none)
  *   X-More: 1 if there are more chunks to fetch right away
  * Password-protected logs need the cookie set by /unlock; an account's live
- * share, its owner's session (lib/auth.ts).
+ * share, its owner's session (lib/auth.ts), or one of the owner's CLI or API
+ * tokens, as `Authorization: Bearer <token>`.
  */
 export async function GET(
   req: Request,
@@ -38,7 +40,7 @@ export async function GET(
   if (!meta) {
     return new Response("Unknown log.", {status: 404});
   }
-  if (meta.owner && (await currentUser())?.uid !== meta.owner) {
+  if (meta.owner && (await readerOf(req)) !== meta.owner) {
     return new Response("Log in to the account whose share this is.", {
       status: 401,
     });
@@ -73,4 +75,9 @@ export async function GET(
     headers["X-More"] = "1";
   }
   return new Response(text, {headers});
+}
+
+/** Who's reading: the logged-in account, or the one whose token it sent. */
+async function readerOf(req: Request): Promise<string | undefined> {
+  return (await currentUser())?.uid ?? (await accountOfRequest(req))?.uid;
 }

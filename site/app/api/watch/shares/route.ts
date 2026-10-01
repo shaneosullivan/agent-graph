@@ -1,3 +1,4 @@
+import {accountOfRequest} from "@/lib/accounts";
 import {currentUser} from "@/lib/auth";
 import {sharesOf} from "@/lib/store";
 
@@ -12,11 +13,12 @@ const ALIVE_FOR_MS = 3 * 60 * 1000;
  * it's sharing: GET /api/watch/shares replies `{shares: [{id, host, at,
  * live, sessions, summary}]}`, most recent first, where `summary` is each
  * session's summary, as the viewer's list shows it (session id → summary),
- * as the share last said, and `live` whether it's running now. 401 if not
+ * as the share last said, and `live` whether it's running now. A CLI or API
+ * token, as `Authorization: Bearer <token>`, reads its account's. 401 if not
  * logged in.
  */
-export async function GET(): Promise<Response> {
-  const user = await currentUser();
+export async function GET(req: Request): Promise<Response> {
+  const user = (await currentUser()) ?? (await accountOfRequest(req));
   if (!user) {
     return new Response("Not logged in.", {status: 401});
   }
