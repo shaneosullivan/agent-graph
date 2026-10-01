@@ -22,6 +22,9 @@
 #      checks a formula without a bottle could be built from source, and
 #      refuses it when the Command Line Tools are out of date, though this
 #      only copies the program into place.
+#   7. Waits until the site's install script (/install.sh) installs this
+#      version: Vercel has deployed step 5's commit. Up to 15 minutes, then
+#      it only warns.
 #
 # Usage:
 #   scripts/release.sh <version>          e.g. scripts/release.sh 0.1.0-beta.1
@@ -41,6 +44,8 @@
 #   HOMEBREW_TAP     the tap's GitHub repository (owner/homebrew-<name>)
 #   GCLOUD_ACCOUNT   the gcloud account to upload as (optional: gcloud's
 #                    active one otherwise)
+#   SITE_URL         the site whose install script is checked at the end
+#                    (optional: https://agentgraph.chofter.com otherwise)
 # and notarize-mac.sh's (NOTARY_PROFILE, APPLE_TEAM_ID: see its --help).
 # =============================================================================
 
@@ -74,6 +79,9 @@ fi
 RELEASE_BUCKET="${RELEASE_BUCKET:-}"
 RELEASE_BUCKET="${RELEASE_BUCKET%/}"
 HOMEBREW_TAP="${HOMEBREW_TAP:-}"
+# The site whose install script is checked for the release at the end.
+SITE_URL="${SITE_URL:-https://agentgraph.chofter.com}"
+SITE_URL="${SITE_URL%/}"
 GCLOUD_ACCOUNT="${GCLOUD_ACCOUNT:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-AgentGraphNotary}"
 
@@ -388,6 +396,28 @@ echo "✓ Committed and pushed $(git rev-parse --short HEAD): the site shows $VE
 
 step "6. Homebrew: $HOMEBREW_TAP"
 update_tap
+
+# =============================================================================
+# 7. THE SITE
+# =============================================================================
+
+# Released means installable: the site's install script, once Vercel has
+# deployed release.json (and its cache, half a minute, has run out), installs
+# this version. Up to 15 minutes; past that, it only warns.
+step "7. Waiting for $SITE_URL/install.sh to install $VERSION"
+served=""
+for _ in $(seq 90); do
+  if curl -fsSL "$SITE_URL/install.sh" 2>/dev/null | grep -qF "agent-graph $VERSION"; then
+    served=yes
+    break
+  fi
+  sleep 10
+done
+if [ -n "$served" ]; then
+  echo "✓ $SITE_URL/install.sh installs $VERSION"
+else
+  echo "WARNING: after 15 minutes, $SITE_URL/install.sh doesn't install $VERSION yet. Check Vercel's deployment of $(git rev-parse --short HEAD)."
+fi
 
 # =============================================================================
 # DONE

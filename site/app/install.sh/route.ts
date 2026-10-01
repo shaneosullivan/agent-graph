@@ -10,7 +10,9 @@ export function GET(): Response {
   return new Response(installScript(latestRelease()), {
     headers: {
       "Content-Type": "text/x-shellscript; charset=utf-8",
-      "Cache-Control": "public, max-age=300",
+      // Half a minute: after a release, the script that installs it should
+      // be what's served, not the last one, within moments.
+      "Cache-Control": "public, max-age=30",
     },
   });
 }

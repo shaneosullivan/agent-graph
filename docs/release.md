@@ -18,6 +18,7 @@ It checks everything it needs first (a clean `main` that matches `origin/main`, 
 4. packs each build with the LICENSE as `agent-graph-<target>.tar.gz`, uploads it to `$RELEASE_BUCKET/releases/<version>/mac` or `…/linux`, and downloads it again from its public URL to check it;
 5. writes [`site/release.json`](../site/release.json) (the version, commit, and each archive's URL and SHA-256), and commits and pushes it. The site's download buttons and `/install.sh` read it, so they switch to the new release once Vercel has deployed that commit;
 6. writes the cask `Casks/agent-graph.rb` to the tap (`$HOMEBREW_TAP`), for macOS and Linux, ARM and Intel, and pushes it. A cask, not a formula: Homebrew checks that a formula with no bottle could be built from source, and refuses it when the Command Line Tools are out of date, though installing it only copies the program into place. `scripts/release.sh --tap-only` does this step alone, for the release in `site/release.json`.
+7. waits until the site's install script (`/install.sh`, which the site serves with a 30-second cache) installs the new version, that is, until Vercel has deployed step 5's commit, so that once it says "Released", installing gets this version. After 15 minutes it only warns. `SITE_URL` (optional) is the site it checks.
 
 If it stops partway (notarization failing, say), fix the cause and run it again with the same version: the version's already committed, so it carries on from the builds.
 
