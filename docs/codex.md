@@ -71,7 +71,9 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 ### Everything else that names Claude Code
 
 - The adapter registry (`codex` alongside `claude-code`), the reducer's provider programs (`codex` runs `codex`), and the tree's provider name.
-- **Resume:** `codex resume <id>` in the session's folder, or `codex fork <id>` for one still running.
+- **Resume:** `codex resume <id>` in the session's folder, or `codex fork <id>` for one still running. `codex` is found on `PATH`, or else inside the ChatGPT app, which has its own copy and doesn't put it on `PATH`.
+- **The ChatGPT desktop app** runs Codex too (its bundled `codex app-server`, reading the same `~/.codex`), so the same hooks record its sessions, with nothing more to set up. A session the app started (its rollout's `originator` is "Codex Desktop") opens back in the app (`codex://threads/<id>`), as a Claude app session opens in the Claude app; the CLI's open in a terminal. The viewer also reads names Codex gives sessions (`session_index.jsonl`) as they appear, since the app names a session after its first turn has ended.
+- **Plans:** Codex's plan tool is off by default, so `install codex` turns it on (`[tools.update_plan] enabled = true`, marked as Agent Graph's), unless your settings already say either way; uninstalling turns it off again only if Agent Graph turned it on.
 - **"This session"** for the `$agent-graph` skill: the session whose shell it runs in, found as a child session would find its parent (so `CODEX_THREAD_ID`/`CODEX_SESSION_ID` in Codex), then `CLAUDE_CODE_SESSION_ID`.
 - **Names:** a subagent is shown by its Codex nickname ("explorer Noether"), from its rollout, where Claude Code's show their id.
 - Messages that say "run `agent-graph install claude-code`" mention Codex too. The viewer already has Codex's name and mark.
@@ -81,7 +83,7 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 
 - **Codex cloud** (chatgpt.com/codex): nothing in Codex's source says whether it runs a project's hooks, or trusts them, and there's no variable that marks a cloud run. Planned in [codex-cloud.md](codex-cloud.md).
 - **Multi-agent v2** (off by default): its `spawn_agent` returns no id, so the child is bound by guess (by its SubagentStart), as Claude Code's are when they have to be. Its `wait_agent` names no targets, so no wait is shown.
-- **The Codex desktop app and IDE extension** run the same core, so they should fire the same hooks; untested.
+- **The IDE extension** runs the same core, so it should fire the same hooks; untested. (The ChatGPT desktop app is tested: see Testing.)
 - Windows.
 
 ## Testing
@@ -89,4 +91,5 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 - **Unit:** the adapter, with payloads captured from a real Codex (`tests/fixtures/codex/`), through the reducer (`tests/codex.rs`); installing, trusting and uninstalling (`src/install.rs`), including the trust hash against Codex's own test vector; linking from `CODEX_THREAD_ID`.
 - **End to end, automated:** `scripts/codex-e2e.sh` runs the real Codex CLI against a stand-in model (`scripts/codex-mock-model.mjs`, which scripts the model's replies over the Responses API), with a temporary `CODEX_HOME` and `AGENT_GRAPH_HOME`. It installs the hooks with `agent-graph install codex`, runs `codex exec` **without** bypassing trust (so the trust entries are tested), and checks the graph: the session, its plan, a subagent, a command that starts another agent, and waiting.
 - **The TUI, by hand against the stand-in model:** driven through a pseudo-terminal with approvals on (`approval_policy = "on-request"`), a command asking for escalation fired PermissionRequest, and the session showed as "Needs approval: <Codex's reason>" until it was interrupted (idle). The TUI's automatic session name isn't covered, since the stand-in model can't answer its naming request; reading `session_index.jsonl` is unit tested.
+- **The ChatGPT app's Codex:** its own bundled binary, run as the app runs it (`codex app-server`, driven over JSON-RPC as the app is, with the stand-in model), ran the installed hooks with no bypass: the plan, the subagent and its nickname were recorded, and the viewer offered "Open in the ChatGPT app" for it.
 - **By hand, with a real model** (still to do): `agent-graph install codex`, then a Codex session that makes a plan (`[tools.update_plan] enabled = true` in `~/.codex/config.toml`), spawns a subagent and runs `claude -p` from its shell; watch it in `agent-graph view`.

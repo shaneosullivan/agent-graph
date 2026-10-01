@@ -54,6 +54,33 @@ pub fn file_key(provider: &str, session: &str) -> String {
     format!("{}-{}", clean(provider), clean(session))
 }
 
+/// An agent's program, to run: on `PATH`, or else where its desktop app
+/// keeps its own copy. The ChatGPT app has the Codex CLI inside it, and
+/// doesn't put it on `PATH`.
+pub fn find_agent(program: &str) -> Option<PathBuf> {
+    find_program(program).or_else(|| (program == "codex").then(codex_in_apps).flatten())
+}
+
+/// The Codex CLI inside the ChatGPT desktop app, if it's installed (macOS).
+pub fn codex_in_apps() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    chatgpt_apps()
+        .into_iter()
+        .map(|app| app.join("Contents/Resources/codex-cli/bin/codex"))
+        .find(|p| p.is_file())
+}
+
+/// Where the ChatGPT desktop app may be installed (macOS).
+pub fn chatgpt_apps() -> Vec<PathBuf> {
+    let mut apps = vec![PathBuf::from("/Applications/ChatGPT.app")];
+    if let Some(home) = user_home() {
+        apps.push(home.join("Applications/ChatGPT.app"));
+    }
+    apps
+}
+
 /// Where `program` is on `PATH`, skipping relative entries (like `.`), which
 /// would make the answer depend on the current folder. On Windows, each of
 /// `PATHEXT`'s extensions is tried (npm installs agents as `.cmd` files).

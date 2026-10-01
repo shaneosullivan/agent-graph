@@ -3289,7 +3289,7 @@ function renderOpen(id) {
       class: 'btn',
       disabled: Boolean(done && done.busy),
       title: offer.desktop
-        ? 'Show it in the Claude desktop app’s Code tab.'
+        ? `Show it in ${offer.app}, as it is.`
         : offer.copy
           ? 'It hasn’t ended, so it’s probably open somewhere already. This opens a copy of its conversation in a new terminal window.'
           : 'Resume it in a new terminal window.',
@@ -3316,7 +3316,7 @@ function renderOpen(id) {
         : null,
     );
   } else if (done && !done.busy) {
-    const where = offer.desktop ? 'Opened in the Claude app.' : 'Opened in a new terminal window.';
+    const where = offer.desktop ? `Opened in ${offer.app}.` : 'Opened in a new terminal window.';
     note = h('div', { class: 'open-note' }, h('span', { class: 'open-ok' }, where));
   }
   return h('div', { class: 'open-box' }, button, note);

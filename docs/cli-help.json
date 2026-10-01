@@ -80,7 +80,7 @@
             { "text": "Adds an /agent-graph command (a skill). Run it in any session for a picture of the session and a short summary of what needs you, what looks stuck and what's in progress. `/agent-graph all` covers every session from the last day, and `/agent-graph share` gives you a live link. Claude can also use it by itself when you ask how your agents are doing." }
           ]
         },
-        { "text": "For Codex it does the same: hooks in Codex's hooks file (~/.codex/hooks.json, or $CODEX_HOME's), with the file as it was backed up beside it (hooks.json.agent-graph.bak), and the $agent-graph command. Codex only runs a hook once it's trusted, so it also trusts Agent Graph's, in Codex's config.toml, as Codex's /hooks would (backing that file up too, as config.toml.agent-graph.bak), and nothing else there changes. A Codex session's plan (update_plan), the subagents it starts and waits for, when it needs your approval or an answer, and sessions it starts from its shell are all recorded." },
+        { "text": "For Codex it does the same: hooks in Codex's hooks file (~/.codex/hooks.json, or $CODEX_HOME's), with the file as it was backed up beside it (hooks.json.agent-graph.bak), and the $agent-graph command. Codex only runs a hook once it's trusted, so it also trusts Agent Graph's, in Codex's config.toml, as Codex's /hooks would (backing that file up too, as config.toml.agent-graph.bak), and turns on Codex's plan tool (update_plan, off by default) unless that file already says either way. Nothing else there changes. Sessions in the terminal and in the ChatGPT desktop app (which runs the same Codex) are recorded: a session's plan, the subagents it starts and waits for, when it needs your approval or an answer, and sessions it starts from its shell." },
         { "text": "For Gemini CLI and Cursor it adds just the command for now. Their own sessions aren't recorded yet, so it shows the Claude Code and Codex sessions that are." },
         { "heading": "Where the command goes (with --scope user)" },
         {
@@ -198,7 +198,7 @@
             ["Details", "Click any session or agent: its tasks, what it's waiting on, the agents it started, its messages, and when things happened."],
             ["Timeline", "Every event in the session is a stop on a slider. Drag it, click it, or use ← and → to see the graph exactly as it was at that moment; the node that step changed is ringed. \"Live\" (or L, or End) jumps back to now."],
             ["Save image", "A picture of the session as it is at the step you're on."],
-            ["Resume", "A Claude Code or Codex session's details have a button that reopens it in a new terminal window, in its folder (`claude --resume`, `codex resume`). One that hasn't ended is probably still open somewhere, so that opens a copy of its conversation instead (`codex fork`). If it can't open a window, it tells you the command to run. The shared site doesn't have this."]
+            ["Resume", "A Claude Code or Codex session's details have a button that reopens it: in the Claude app or the ChatGPT app if that's where it ran, else in a new terminal window, in its folder (`claude --resume`, `codex resume`). One that hasn't ended is probably still open somewhere, so that opens a copy of its conversation instead (`codex fork`). If it can't open a window, it tells you the command to run. The shared site doesn't have this."]
           ]
         },
         { "text": "The page updates as events arrive, without reloading." }

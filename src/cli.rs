@@ -826,7 +826,15 @@ fn codex_hooks_changes(
     } else {
         String::new()
     };
-    let config_after = install::codex_trust(&config_before, &source, &before, &after)?;
+    let trusted = install::codex_trust(&config_before, &source, &before, &after)?;
+    // Plans are only recorded with Codex's plan tool on. (Only for your
+    // own hooks: a project's are shared, and this is your own setting.)
+    let plans = scope == Scope::User;
+    let config_after = if plans {
+        install::codex_plan_tool(&trusted, opts.add)?
+    } else {
+        trusted.clone()
+    };
 
     let mut changes = Vec::new();
     if after != before {
@@ -879,17 +887,28 @@ fn codex_hooks_changes(
     }
     if config_after != config_before {
         let backup = config_path.with_extension("toml.agent-graph.bak");
+        let mut summary = vec![format!("Codex settings: {}", config_path.display())];
+        if trusted != config_before {
+            summary.push(if opts.add {
+                "Trusts Agent Graph's hooks, as Codex's /hooks would, so Codex runs them \
+                 (it won't run a hook until it's trusted)."
+                    .into()
+            } else {
+                "Removes the trust Agent Graph's hooks had.".into()
+            });
+        }
+        if config_after != trusted {
+            summary.push(if opts.add {
+                "Turns on Codex's plan tool ([tools.update_plan]), off by default, so a \
+                 session's plan shows as its tasks."
+                    .into()
+            } else {
+                "Turns Codex's plan tool back off, as Agent Graph turned it on.".into()
+            });
+        }
+        summary.push("Nothing else is changed.".into());
         changes.push(Change {
-            summary: vec![
-                format!("Codex settings: {}", config_path.display()),
-                if opts.add {
-                    "Trusts Agent Graph's hooks, as Codex's /hooks would, so Codex runs them \
-                     (it won't run a hook until it's trusted). Nothing else is changed."
-                        .into()
-                } else {
-                    "Removes the trust Agent Graph's hooks had.".into()
-                },
-            ],
+            summary,
             backup: (config_existed && std::fs::symlink_metadata(&backup).is_err())
                 .then_some(backup),
             path: config_path,

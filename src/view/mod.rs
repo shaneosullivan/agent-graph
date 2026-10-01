@@ -204,7 +204,10 @@ fn start_on(
     let shared = Arc::new(Shared {
         tail: Mutex::new(Tail::new(events_dir)),
         names: Mutex::new(Names::default()),
-        desktop: Mutex::new(Desktop::new(desktop::sessions_dir())),
+        desktop: Mutex::new(Desktop::new(
+            desktop::sessions_dir(),
+            desktop::chatgpt_installed(),
+        )),
         version: Mutex::new(0),
         changed: Condvar::new(),
         stale_after,
@@ -265,7 +268,7 @@ struct Shared {
     tail: Mutex<Tail>,
     /// Sessions' names, newer than the log's (see `names`).
     names: Mutex<Names>,
-    /// The Claude desktop app's sessions, which open there (see `desktop`).
+    /// The sessions desktop apps have, which open there (see `desktop`).
     desktop: Mutex<Desktop>,
     /// Bumped whenever the events change; streams wait on `changed`.
     version: Mutex<u64>,
@@ -294,7 +297,7 @@ impl Shared {
     fn poll_names(&self) {
         let events = self.events();
         let renamed = self.names.lock().expect("names lock").poll(&events);
-        let desktop = self.desktop.lock().expect("desktop lock").poll();
+        let desktop = self.desktop.lock().expect("desktop lock").poll(&events);
         if renamed || desktop {
             self.bump();
         }
@@ -537,7 +540,13 @@ fn open_session(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::
         .flatten();
     let r = match (found, desktop) {
         (Some(r), desktop) => Resume { desktop, ..r },
-        (None, Some(desktop)) => resume::in_desktop_app(desktop),
+        (None, Some(link)) => match resume::in_desktop_app(link) {
+            Some(r) => r,
+            None => {
+                let error = "That can't be opened: its app's link isn't one Agent Graph opens.";
+                return reply(stream, 404, serde_json::json!({ "error": error }));
+            }
+        },
         (None, None) => {
             let error = "That can't be opened: only sessions whose agent can resume them can.";
             return reply(stream, 404, serde_json::json!({ "error": error }));
@@ -571,8 +580,8 @@ fn open_session(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::
             stream,
             500,
             serde_json::json!({
-                "error": if r.desktop.is_some() {
-                    format!("Couldn't open it in the Claude app: {e}.")
+                "error": if let Some(app) = r.desktop.as_deref().and_then(resume::app_of_link) {
+                    format!("Couldn't open it in {app}: {e}.")
                 } else {
                     format!("Couldn't open a terminal: {e}.")
                 },
@@ -762,7 +771,7 @@ mod tests {
         let shared = Arc::new(Shared {
             tail: Mutex::new(Tail::new(dir.path())),
             names: Mutex::new(Names::default()),
-            desktop: Mutex::new(Desktop::new(None)),
+            desktop: Mutex::new(Desktop::new(None, false)),
             version: Mutex::new(0),
             changed: Condvar::new(),
             stale_after: Duration::from_secs(600),

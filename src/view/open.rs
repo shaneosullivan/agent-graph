@@ -1,5 +1,6 @@
-//! Opens a session for the viewer's Open button: in the Claude desktop app
-//! if the app has it (see `desktop`), else in its agent, in a new terminal
+//! Opens a session for the viewer's Open button: in its desktop app (the
+//! Claude app, or the ChatGPT app for Codex) if the app has it (see
+//! `desktop`), else in its agent, in a new terminal
 //! window. The command comes from `resume::resume`, which only uses ids
 //! that are plain letters, digits, `-` and `_`. The folder can hold anything,
 //! so it never reaches a shell's parser unquoted: it's passed as the working
@@ -24,44 +25,39 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::resume::Resume;
+use crate::resume::{self, Resume};
 
-/// Opens `r`: in the Claude desktop app if it has the session, else in a
-/// new terminal window.
+/// Opens `r`: in its desktop app if that has the session, else in a new
+/// terminal window.
 pub fn launch(r: &Resume) -> Result<(), String> {
     match &r.desktop {
-        Some(id) => in_desktop_app(id),
+        Some(link) => in_desktop_app(link),
         None => in_terminal(r),
     }
 }
 
-/// The link that shows the app's session `id` in its Code tab.
-pub fn desktop_link(id: &str) -> Option<String> {
-    super::desktop::is_app_id(id).then(|| format!("claude://code/continue?session={id}"))
-}
-
-/// Shows the app's session `id`, by opening its link.
-fn in_desktop_app(id: &str) -> Result<(), String> {
-    let link = desktop_link(id).ok_or("that isn't the Claude app's id for a session")?;
+/// Shows a session in its desktop app, by opening the app's `link` for it.
+fn in_desktop_app(link: &str) -> Result<(), String> {
+    let app = resume::app_of_link(link).ok_or("that isn't a link to a desktop app's session")?;
     let mut command = if cfg!(windows) {
-        // The link is letters, digits and `:/?=_-` only (`desktop_link`).
+        // The link is letters, digits and `:/?=_-` only (`app_of_link`).
         let mut c = Command::new("cmd");
-        c.args(["/C", "start", ""]).arg(&link);
+        c.args(["/C", "start", ""]).arg(link);
         c
     } else {
         let mut c = Command::new("open");
-        c.arg(&link);
+        c.arg(link);
         c
     };
     let out = command
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("opening the Claude app: {e}"))?;
+        .map_err(|e| format!("opening {app}: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
         Err(format!(
-            "the Claude app didn't open: {}",
+            "{app} didn't open: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ))
     }
@@ -69,7 +65,7 @@ fn in_desktop_app(id: &str) -> Result<(), String> {
 
 /// Runs `r` in a new terminal window.
 pub fn in_terminal(r: &Resume) -> Result<(), String> {
-    let program = crate::paths::find_program(r.program)
+    let program = crate::paths::find_agent(r.program)
         .ok_or_else(|| format!("can't find {} on your PATH", r.program))?;
     let program = program.to_string_lossy();
     if cfg!(target_os = "macos") {
@@ -103,7 +99,7 @@ fn safe_path() -> OsString {
 /// It names the agent by its full path when it's on `PATH`, so pasting it
 /// doesn't run a program of the same name in the session's folder either.
 pub fn command_line(r: &Resume) -> String {
-    let program = crate::paths::find_program(r.program).map(|p| p.to_string_lossy().into_owned());
+    let program = crate::paths::find_agent(r.program).map(|p| p.to_string_lossy().into_owned());
     command_line_for(r, program.as_deref(), cfg!(windows))
 }
 
@@ -305,16 +301,6 @@ mod tests {
             copy: false,
             desktop: None,
         }
-    }
-
-    #[test]
-    fn the_desktop_link_takes_only_the_apps_ids() {
-        assert_eq!(
-            desktop_link("local_776bf0af-e7ae").as_deref(),
-            Some("claude://code/continue?session=local_776bf0af-e7ae")
-        );
-        assert_eq!(desktop_link("local_a&calc"), None);
-        assert_eq!(desktop_link("e3db28e0-8fe7"), None);
     }
 
     #[test]

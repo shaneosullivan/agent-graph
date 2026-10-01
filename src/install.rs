@@ -712,6 +712,68 @@ pub fn codex_trust(
     Ok(doc.to_string())
 }
 
+/// What marks the plan tool's setting as Agent Graph's, so uninstalling
+/// takes out only one it put in.
+const PLAN_TOOL_MARK: &str = "# Agent Graph: shows Codex's plans";
+
+/// Codex's `config.toml` (as `config`) with its plan tool (`update_plan`,
+/// off by default) turned on, when `on`, if the file doesn't already say
+/// either way: a session's plan is its task list in the graph. With `on`
+/// false, takes out the setting if Agent Graph put it in. Everything else
+/// is kept as it was.
+pub fn codex_plan_tool(config: &str, on: bool) -> Result<String, String> {
+    use toml_edit::{DocumentMut, Item, Table, value};
+    let mut doc: DocumentMut = config
+        .parse()
+        .map_err(|e| format!("Codex's config.toml isn't valid TOML, so it wasn't changed: {e}"))?;
+    let set = doc
+        .get("tools")
+        .and_then(|t| t.get("update_plan"))
+        .and_then(|t| t.get("enabled"));
+    let ours = set
+        .and_then(Item::as_value)
+        .and_then(|v| v.decor().suffix())
+        .and_then(|s| s.as_str())
+        .is_some_and(|s| s.contains(PLAN_TOOL_MARK));
+    if on && set.is_none() {
+        let root = doc.as_table_mut();
+        if !root.contains_key("tools") {
+            let mut tools = Table::new();
+            tools.set_implicit(true);
+            root.insert("tools", Item::Table(tools));
+        }
+        let tools = root["tools"]
+            .as_table_like_mut()
+            .ok_or("tools in Codex's config.toml isn't a table")?;
+        if !tools.contains_key("update_plan") {
+            tools.insert("update_plan", Item::Table(Table::new()));
+        }
+        let plan = tools
+            .get_mut("update_plan")
+            .and_then(Item::as_table_like_mut)
+            .ok_or("tools.update_plan in Codex's config.toml isn't a table")?;
+        let mut enabled = value(true);
+        if let Some(v) = enabled.as_value_mut() {
+            v.decor_mut().set_suffix(format!(" {PLAN_TOOL_MARK}"));
+        }
+        plan.insert("enabled", enabled);
+    } else if !on && ours {
+        let tools = doc["tools"].as_table_like_mut().expect("has the setting");
+        let plan = tools
+            .get_mut("update_plan")
+            .and_then(Item::as_table_like_mut)
+            .expect("has the setting");
+        plan.remove("enabled");
+        if plan.is_empty() {
+            tools.remove("update_plan");
+        }
+        if tools.is_empty() {
+            doc.as_table_mut().remove("tools");
+        }
+    }
+    Ok(doc.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,6 +1010,29 @@ mod tests {
         assert!(!moved.contains("stop:1:0"), "{moved}");
         // Nothing to trust, in an empty file, leaves it empty.
         assert_eq!(codex_trust("", "/s", &json!({}), &json!({})).unwrap(), "");
+    }
+
+    #[test]
+    fn the_plan_tool_is_turned_on_unless_you_said_otherwise_and_off_only_if_we_did() {
+        let mine = "# Mine.\nmodel = \"gpt-5.5\"\n";
+        let on = codex_plan_tool(mine, true).unwrap();
+        assert!(on.starts_with(mine), "{on}");
+        let doc: toml_edit::DocumentMut = on.parse().unwrap();
+        assert_eq!(doc["tools"]["update_plan"]["enabled"].as_bool(), Some(true));
+        assert_eq!(codex_plan_tool(&on, true).unwrap(), on, "once");
+        assert_eq!(codex_plan_tool(&on, false).unwrap(), mine);
+        // Yours, either way, stays.
+        for yours in [
+            "[tools.update_plan]\nenabled = false\n",
+            "[tools.update_plan]\nenabled = true\n",
+        ] {
+            assert_eq!(codex_plan_tool(yours, true).unwrap(), yours);
+            assert_eq!(codex_plan_tool(yours, false).unwrap(), yours);
+        }
+        // Other tools' settings stay when ours goes.
+        let others = "[tools.web_search]\nenabled = true\n";
+        let with = codex_plan_tool(others, true).unwrap();
+        assert_eq!(codex_plan_tool(&with, false).unwrap(), others);
     }
 
     #[test]

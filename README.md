@@ -43,7 +43,7 @@ Options:
 `agent-graph uninstall claude-code` removes both.
 
 For **Codex**, `agent-graph install codex` does the same:
-- **Recording:** adds hooks to `~/.codex/hooks.json` (or `$CODEX_HOME`'s), keeping everything else there and backing it up first. Codex only runs a hook once it's trusted, so it also trusts these, in Codex's `config.toml`, as Codex's `/hooks` would, changing nothing else there. New Codex sessions are recorded from then on, in the TUI and with `codex exec`: their plans, the subagents they start and wait for, when they need your approval or an answer, and sessions they start from their shell (`claude -p`, …), which appear under them.
+- **Recording:** adds hooks to `~/.codex/hooks.json` (or `$CODEX_HOME`'s), keeping everything else there and backing it up first. Codex only runs a hook once it's trusted, so it also trusts these, in Codex's `config.toml`, as Codex's `/hooks` would, changing nothing else there. It also turns on Codex's plan tool (off by default), unless your settings say otherwise. New Codex sessions are recorded from then on, in the terminal (`codex`, `codex exec`) and in the ChatGPT desktop app, which runs the same Codex: their plans, the subagents they start and wait for, when they need your approval or an answer, and sessions they start from their shell (`claude -p`, …), which appear under them.
 - **The `$agent-graph` command**, in `~/.agents/skills/agent-graph/`.
 
 `agent-graph uninstall codex` removes all of it. [docs/codex.md](docs/codex.md) has the details.
@@ -64,7 +64,7 @@ Their own sessions aren't recorded yet; only Claude Code and Codex have hooks so
 | Command | What it does |
 |---|---|
 | `agent-graph tail` | Live, full-screen tree in the terminal, redrawn as events arrive. `q` quits, `a` shows older sessions, `--ascii` for plain characters. |
-| `agent-graph view --open` | Live web view on port 7777 (it prints a link with a key, `http://127.0.0.1:7777/?key=…`; only that link works; a viewer already running on the port is replaced, so a newer version takes over). Has a timeline slider for stepping back through a session, saves images, and reopens a Claude Code or Codex session: a Claude Code one in the Claude desktop app if it has the session, else in a new terminal window. |
+| `agent-graph view --open` | Live web view on port 7777 (it prints a link with a key, `http://127.0.0.1:7777/?key=…`; only that link works; a viewer already running on the port is replaced, so a newer version takes over). Has a timeline slider for stepping back through a session, saves images, and reopens a Claude Code or Codex session: in the Claude app or the ChatGPT app if that's where it ran, else in a new terminal window. |
 | `agent-graph snapshot` | Saves a phone-sized PNG of the current session and prints its path, ready for an agent to send you. `--out x.svg` for SVG, `--json` for the raw graph. |
 | `agent-graph tree` | One-off text tree (`--all` includes older sessions). |
 | `agent-graph watch-remote` | Shares the graph live to your account at [agentgraph.chofter.com](https://agentgraph.chofter.com), where only you can see it. See below. |

@@ -1676,6 +1676,11 @@ fn codex_hooks_are_installed_trusted_and_removed() {
         "{trusted}"
     );
     assert_eq!(trusted.matches("trusted_hash").count(), 10);
+    assert!(said.contains("Turns on Codex's plan tool"), "{said}");
+    assert!(
+        trusted.contains("[tools.update_plan]\nenabled = true"),
+        "{trusted}"
+    );
 
     // Again: nothing to do.
     assert!(run(&["install", "codex"]).contains("Nothing to do"));

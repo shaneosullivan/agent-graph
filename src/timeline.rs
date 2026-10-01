@@ -68,11 +68,12 @@ pub enum Environment {
 /// A session the page can reopen (see `resume`).
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Open {
-    /// The agent it opens in: "Claude Code".
+    /// The agent it opens in: "Claude Code", or with `desktop`, the app:
+    /// "the Claude app", "the ChatGPT app".
     pub app: &'static str,
     /// It's still running, so this opens a copy of its conversation.
     pub copy: bool,
-    /// It opens in the Claude desktop app, which has it, as it is.
+    /// It opens in its desktop app, which has it, as it is.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub desktop: bool,
 }
@@ -82,8 +83,8 @@ pub struct Open {
 pub struct Local {
     /// Session id → its name, newer than the log's.
     pub titles: BTreeMap<String, String>,
-    /// Session id → the Claude desktop app's id for it, for those the app
-    /// has (see `resume::Resume::desktop`).
+    /// Session id → the link that shows it in its desktop app, for those an
+    /// app has (see `resume::Resume::desktop`).
     pub desktop: BTreeMap<String, String>,
 }
 
@@ -274,7 +275,7 @@ pub fn graph(
 }
 
 /// `graph`, with what `local` knows: sessions' names newer than the log's,
-/// and which open in the Claude desktop app.
+/// and which open in a desktop app.
 pub fn graph_with(
     events: &[Timed],
     until: Option<&str>,
@@ -314,9 +315,13 @@ pub fn graph_with(
             .filter_map(|n| {
                 // The app shows the session itself, running or not, and
                 // needs nothing else of it.
-                let open = if local.desktop.contains_key(&n.id) {
+                let app = local
+                    .desktop
+                    .get(&n.id)
+                    .and_then(|l| resume::app_of_link(l));
+                let open = if let Some(app) = app {
                     Open {
-                        app: "the Claude app",
+                        app,
                         copy: false,
                         desktop: true,
                     }
@@ -941,7 +946,10 @@ mod tests {
 
         // The Claude desktop app has it: it opens there, as it is.
         let local = Local {
-            desktop: BTreeMap::from([(SESSION.to_string(), "local_1".to_string())]),
+            desktop: BTreeMap::from([(
+                SESSION.to_string(),
+                "claude://code/continue?session=local_1".to_string(),
+            )]),
             ..Local::default()
         };
         let json: Value = serde_json::from_str(

@@ -47,10 +47,8 @@ env_key = "PATH"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
-
-[tools.update_plan]
-enabled = true
 TOML
+# (Not the plan tool: `install codex` turns it on.)
 
 # "Another agent", started from Codex's shell: records a session of its own,
 # as an agent's hooks would, which should link itself to Codex's.
