@@ -624,11 +624,7 @@ fn subtree<'a>(graph: &'a Graph, root: &'a Node) -> Vec<&'a Node> {
 }
 
 fn name(n: &Node) -> String {
-    format!(
-        "{} {}",
-        n.agent_type.as_deref().unwrap_or("Agent"),
-        n.title.as_deref().unwrap_or_else(|| short(local(&n.id)))
-    )
+    crate::render::agent_name(n, "Agent")
 }
 
 fn local(id: &str) -> &str {

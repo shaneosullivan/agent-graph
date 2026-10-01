@@ -97,11 +97,20 @@ impl Adapter for Codex {
                     })
                     .filter(|p| *p != session && *p != agent)
                     .map_or_else(|| session_node.clone(), |p| node_id(session, Some(p)));
+                // Its task's name (multi-agent v2), as the app shows it.
+                let purpose = meta.as_ref().and_then(|m| {
+                    str_at(m, &["agent_path"])
+                        .or_else(|| {
+                            str_at(m, &["source", "subagent", "thread_spawn", "agent_path"])
+                        })
+                        .and_then(task_label)
+                });
                 drafts.push(
                     Draft::new(
                         &node,
                         Payload::AgentSpawned(AgentSpawned {
                             agent_type: str_at(input, &["agent_type"]).map(String::from),
+                            purpose,
                             ..Default::default()
                         }),
                     )
@@ -216,11 +225,17 @@ fn pre_tool_use(
                 call_id: call_id.to_string(),
                 kind: SpawnKind::Agent,
                 agent_type: str_at(tool_input, &["agent_type"]).map(String::from),
-                purpose: capture
-                    .bodies
-                    .then(|| str_at(tool_input, &["message"]))
-                    .flatten()
-                    .map(|s| truncate_chars(s, LABEL_MAX)),
+                // v2 names the task, which is a label; v1 only has the
+                // prompt, kept only with bodies.
+                purpose: str_at(tool_input, &["task_name"])
+                    .and_then(task_label)
+                    .or_else(|| {
+                        capture
+                            .bodies
+                            .then(|| str_at(tool_input, &["message"]))
+                            .flatten()
+                            .map(|s| truncate_chars(s, LABEL_MAX))
+                    }),
                 background: true,
                 run: None,
             }),
@@ -284,9 +299,16 @@ fn post_tool_use(input: &Value, session: &str, node: &str, drafts: &mut Vec<Draf
         "request_user_input" => drafts.push(status(node, State::Working, None)),
         "spawn_agent" => {
             // Its result, as JSON text: `{"agent_id": …, "nickname": …}`.
-            let child = json_response(input)
+            // v2's names only the task (`{"task_name": …}`): the request is
+            // left open, for the child to be bound to it when it starts. (It
+            // runs in the background, so nothing waits on it.)
+            let Some(child) = json_response(input)
                 .as_ref()
-                .and_then(|r| str_at(r, &["agent_id"]).map(|a| node_id(session, Some(a))));
+                .and_then(|r| str_at(r, &["agent_id"]).map(|a| node_id(session, Some(a))))
+            else {
+                return;
+            };
+            let child = Some(child);
             drafts.push(Draft::new(
                 node,
                 Payload::SpawnReturned(SpawnReturned {
@@ -335,10 +357,9 @@ fn post_tool_use(input: &Value, session: &str, node: &str, drafts: &mut Vec<Draf
     }
 }
 
-/// `wait_agent`, as hooks name it: multi-agent v1's is `multi_agent_v1`
-/// and the name run together.
+/// `wait_agent` (by `tool_name`, without its namespace).
 fn is_wait(name: &str) -> bool {
-    name == "wait_agent" || name == "multi_agent_v1wait_agent"
+    name == "wait_agent"
 }
 
 /// The agents a `wait_agent` call waits for (v1 names them; v2 doesn't).
@@ -451,8 +472,46 @@ fn agent_launch(input: &Value) -> Option<shell::Launch> {
     shell::agent_launch(command, &extra)
 }
 
+/// The tool a hook is for, without the namespace Codex runs into the names
+/// of its multi-agent tools (`multi_agent_v1wait_agent`,
+/// `collaborationspawn_agent`).
 fn tool_name(input: &Value) -> &str {
-    str_at(input, &["tool_name"]).unwrap_or("")
+    let name = str_at(input, &["tool_name"]).unwrap_or("");
+    ["multi_agent_v1", "collaboration"]
+        .iter()
+        .find_map(|ns| {
+            name.strip_prefix(ns)
+                .filter(|rest| AGENT_TOOLS.contains(rest))
+        })
+        .unwrap_or(name)
+}
+
+/// Codex's multi-agent tools (v1's and v2's), whose names reach hooks with
+/// their namespace in front.
+const AGENT_TOOLS: &[&str] = &[
+    "spawn_agent",
+    "wait_agent",
+    "send_input",
+    "resume_agent",
+    "close_agent",
+    "send_message",
+    "followup_task",
+    "interrupt_agent",
+    "list_agents",
+];
+
+/// A multi-agent v2 task's name as Codex's app shows it: the last part of
+/// its path (`/root/wait_60_seconds`), in words: "Wait 60 seconds".
+pub fn task_label(task: &str) -> Option<String> {
+    let last = task.rsplit('/').find(|p| !p.is_empty())?;
+    let words = last.replace(['_', '-'], " ");
+    let words = words.trim();
+    let mut chars = words.chars();
+    let first = chars.next()?;
+    Some(truncate_chars(
+        &format!("{}{}", first.to_uppercase(), chars.as_str()),
+        LABEL_MAX,
+    ))
 }
 
 fn tool_use_id(input: &Value) -> Option<&str> {
@@ -494,7 +553,29 @@ mod tests {
     fn waits_are_only_on_ids_fit_for_node_ids() {
         let input = serde_json::json!({"targets": ["01a0-b", "x y", "", 3]});
         assert_eq!(wait_targets(&input).collect::<Vec<_>>(), ["01a0-b"]);
-        assert!(is_wait("multi_agent_v1wait_agent") && is_wait("wait_agent"));
-        assert!(!is_wait("collaborationwait_agent_x"));
+        for (hooked, tool) in [
+            ("multi_agent_v1wait_agent", "wait_agent"),
+            ("collaborationspawn_agent", "spawn_agent"),
+            ("spawn_agent", "spawn_agent"),
+            ("collaborationwait_agent_x", "collaborationwait_agent_x"),
+            ("Bash", "Bash"),
+        ] {
+            assert_eq!(tool_name(&serde_json::json!({ "tool_name": hooked })), tool);
+        }
+    }
+
+    #[test]
+    fn a_tasks_name_is_said_in_words() {
+        assert_eq!(
+            task_label("/root/wait_60_seconds").as_deref(),
+            Some("Wait 60 seconds")
+        );
+        assert_eq!(
+            task_label("fix-the-build").as_deref(),
+            Some("Fix the build")
+        );
+        assert_eq!(task_label("/root/").as_deref(), Some("Root"));
+        assert_eq!(task_label("/"), None);
+        assert_eq!(task_label("__"), None);
     }
 }

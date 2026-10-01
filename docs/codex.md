@@ -75,14 +75,15 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 - **The ChatGPT desktop app** runs Codex too (its bundled `codex app-server`, reading the same `~/.codex`), so the same hooks record its sessions, with nothing more to set up. A session the app started (its rollout's `originator` is "Codex Desktop") opens back in the app (`codex://threads/<id>`), as a Claude app session opens in the Claude app; the CLI's open in a terminal. The viewer also reads names Codex gives sessions (`session_index.jsonl`) as they appear, since the app names a session after its first turn has ended.
 - **Plans:** Codex's plan tool is off by default, so `install codex` turns it on (`[tools.update_plan] enabled = true`, marked as Agent Graph's), unless your settings already say either way; uninstalling turns it off again only if Agent Graph turned it on.
 - **"This session"** for the `$agent-graph` skill: the session whose shell it runs in, found as a child session would find its parent (so `CODEX_THREAD_ID`/`CODEX_SESSION_ID` in Codex), then `CLAUDE_CODE_SESSION_ID`.
-- **Names:** a subagent is shown by its Codex nickname ("explorer Noether"), from its rollout, where Claude Code's show their id.
+- **Names:** a subagent is shown by its Codex nickname ("explorer Noether"; just "Peirce" for Codex's "default" type, which says nothing), from its rollout, where Claude Code's show their id.
+- **Multi-agent v2**, which the ChatGPT app uses: its tools reach hooks as `collaborationspawn_agent` and so on (matched, and read without the namespace). A spawn names a task (`wait_60_seconds`), shown as the agent's purpose in words ("Wait 60 seconds"), as the app shows it; it returns no thread id, so the request is left open and the child is bound to it when it starts.
 - Messages that say "run `agent-graph install claude-code`" mention Codex too. The viewer already has Codex's name and mark.
 - The README, `docs/design.md` (§5.4) and `docs/cli-help.json`; the site's FAQ ("Codex is coming") and the install tabs. The site's WebAssembly is rebuilt, since the reducer changes.
 
 ### Not now
 
 - **Codex cloud** (chatgpt.com/codex): nothing in Codex's source says whether it runs a project's hooks, or trusts them, and there's no variable that marks a cloud run. Planned in [codex-cloud.md](codex-cloud.md).
-- **Multi-agent v2** (off by default): its `spawn_agent` returns no id, so the child is bound by guess (by its SubagentStart), as Claude Code's are when they have to be. Its `wait_agent` names no targets, so no wait is shown.
+- **Multi-agent v2's waits:** its `wait_agent` names no agents, so no wait is shown.
 - **The IDE extension** runs the same core, so it should fire the same hooks; untested. (The ChatGPT desktop app is tested: see Testing.)
 - Windows.
 

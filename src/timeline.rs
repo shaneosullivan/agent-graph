@@ -559,15 +559,9 @@ pub fn name(graph: &Graph, id: &str) -> String {
 }
 
 fn node_name(node: &Node) -> String {
-    let local = node.id.rsplit(['/', ':']).next().unwrap_or(&node.id);
     match node.kind {
         NodeKind::Session => "Session".to_string(),
-        NodeKind::Agent => format!(
-            "{} {}",
-            node.agent_type.as_deref().unwrap_or("Agent"),
-            // Its name, where its agent gives it one (Codex's nicknames).
-            node.title.as_deref().unwrap_or_else(|| short(local))
-        ),
+        NodeKind::Agent => crate::render::agent_name(node, "Agent"),
     }
 }
 

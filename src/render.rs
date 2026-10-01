@@ -134,14 +134,7 @@ fn node_line(graph: &Graph, node: &Node) -> Line {
                 None => vec![id],
             }
         }
-        NodeKind::Agent => vec![span(
-            format!(
-                "{} {}",
-                node.agent_type.as_deref().unwrap_or("agent"),
-                node.title.as_deref().unwrap_or_else(|| short(local_id))
-            ),
-            Tone::Strong,
-        )],
+        NodeKind::Agent => vec![span(agent_name(node, "agent"), Tone::Strong)],
     });
 
     let mut state = vec![span(
@@ -239,11 +232,23 @@ pub fn name(node: &Node) -> String {
             .or_else(|| node.purpose.clone())
             .or_else(|| folder(node))
             .unwrap_or_else(|| format!("session {}", short(local))),
-        // Its name, where its agent gives it one (Codex's nicknames), else its id.
-        NodeKind::Agent => format!(
+        NodeKind::Agent => agent_name(node, "agent"),
+    }
+}
+
+/// What an agent's called: its type and its name where its agent gives it
+/// one (Codex's nicknames), else its id: "Explore a91d0160", "explorer
+/// Noether". Codex's "default" type says nothing, so a named one of that
+/// type is just its name ("Peirce"). `untyped` stands in for no type.
+pub fn agent_name(node: &Node, untyped: &str) -> String {
+    let local = node.id.rsplit(['/', ':']).next().unwrap_or(&node.id);
+    let kind = node.agent_type.as_deref().filter(|t| !t.is_empty());
+    match (kind, node.title.as_deref()) {
+        (None | Some("default"), Some(name)) => name.to_string(),
+        (kind, name) => format!(
             "{} {}",
-            node.agent_type.as_deref().unwrap_or("agent"),
-            node.title.as_deref().unwrap_or_else(|| short(local))
+            kind.unwrap_or(untyped),
+            name.unwrap_or_else(|| short(local))
         ),
     }
 }

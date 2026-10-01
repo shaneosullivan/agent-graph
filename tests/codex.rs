@@ -192,3 +192,29 @@ fn a_session_reopens_in_codex_and_an_open_one_as_a_copy() {
     // A subagent isn't a session to open.
     assert!(resume(&after(25).nodes[AGENT]).is_none());
 }
+
+/// Multi-agent v2, which the ChatGPT app uses: its tools reach hooks with
+/// their namespace run in (`collaborationspawn_agent`), the spawn names a
+/// task rather than a thread, and the child is bound to it when it starts.
+/// (Payloads from the ChatGPT app's own Codex, 0.159.2.)
+#[test]
+fn multi_agent_v2_tasks_are_named_and_bound() {
+    let session = "codex:01a0f6bd-7f82-7ba2-b969-290928dc81f6";
+    let agent = format!("{session}/01a0f6bd-814e-7763-9ad3-a1ac0fc9966f");
+    let payloads = fixture("codex/multi-agent-v2.jsonl");
+    let g = reduce(translate_as("codex", &payloads[..5], Capture::default()));
+    let child = &g.nodes[&agent];
+    assert_eq!(child.parent.as_deref(), Some(session));
+    assert_eq!(child.purpose.as_deref(), Some("Wait 60 seconds"));
+    assert_eq!(child.background, Some(true));
+    assert!(child.spawned_by.is_some(), "bound to its spawn");
+    let g = reduce(translate_as("codex", &payloads, Capture::default()));
+    assert_eq!(g.nodes[&agent].state, State::Completed);
+    assert_eq!(g.nodes[session].state, State::Idle);
+    // Not the prompt it was given.
+    let text: String = translate_as("codex", &payloads, Capture::default())
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap())
+        .collect();
+    assert!(!text.contains("SUBTASK wait"));
+}
