@@ -387,7 +387,7 @@ struct CodexHook {
 /// plan, and questions for you. The multi-agent tools reach hooks with
 /// their namespace run into their names (`multi_agent_v1wait_agent`, and in
 /// v2, which the ChatGPT app uses, `collaborationspawn_agent`).
-const CODEX_TOOLS: &str = "^(Bash|apply_patch|update_plan|request_user_input|(multi_agent_v1|collaboration)?(spawn_agent|wait_agent))$";
+const CODEX_TOOLS: &str = "^(Bash|apply_patch|update_plan|request_user_input|(multi_agent_v1|collaboration)?(spawn_agent|wait_agent|followup_task|send_message|send_input|resume_agent))$";
 
 /// The Codex hooks Agent Graph needs. SessionStart is synchronous, so it's
 /// recorded before anything else in the session, and so is SessionEnd,

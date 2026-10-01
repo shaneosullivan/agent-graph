@@ -254,6 +254,18 @@ fn pre_tool_use(
             };
             drafts.push(status(node, State::InputRequired, Some(summary)));
         }
+        // More work for an agent that's already there (it may have
+        // finished): it's working again. Codex fires no hook in it for that.
+        "followup_task" | "send_message" | "send_input" | "resume_agent" => {
+            let target = str_at(tool_input, &["target"]).or_else(|| str_at(tool_input, &["id"]));
+            if let Some(thread) = target.and_then(|t| agent_thread(input, session, t)) {
+                drafts.push(status(
+                    &node_id(session, Some(&thread)),
+                    State::Working,
+                    None,
+                ));
+            }
+        }
         name if is_wait(name) => {
             for (i, target) in wait_targets(tool_input).enumerate() {
                 drafts.push(Draft::new(
@@ -355,6 +367,59 @@ fn post_tool_use(input: &Value, session: &str, node: &str, drafts: &mut Vec<Draf
         }
         _ => {}
     }
+}
+
+/// The thread of the agent `target` names: v1 names it by its thread id;
+/// v2 by its task's path (`/root/wait_60_seconds`), or relative to the
+/// session's (`wait_60_seconds`), which only the agent's rollout records,
+/// so the session's recent rollouts are looked through for it.
+fn agent_thread(input: &Value, session: &str, target: &str) -> Option<String> {
+    if !target.contains('/') && safe_id(target) && target.len() >= 32 && target.contains('-') {
+        return Some(target.to_string());
+    }
+    let rollout = std::path::Path::new(str_at(input, &["transcript_path"])?);
+    // sessions/YYYY/MM/DD/rollout-….jsonl
+    let sessions = rollout.parent()?.parent()?.parent()?.parent()?;
+    let wanted = |path: &str| path == target || path.ends_with(&format!("/{target}"));
+    recent_rollouts(sessions, 7)
+        .into_iter()
+        .filter_map(|path| session_meta(&path))
+        .filter(|meta| str_at(meta, &["session_id"]) == Some(session))
+        .find(|meta| str_at(meta, &["agent_path"]).is_some_and(wanted))
+        .and_then(|meta| {
+            str_at(&meta, &["id"])
+                .filter(|id| safe_id(id))
+                .map(String::from)
+        })
+}
+
+/// The rollouts in Codex's `sessions` folder from its last `days` days'
+/// folders (`YYYY/MM/DD`), newest first.
+fn recent_rollouts(sessions: &std::path::Path, days: usize) -> Vec<std::path::PathBuf> {
+    let children = |dir: &std::path::Path| -> Vec<std::path::PathBuf> {
+        let mut found: Vec<_> = std::fs::read_dir(dir)
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        found.sort();
+        found.reverse();
+        found
+    };
+    let day_dirs = children(sessions)
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .flat_map(|year| children(&year))
+        .filter(|p| p.is_dir())
+        .flat_map(|month| children(&month))
+        .filter(|p| p.is_dir())
+        .take(days);
+    day_dirs
+        .flat_map(|day| children(&day))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+        })
+        .collect()
 }
 
 /// `wait_agent` (by `tool_name`, without its namespace).
@@ -562,6 +627,47 @@ mod tests {
         ] {
             assert_eq!(tool_name(&serde_json::json!({ "tool_name": hooked })), tool);
         }
+    }
+
+    #[test]
+    fn a_followup_finds_its_agent_by_its_tasks_path() {
+        let codex = tempfile::tempdir().unwrap();
+        let day = codex.path().join("sessions/2026/10/01");
+        std::fs::create_dir_all(&day).unwrap();
+        let meta = |id: &str, session: &str, path: Option<&str>| {
+            let mut payload = serde_json::json!({"id": id, "session_id": session});
+            if let Some(path) = path {
+                payload["agent_path"] = path.into();
+            }
+            let line = serde_json::json!({"type": "session_meta", "payload": payload});
+            std::fs::write(
+                day.join(format!("rollout-2026-10-01T10-00-00-{id}.jsonl")),
+                format!("{line}\n"),
+            )
+            .unwrap();
+        };
+        meta("root-1", "root-1", None);
+        meta("child-1", "root-1", Some("/root/wait_60_seconds"));
+        meta("child-2", "root-1", Some("/root/wait_120_seconds"));
+        meta("other-1", "root-2", Some("/root/wait_60_seconds"));
+        let input = serde_json::json!({
+            "transcript_path": day.join("rollout-2026-10-01T10-00-00-root-1.jsonl"),
+        });
+        assert_eq!(
+            agent_thread(&input, "root-1", "wait_60_seconds").as_deref(),
+            Some("child-1")
+        );
+        assert_eq!(
+            agent_thread(&input, "root-1", "/root/wait_120_seconds").as_deref(),
+            Some("child-2")
+        );
+        assert_eq!(agent_thread(&input, "root-1", "nobody"), None);
+        // v1 names the thread itself.
+        let thread = "01a0f6ba-f227-72d1-896d-c966f41ac39c";
+        assert_eq!(
+            agent_thread(&serde_json::json!({}), "root-1", thread).as_deref(),
+            Some(thread)
+        );
     }
 
     #[test]
