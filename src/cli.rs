@@ -579,13 +579,68 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                 );
             }
             offer_autostart(opts.yes);
+            // Last, so nothing scrolls it out of sight.
+            println!("\n{}", restart_notice(true, chatgpt_app(), color_out()));
         } else {
             println!("Installed.");
         }
     } else {
         println!("Uninstalled.");
+        if client == Client::Codex && scope != Scope::Local {
+            println!("\n{}", restart_notice(false, chatgpt_app(), color_out()));
+        }
     }
     Ok(())
+}
+
+/// Whether the ChatGPT desktop app is installed (it runs Codex too).
+fn chatgpt_app() -> bool {
+    cfg!(target_os = "macos") && paths::chatgpt_apps().iter().any(|a| a.is_dir())
+}
+
+/// Whether what's printed can be in colour: a terminal, without `NO_COLOR`.
+fn color_out() -> bool {
+    io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+}
+
+/// What to do after changing Codex's hooks, in a box (bold yellow, with
+/// `color`), so it isn't missed: Codex reads its hooks only when it starts,
+/// so the ChatGPT app (if `chatgpt`) and any Codex already running in a
+/// terminal have to be restarted for the change to take.
+fn restart_notice(installed: bool, chatgpt: bool, color: bool) -> String {
+    let mut lines = vec![if chatgpt {
+        "RESTART THE CHATGPT APP NOW".to_string()
+    } else {
+        "RESTART CODEX NOW".to_string()
+    }];
+    lines.push(String::new());
+    lines.push("Codex only reads its hooks when it starts, so until then".into());
+    lines.push(if installed {
+        "its sessions aren't recorded.".into()
+    } else {
+        "it keeps running Agent Graph's.".into()
+    });
+    lines.push(String::new());
+    if chatgpt {
+        lines.push("- ChatGPT: quit it (Cmd+Q, not just closing its window),".into());
+        lines.push("  then open it again.".into());
+    }
+    lines.push("- Codex in a terminal: exit any that's running, and start".into());
+    lines.push("  it again (`codex resume` picks up where you were).".into());
+    let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let (on, off) = if color {
+        ("\x1b[1;33m", "\x1b[0m")
+    } else {
+        ("", "")
+    };
+    let rule = "━".repeat(width + 4);
+    let mut out = format!("{on}┏{rule}┓{off}\n");
+    for line in &lines {
+        let pad = " ".repeat(width - line.chars().count());
+        out.push_str(&format!("{on}┃  {line}{pad}  ┃{off}\n"));
+    }
+    out.push_str(&format!("{on}┗{rule}┛{off}"));
+    out
 }
 
 /// After installing: offers to share live whenever this computer's logged
@@ -1413,6 +1468,23 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+
+    #[test]
+    fn the_restart_notice_is_boxed_and_says_what_to_restart() {
+        let plain = restart_notice(true, true, false);
+        assert!(plain.starts_with("┏━"), "{plain}");
+        assert!(plain.contains("RESTART THE CHATGPT APP NOW"), "{plain}");
+        assert!(plain.contains("Cmd+Q"), "{plain}");
+        assert!(!plain.contains('\x1b'), "no colour unless asked: {plain}");
+        // Every line of the box is as wide as the rest.
+        let widths: Vec<usize> = plain.lines().map(|l| l.chars().count()).collect();
+        assert!(widths.iter().all(|w| *w == widths[0]), "{plain}");
+        let terminal_only = restart_notice(false, false, false);
+        assert!(terminal_only.contains("RESTART CODEX NOW"));
+        assert!(!terminal_only.contains("ChatGPT"));
+        assert!(terminal_only.contains("keeps running Agent Graph's"));
+        assert!(restart_notice(true, true, true).starts_with("\x1b[1;33m┏"));
+    }
 
     fn text(value: &Value) -> &str {
         value.as_str().unwrap_or("").trim()
