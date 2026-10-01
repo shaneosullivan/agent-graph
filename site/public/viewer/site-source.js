@@ -117,23 +117,65 @@
   /** Where each share is, by its id, for labelling its sessions. */
   const hostOf = id => shares.find(s => s.id === id)?.host || "";
 
+  /**
+   * Whether share `id` was a cloud instance that's gone: Codex's and Claude
+   * Code's cloud machines are thrown away when their task's done, without a
+   * word (no session end), and their share stops saying it's alive.
+   */
+  function goneFromCloud(id) {
+    const share = shares.find(s => s.id === id);
+    return Boolean(share && !share.live && / cloud$/.test(share.host || ""));
+  }
+
+  /** What's still open in a session whose cloud machine is gone, ended. */
+  const ENDED = new Set(["completed", "failed", "canceled", "input_required"]);
+  function ended(node, isSession) {
+    if (!node || ENDED.has(node.state)) return node;
+    return {
+      ...node,
+      state: isSession ? "completed" : "canceled",
+      busy: false,
+      stuck: null,
+    };
+  }
+
   // Every session of every share, in the reply from `log`: its own, from
   // the log; the rest, from their shares' summaries. Each says where it is.
+  // A session waiting for your reply still is, even once its cloud machine
+  // is gone: the rest of it has ended.
   function withOthers(result, log) {
     if (!config.shares || !result || !result.sessions) return result;
+    const gone = goneFromCloud(log.id);
     const sessions = {};
     for (const [id, s] of Object.entries(result.sessions))
-      sessions[id] = {...s, host: hostOf(log.id)};
+      sessions[id] = {
+        ...(gone && !s.needs_you ? ended(s, true) : s),
+        host: hostOf(log.id),
+      };
+    let nodes = result.nodes;
+    if (gone && nodes) {
+      nodes = {};
+      for (const [id, n] of Object.entries(result.nodes)) {
+        const session = id.split("/")[0];
+        nodes[id] = result.sessions[session]?.needs_you
+          ? n
+          : ended(n, id === session);
+      }
+    }
     const roots = [...(result.roots || [])];
     for (const share of shares) {
       if (share.id === log.id) continue;
+      const shareGone = goneFromCloud(share.id);
       for (const [id, s] of Object.entries(share.summary || {})) {
         if (sessions[id]) continue;
-        sessions[id] = {...s, host: share.host};
+        sessions[id] = {
+          ...(shareGone && !s.needs_you ? ended(s, true) : s),
+          host: share.host,
+        };
         roots.push(id);
       }
     }
-    return {...result, sessions, roots};
+    return {...result, sessions, nodes, roots};
   }
 
   // A log being streamed is judged against the clock ("stale?", "5m ago").

@@ -201,6 +201,12 @@ impl Adapter for Codex {
             )),
         }
 
+        // Before the turn's status: any other event on the session would
+        // take it back to working.
+        if matches!(hook, "Stop" | "Interrupt") {
+            drafts.splice(0..0, unstarted_agents(session, &session_node));
+        }
+
         Ok(Translation {
             file_key: file_key(PROVIDER, session),
             drafts,
@@ -546,21 +552,85 @@ const EVENTS_TAIL: u64 = 64 * 1024;
 /// The question the session asked (`request_user_input`), if it's the last
 /// thing recorded of the session's own node: nothing since has answered it.
 fn open_question(session: &str, node: &str) -> Option<String> {
-    let root = crate::paths::data_dir()?;
-    let file =
-        crate::paths::events_dir(&root).join(format!("{}.jsonl", file_key(PROVIDER, session)));
-    let tail = read_file(&file, Some(EVENTS_TAIL))?;
-    let last = tail
-        .lines()
+    let last = recorded(session)
+        .into_iter()
         .rev()
-        .filter(|line| line.contains(node))
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find(|event| str_at(event, &["node"]) == Some(node))?;
     let summary = str_at(&last, &["data", "summary"])?;
     (str_at(&last, &["type"]) == Some("status")
         && str_at(&last, &["data", "state"]) == Some("input_required")
         && summary.starts_with("Asks"))
     .then(|| summary.to_string())
+}
+
+/// The session's recent events, as recorded (its events file's last
+/// `EVENTS_TAIL` bytes), oldest first.
+fn recorded(session: &str) -> Vec<Value> {
+    let Some(root) = crate::paths::data_dir() else {
+        return Vec::new();
+    };
+    let file =
+        crate::paths::events_dir(&root).join(format!("{}.jsonl", file_key(PROVIDER, session)));
+    read_file(&file, Some(EVENTS_TAIL))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect()
+}
+
+/// Agents the session asked for that never started, when its turn ends.
+/// Codex runs no PostToolUse hook for a tool call that fails (a
+/// `spawn_agent` with a model that doesn't exist, say), so nothing else
+/// says so: a request with no reply (v1's names the agent) and no agent
+/// started for its task (v2's) never started. Each becomes an agent node of
+/// its own, failed, so it's seen.
+fn unstarted_agents(session: &str, session_node: &str) -> Vec<Draft> {
+    let events = recorded(session);
+    let of_type = |kind: &'static str| {
+        events
+            .iter()
+            .filter(move |e| str_at(e, &["type"]) == Some(kind))
+    };
+    let returned: std::collections::BTreeSet<&str> = of_type("spawn.returned")
+        .filter_map(|e| str_at(e, &["data", "call_id"]))
+        .collect();
+    // The tasks of the agents that started, one per agent.
+    let mut started: Vec<Option<&str>> = of_type("agent.spawned")
+        .map(|e| str_at(e, &["data", "purpose"]))
+        .collect();
+    let mut drafts = Vec::new();
+    for request in of_type("spawn.requested").filter(|e| {
+        str_at(e, &["node"]) == Some(session_node) && str_at(e, &["data", "kind"]) == Some("agent")
+    }) {
+        let Some(call_id) = str_at(request, &["data", "call_id"]).filter(|c| safe_id(c)) else {
+            continue;
+        };
+        if returned.contains(call_id) {
+            continue;
+        }
+        let purpose = str_at(request, &["data", "purpose"]);
+        if let Some(at) = started.iter().position(|task| *task == purpose) {
+            started.remove(at);
+            continue;
+        }
+        let agent = node_id(session, Some(call_id));
+        drafts.push(Draft::new(
+            session_node,
+            Payload::SpawnReturned(SpawnReturned {
+                call_id: call_id.to_string(),
+                child: Some(agent.clone()),
+                outcome: Some("failed".into()),
+            }),
+        ));
+        drafts.push(Draft::new(
+            &agent,
+            Payload::AgentFinished(AgentFinished {
+                status: FinishStatus::Failed,
+                summary: Some("Couldn't start".into()),
+            }),
+        ));
+    }
+    drafts
 }
 
 /// How much of the end of a rollout to read for the turn that just ended.

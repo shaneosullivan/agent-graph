@@ -114,9 +114,10 @@ const bytes = text => Buffer.byteLength(text);
  * `after` of every content read made, the workers started, and what the
  * page itself fetched or ran WebAssembly for (`page`).
  */
-function load(t, reads) {
+function load(t, reads, shares) {
+  const config = {id: "abc", live: true, ...(shares ? {shares: true} : {})};
   const dom = new JSDOM(
-    `<script id="agent-graph-config" type="application/json">{"id":"abc","live":true}</script><div id="view"></div>`,
+    `<script id="agent-graph-config" type="application/json">${JSON.stringify(config)}</script><div id="view"></div>`,
     {url: "https://example.test/l/abc", runScripts: "outside-only"},
   );
   const {window} = dom;
@@ -124,6 +125,7 @@ function load(t, reads) {
   const afters = [];
   const queue = [...reads];
   const fetch = async url => {
+    if (url === "/api/watch/shares") return Response.json({shares});
     if (url === "/viewer/agent_graph.wasm")
       return {arrayBuffer: async () => wasm};
     const after = new URL(url, "https://example.test").searchParams.get(
@@ -301,6 +303,53 @@ test("the log is read and reduced in a worker, and the graph now brings its time
   await assert.rejects(src.graph("nope", "x:a"), /404/);
   assert.equal((await src.info()).where, null);
   assert.deepEqual(page, {fetches: [], wasm: 0}, "none of it in the page");
+});
+
+// At /watch: a cloud machine is thrown away when its task's done, with no
+// session end, and its share stops saying it's alive. Its sessions have
+// ended, but for one waiting on your reply.
+test("the sessions of a cloud share that's gone have ended, but for one that needs you", async t => {
+  const text =
+    line(1, "x:a", "session.started") +
+    line(2, "x:a/b", "agent.spawned") +
+    line(3, "x:a", "status", {state: "working"});
+  const summary = (id, state, needs_you = null) => ({
+    [id]: {id, kind: "session", provider: "x", state, needs_you, busy: true},
+  });
+  const shares = [
+    {id: "abc", host: "Codex cloud", at: 0, live: false, summary: {}},
+    {
+      id: "def",
+      host: "Codex cloud",
+      at: 0,
+      live: false,
+      summary: {
+        ...summary("x:c", "idle"),
+        ...summary("x:d", "input_required", {id: "x:d"}),
+      },
+    },
+    {
+      id: "ghi",
+      host: "MacBookPro",
+      at: 0,
+      live: false,
+      summary: summary("x:e", "working"),
+    },
+  ];
+  const {window} = load(t, [{text, first: 0}], shares);
+  const src = await until(() => window.agentGraphSource);
+  const g = await src.graph(null, "x:a");
+  assert.equal(g.sessions["x:a"].state, "completed");
+  assert.equal(g.nodes["x:a"].state, "completed");
+  assert.equal(g.nodes["x:a/b"].state, "canceled");
+  assert.equal(g.sessions["x:c"].state, "completed");
+  assert.equal(g.sessions["x:c"].busy, false);
+  assert.equal(g.sessions["x:d"].state, "input_required", "still needs you");
+  assert.equal(
+    g.sessions["x:e"].state,
+    "working",
+    "a computer that's stopped sharing may still be running it",
+  );
 });
 
 test("a log that's a file of its own (an example) is read whole, once, from its url", async () => {

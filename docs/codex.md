@@ -38,6 +38,7 @@ Node ids: `codex:<session_id>` for a session, and `codex:<session_id>/<agent_id>
 | UserPromptSubmit | `status: working` for the node it's in (session, or subagent given more work), with the session's name |
 | Stop | `status: idle`, with the session's name (the TUI names it during the first turn); `status: input_required` again if the session's last event was a question nobody's answered (Codex's cloud ends the turn on a question and waits for your reply) |
 | Interrupt | `status: idle` |
+| Stop or Interrupt, after a `spawn_agent` that failed | Codex runs no PostToolUse for a failed tool call, so a request with no reply and no agent started for its task never started: `spawn.returned` naming a node of its own (`codex:<session>/<call_id>`), and `agent.finished: failed`, "Couldn't start" |
 | SubagentStart | `agent.spawned` (`agent_type`), under its parent: the session, or, for a nested agent, the agent its rollout names |
 | SubagentStop | `agent.finished: completed` (with its last message as the summary only when bodies are captured) |
 | PostToolUse `wait_agent` naming an agent `errored` | `agent.finished: failed`, with Codex's error as the summary (an agent whose run broke; one that only reports a problem has completed) |

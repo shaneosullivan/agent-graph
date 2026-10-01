@@ -1740,3 +1740,64 @@ fn a_codex_turn_that_ends_on_a_question_still_needs_you() {
     }
     assert_eq!(last_status(home.path())["state"], "idle");
 }
+
+/// A Codex cloud task, as it was recorded (`codex/cloud-events.jsonl`): two
+/// of its three `spawn_agent` calls failed (a model that doesn't exist), so
+/// Codex ran no PostToolUse for them and no agent started. When the turn
+/// ends on its question, they're failed agents of their own, and the
+/// session still needs you.
+#[test]
+fn codex_agents_that_never_started_fail_when_the_turn_ends() {
+    use agent_graph::event::{Envelope, State};
+    let home = tempfile::tempdir().unwrap();
+    let session = "01a0f986-0198-7c31-8262-0d8074494407";
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let file = events.join(format!("codex-{session}.jsonl"));
+    std::fs::copy("tests/fixtures/codex/cloud-events.jsonl", &file).unwrap();
+    let stop = serde_json::json!({
+        "session_id": session,
+        "hook_event_name": "Stop",
+        "turn_id": "01a0f986-2000-7000-8000-000000000001",
+        "cwd": "/workspace/app",
+        "transcript_path": "/opt/codex/sessions/none.jsonl",
+    });
+    emit(
+        home.path(),
+        &["--provider", "codex"],
+        &stop.to_string(),
+        &[],
+    );
+
+    let recorded: Vec<Envelope> = std::fs::read_to_string(&file)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let g = common::reduce(recorded);
+    let root = format!("codex:{session}");
+    assert_eq!(g.nodes[&root].state, State::InputRequired);
+    let agents: Vec<_> = g
+        .nodes
+        .values()
+        .filter(|n| n.parent.as_deref() == Some(&root))
+        .collect();
+    assert_eq!(agents.len(), 3, "Bacon, and the two that never started");
+    let failed: Vec<_> = agents.iter().filter(|n| n.state == State::Failed).collect();
+    assert_eq!(failed.len(), 2);
+    for agent in &failed {
+        assert_eq!(agent.purpose.as_deref(), Some("Invalid model hello"));
+        assert_eq!(agent.summary.as_deref(), Some("Couldn't start"));
+    }
+    assert!(g.nodes[&root].spawns.iter().all(|s| s.child.is_some()));
+
+    // A second turn's end changes nothing.
+    emit(
+        home.path(),
+        &["--provider", "codex"],
+        &stop.to_string(),
+        &[],
+    );
+    let again = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(again.matches("\"spawn.returned\"").count(), 2);
+}
