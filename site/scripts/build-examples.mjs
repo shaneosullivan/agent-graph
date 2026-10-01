@@ -3,7 +3,8 @@
 // the viewer, and lib/examples.json, which lists them. Most are sessions
 // from ../examples/logs (see its README), put together to show one thing
 // each; "large" and "team" are made up here (`madeUp`), to show a big
-// graph and many sessions at once. The output's committed,
+// graph and many sessions at once; and some are real logs, captured from
+// ../examples/captured (`captured`), with personal paths taken out. The output's committed,
 // so building the site never needs this; run it after changing them:
 //
 //   npm run build-examples
@@ -15,6 +16,7 @@ import {fileURLToPath} from "node:url";
 const site = join(dirname(fileURLToPath(import.meta.url)), "..");
 const events = join(site, "../examples/logs/events");
 const out = join(site, "public/examples");
+const captured = join(site, "../examples/captured");
 
 /** Every example: what it shows, and the example sessions (by number) or generator it's made of. */
 const EXAMPLES = [
@@ -98,6 +100,16 @@ const EXAMPLES = [
     open: {madeUp: 0},
     view: "graph",
     zoomOut: true,
+  },
+  {
+    slug: "claude-invoking-codex",
+    title: "Claude invoking Codex",
+    description:
+      "A real Claude Code session, building Agent Graph's Codex support, that started ten Codex sessions from its shell to test it: each under it, with their own subagents, plans, approvals and questions, and the times each waited for you.",
+    tags: ["Real session", "Claude Code", "Codex"],
+    captured: "claude-invoking-codex.jsonl",
+    open: {id: "claude-code:89b66358-c28d-45cc-b61f-f837da338228"},
+    view: "graph",
   },
   {
     slug: "everything",
@@ -464,6 +476,8 @@ const listed = [];
 for (const example of EXAMPLES) {
   let text;
   if (example.generate) text = example.generate();
+  else if (example.captured)
+    text = readFileSync(join(captured, example.captured), "utf8");
   else {
     const numbers =
       example.sessions === "all" ? [...files.keys()] : example.sessions;
@@ -481,9 +495,10 @@ for (const example of EXAMPLES) {
   const {slug, title, description, tags, view, zoomOut} = example;
   // What it opens on: a session of its own, by number, or a made-up one's id.
   // (A made-up one's named by its number: `{madeUp: 0}`.)
+  // (A captured one's named by its id: `{id: …}`.)
   const open =
     example.open && typeof example.open === "object"
-      ? madeUpId({num: example.open.madeUp})
+      ? (example.open.id ?? madeUpId({num: example.open.madeUp}))
       : example.open && fileSessionId(files.get(example.open));
   // The link that opens it: in the view that shows it best, on that session.
   const query = new URLSearchParams({

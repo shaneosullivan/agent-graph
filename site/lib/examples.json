@@ -80,6 +80,17 @@
     "href": "/examples/team?view=graph&zoom=out#claude-code%3Ae0000100-7a9e-4c1d-9b2f-000000000100"
   },
   {
+    "slug": "claude-invoking-codex",
+    "title": "Claude invoking Codex",
+    "description": "A real Claude Code session, building Agent Graph's Codex support, that started ten Codex sessions from its shell to test it: each under it, with their own subagents, plans, approvals and questions, and the times each waited for you.",
+    "tags": [
+      "Real session",
+      "Claude Code",
+      "Codex"
+    ],
+    "href": "/examples/claude-invoking-codex?view=graph#claude-code%3A89b66358-c28d-45cc-b61f-f837da338228"
+  },
+  {
     "slug": "everything",
     "title": "A busy day",
     "description": "Every example at once, about thirty-five sessions: the list by folder, deadlocks and scripts, and everything the busy team was doing.",
