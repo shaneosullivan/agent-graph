@@ -79,6 +79,16 @@ impl Adapter for Codex {
                 Some(_) => status(&node, State::Working, None),
                 None => titled(&session_node, session, State::Working),
             }),
+            // A Plan-mode turn that ended with a plan waits for you to
+            // approve it ("Implement this plan?"), which no hook says.
+            "Stop" if plan_proposed(input) => drafts.push(Draft::new(
+                &session_node,
+                Payload::Status(Status {
+                    state: State::InputRequired,
+                    summary: Some("Plan ready for your review".to_string()),
+                    title: title_of(session),
+                }),
+            )),
             "Stop" | "Interrupt" => drafts.push(titled(&session_node, session, State::Idle)),
             "SubagentStart" => {
                 let agent = agent_id.ok_or("SubagentStart has no agent_id")?;
@@ -479,6 +489,70 @@ fn titled(node: &str, session: &str, state: State) -> Draft {
     )
 }
 
+/// How much of the end of a rollout to read for the turn that just ended.
+const TURN_TAIL: u64 = 512 * 1024;
+
+/// Whether the turn a `Stop` ends proposed a plan: in Plan mode, Codex then
+/// asks whether to implement it. Its rollout records the plan as an item
+/// of the turn (`{"type": "Plan", …}`); the hook's own last message has it
+/// taken out. The rollout may not have the turn on disk yet when the hook
+/// runs, so it's read again, for up to 3 s, till it has the plan, the
+/// turn's end, or the turn's start in another mode. (The hook runs in the
+/// background: Codex doesn't wait for it.)
+fn plan_proposed(input: &Value) -> bool {
+    let (Some(path), Some(turn)) = (
+        str_at(input, &["transcript_path"]),
+        str_at(input, &["turn_id"]),
+    ) else {
+        return false;
+    };
+    for _ in 0..30 {
+        let Some(tail) = read_file(std::path::Path::new(path), Some(TURN_TAIL)) else {
+            return false;
+        };
+        if plan_in(&tail, turn) {
+            return true;
+        }
+        // Done: the turn's not in Plan mode, or it ended (its end is on
+        // disk, so its plan would be too). Codex may not have written even
+        // the turn's start yet: then it's read again.
+        let mode = turn_entry(&tail, turn, "turn_context")
+            .map(|c| str_at(&c, &["payload", "collaboration_mode", "mode"]) == Some("plan"));
+        if mode == Some(false) || turn_entry(&tail, turn, "task_complete").is_some() {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+/// The rollout entry of `kind` (an entry's own type, or its payload's)
+/// for turn `turn`.
+fn turn_entry(rollout: &str, turn: &str, kind: &str) -> Option<Value> {
+    rollout
+        .lines()
+        .filter(|line| line.contains(turn) && line.contains(kind))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| {
+            let own = str_at(entry, &["type"]) == Some(kind);
+            let payload = str_at(entry, &["payload", "type"]) == Some(kind);
+            (own || payload) && str_at(entry, &["payload", "turn_id"]) == Some(turn)
+        })
+}
+
+/// Whether rollout text has a plan item completed in turn `turn`.
+fn plan_in(rollout: &str, turn: &str) -> bool {
+    rollout
+        .lines()
+        .filter(|line| line.contains("\"Plan\"") && line.contains(turn))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|entry| {
+            str_at(&entry, &["payload", "type"]) == Some("item_completed")
+                && str_at(&entry, &["payload", "turn_id"]) == Some(turn)
+                && str_at(&entry, &["payload", "item", "type"]) == Some("Plan")
+        })
+}
+
 /// Codex's home: `$CODEX_HOME`, or `~/.codex`.
 pub fn codex_home() -> Option<std::path::PathBuf> {
     std::env::var_os("CODEX_HOME")
@@ -668,6 +742,32 @@ mod tests {
             agent_thread(&serde_json::json!({}), "root-1", thread).as_deref(),
             Some(thread)
         );
+    }
+
+    #[test]
+    fn a_plan_proposed_in_the_turn_is_found() {
+        let line = |turn: &str, kind: &str| {
+            serde_json::json!({
+                "timestamp": "2026-10-01T00:00:00Z", "type": "event_msg",
+                "payload": {"type": "item_completed", "turn_id": turn, "item": {"type": kind, "id": "i", "text": "1. Do it"}}
+            })
+            .to_string()
+        };
+        let rollout = [line("t1", "Plan"), line("t2", "AgentMessage")].join("\n");
+        assert!(plan_in(&rollout, "t1"));
+        assert!(!plan_in(&rollout, "t2"), "not this turn's");
+        assert!(!plan_in(&rollout, "t3"));
+        let context = serde_json::json!({
+            "type": "turn_context",
+            "payload": {"turn_id": "t1", "collaboration_mode": {"mode": "plan"}}
+        })
+        .to_string();
+        let mode = turn_entry(&context, "t1", "turn_context").unwrap();
+        assert_eq!(
+            str_at(&mode, &["payload", "collaboration_mode", "mode"]),
+            Some("plan")
+        );
+        assert!(turn_entry(&context, "t2", "turn_context").is_none());
     }
 
     #[test]
