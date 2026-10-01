@@ -662,17 +662,11 @@ fn offer_autostart(yes: bool) {
         );
         return;
     }
-    let logged_in = crate::account::load(&root, site).is_some();
-    let question = format!(
-        "\nAlso share your sessions live to your account at {site}/watch, to see them from anywhere, \
-         whenever you log in to this computer?{}",
-        if logged_in {
-            ""
-        } else {
-            " (You'll log in to the site first.)"
-        }
-    );
-    match confirm(&question) {
+    let account = crate::account::load(&root, site);
+    let token = std::env::var(crate::account::TOKEN_VAR).is_ok_and(|t| !t.trim().is_empty());
+    let question = autostart_question(site, account.as_ref(), token);
+    // Yes, unless you say otherwise: it's what most people want.
+    match ask(&question, true) {
         Ok(true) => {
             if let Err(e) = crate::autostart::enable(&root, site) {
                 println!("Couldn't set that up: {e}");
@@ -681,6 +675,32 @@ fn offer_autostart(yes: bool) {
         Ok(false) => println!("Not now. To later: agent-graph watch-remote --autostart"),
         Err(_) => {}
     }
+}
+
+/// The question `offer_autostart` asks, saying which login sharing will use:
+/// an API token in `AGENT_GRAPH_TOKEN` (`token`), which setting it up saves
+/// as the login (see `account::from_env`), else the one already saved, else
+/// one made in the browser first.
+fn autostart_question(
+    site: &str,
+    account: Option<&crate::account::Account>,
+    token: bool,
+) -> String {
+    let login = match (token, account) {
+        (true, _) => format!(
+            " (It'll use your API token, from {}.)",
+            crate::account::TOKEN_VAR
+        ),
+        (false, Some(account)) => match &account.email {
+            Some(email) => format!(" (As {email}, logged in already.)"),
+            None => String::new(),
+        },
+        (false, None) => " (You'll log in to the site first, in your browser.)".to_string(),
+    };
+    format!(
+        "\nAlso share your sessions live to your account at {site}/watch, to see them from anywhere, \
+         whenever you log in to this computer?{login}"
+    )
 }
 
 /// A project can ship anything, including links out of itself. For project
@@ -1088,23 +1108,35 @@ fn apply(change: &Change) -> Result<(), String> {
 }
 
 fn confirm(question: &str) -> Result<bool, String> {
+    ask(question, false)
+}
+
+/// Asks a yes-or-no `question` in the terminal; Enter alone answers
+/// `default`. (The input ending, with Ctrl+D, is a no, whatever the default.)
+fn ask(question: &str, default: bool) -> Result<bool, String> {
     if !io::stdin().is_terminal() {
         return Err(
             "not running in a terminal; re-run with --yes to confirm, or --dry-run to preview"
                 .into(),
         );
     }
-    print!("{question} [y/N] ");
+    print!("{question} {} ", if default { "[Y/n]" } else { "[y/N]" });
     io::stdout().flush().ok();
     let mut answer = String::new();
-    io::stdin()
+    let read = io::stdin()
         .lock()
         .read_line(&mut answer)
         .map_err(|e| e.to_string())?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    Ok(read > 0 && answer_is_yes(&answer, default))
+}
+
+/// Whether `answer` (a line typed at a yes-or-no question) means yes:
+/// anything starting with y; nothing at all means `default`.
+fn answer_is_yes(answer: &str, default: bool) -> bool {
+    match answer.trim().to_ascii_lowercase().chars().next() {
+        None => default,
+        Some(c) => c == 'y',
+    }
 }
 
 fn load_graph(stale_minutes: u64) -> Result<(Graph, std::path::PathBuf), String> {
@@ -1468,6 +1500,47 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+
+    #[test]
+    fn enter_alone_takes_the_default() {
+        for (answer, default, yes) in [
+            ("\n", true, true),
+            ("\n", false, false),
+            ("  \n", true, true),
+            ("y\n", false, true),
+            ("Yes\n", false, true),
+            ("yea\n", false, true),
+            ("n\n", true, false),
+            ("No\n", true, false),
+            ("maybe\n", true, false),
+        ] {
+            assert_eq!(
+                answer_is_yes(answer, default),
+                yes,
+                "{answer:?} with default {default}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_autostart_question_says_which_login_it_uses() {
+        let site = "https://agentgraph.chofter.com";
+        let account = crate::account::Account {
+            site: site.into(),
+            token: "t".into(),
+            email: Some("me@example.com".into()),
+        };
+        let token = autostart_question(site, None, true);
+        assert!(
+            token.contains("API token, from AGENT_GRAPH_TOKEN"),
+            "{token}"
+        );
+        assert!(!token.contains("browser"), "{token}");
+        // A token wins over a saved login: setting up saves it as the login.
+        assert!(autostart_question(site, Some(&account), true).contains("API token"));
+        assert!(autostart_question(site, Some(&account), false).contains("As me@example.com"));
+        assert!(autostart_question(site, None, false).contains("in your browser"));
+    }
 
     #[test]
     fn the_restart_notice_is_boxed_and_says_what_to_restart() {
