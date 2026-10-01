@@ -120,7 +120,8 @@ lanes_wait() {
       done
     fi
   done
-  wait
+  # Only the lanes: the script may have other things running (a server).
+  wait "${_lane_pids[@]}" 2>/dev/null || true
 
   # Each lane's output, in the order they were started, but the failed
   # ones last.

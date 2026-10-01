@@ -1,5 +1,6 @@
 // lib/store.ts against the Firestore emulator, directly:  npm run test:ci
-// (which runs it inside the emulator, after the API tests).
+// (which runs it inside the emulator, beside the API tests, in a project
+// of its own).
 
 import assert from "node:assert/strict";
 import {randomBytes} from "node:crypto";

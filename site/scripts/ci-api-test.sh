@@ -1,9 +1,12 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Starts the built site, waits for it to answer, and runs the API tests,
-# then lib/store.ts's own tests.
+# and beside them lib/store.ts's own tests.
 # Run it inside the Firestore emulator (`npm run test:ci`), which sets
 # FIRESTORE_EMULATOR_HOST.
 set -e
+
+# lane: the two sets of tests run side by side (scripts/steps.sh).
+source "$(dirname "$0")/../../scripts/steps.sh"
 
 # The cleanup cron refuses to run without its secret.
 export CRON_SECRET="${CRON_SECRET:-ci-only-cron-secret}"
@@ -26,6 +29,11 @@ export FREE_TRIAL_DAYS="${FREE_TRIAL_DAYS:-7}"
 # An admin, who can see /admin (tests/accounts.test.mjs makes the account).
 export ADMIN_EMAILS="${ADMIN_EMAILS:-admin@agent-graph.test}"
 
+# lib/store.ts's tests don't need the site, so they start at once. They
+# have a project of their own in the emulator: the cleanup cron they test
+# deletes idle logs, and would otherwise reach the API tests' logs.
+lane "store tests" env FIREBASE_PROJECT_ID=demo-agent-graph-store npm run test:store
+
 # A cancelled run can leave its server running (on Windows, cancelling
 # doesn't stop it): stop any, under CI.
 node scripts/stop-stale-servers.mjs
@@ -37,7 +45,7 @@ port="${PORT:-$(node -e 'const s = require("net").createServer().listen(0, "127.
 # next itself, not through npx, so stopping it stops the server.
 node node_modules/next/dist/bin/next start -p "$port" &
 server=$!
-trap 'kill $server 2>/dev/null' EXIT
+trap 'kill $server 2>/dev/null; _lanes_stop' EXIT
 
 tries=0
 until curl -sf -o /dev/null "http://localhost:$port"; do
@@ -53,5 +61,5 @@ until curl -sf -o /dev/null "http://localhost:$port"; do
   sleep 1
 done
 
-BASE_URL="http://localhost:$port" npm run test:api
-npm run test:store
+lane "API tests" env BASE_URL="http://localhost:$port" npm run test:api
+lanes_wait
