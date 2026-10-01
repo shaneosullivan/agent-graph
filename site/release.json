@@ -1,23 +1,23 @@
 {
-  "version": "0.1.8",
-  "commit": "e70d5946b9cc25fff81ab88e580215f2260be913",
+  "version": "0.1.9",
+  "commit": "bebbfe85168231a2af363324ecacde789b28ae17",
   "date": "2026-10-01",
   "files": {
     "aarch64-apple-darwin": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.8%2Fmac%2Fagent-graph-aarch64-apple-darwin.tar.gz?alt=media&token=ceaa1ce1-5f6a-49b7-9097-33ed6d304a58",
-      "sha256": "7be5b7f4f423ef888b2a9f7d6dfed48de4e132ee405986e1db0e6b2d58a80d15"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.9%2Fmac%2Fagent-graph-aarch64-apple-darwin.tar.gz?alt=media&token=bfd26b31-c97d-4a53-95a3-66c39915cfb7",
+      "sha256": "98147fde04a75e38a2a38cab9565fb8a2daeb0fc6f1f2af3c8b9ae30d412f6fd"
     },
     "x86_64-apple-darwin": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.8%2Fmac%2Fagent-graph-x86_64-apple-darwin.tar.gz?alt=media&token=3ea3d435-2d3e-41aa-8189-5ca5fd9537a3",
-      "sha256": "f3c99ba700c11734c851eec57ae98ca1e86a0baa10cc128dcdc37fc3ebddc184"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.9%2Fmac%2Fagent-graph-x86_64-apple-darwin.tar.gz?alt=media&token=264aee86-d13e-4912-bd10-3c25d77347df",
+      "sha256": "0344023b28ac1ae53643ae8e9a4c4a4a89b81aa3b48d88839b65161bd4596343"
     },
     "aarch64-unknown-linux-musl": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.8%2Flinux%2Fagent-graph-aarch64-unknown-linux-musl.tar.gz?alt=media&token=205274b2-6c07-48ae-a407-0cb8a3e4ca47",
-      "sha256": "344492c3545fdc1d1967964f56afdf8c50c1981cd79f38e770bc0f613c076f3c"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.9%2Flinux%2Fagent-graph-aarch64-unknown-linux-musl.tar.gz?alt=media&token=1429f87f-15ad-4e95-8804-fe9bec49fb47",
+      "sha256": "bb8f5a7eb8bd8712d5d1e6964620fab7b082debb8f827720bbd71a5f2c813f60"
     },
     "x86_64-unknown-linux-musl": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.8%2Flinux%2Fagent-graph-x86_64-unknown-linux-musl.tar.gz?alt=media&token=779316c9-6456-4fc2-9802-96c6a7ecbfba",
-      "sha256": "fe8033762fc979cc07dd8b3c36c304bfb01cea4fb475091ec5ff2de5629b6d0a"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.9%2Flinux%2Fagent-graph-x86_64-unknown-linux-musl.tar.gz?alt=media&token=711eebc3-c31e-42f9-8a36-c24bfda8b46a",
+      "sha256": "e807fb7d98ef1daa5241cca672c1690cc581a49ccf473092d2c67bf30d3b64f9"
     }
   }
 }
