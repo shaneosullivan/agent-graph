@@ -40,6 +40,7 @@ Node ids: `codex:<session_id>` for a session, and `codex:<session_id>/<agent_id>
 | Interrupt | `status: idle` |
 | SubagentStart | `agent.spawned` (`agent_type`), under its parent: the session, or, for a nested agent, the agent its rollout names |
 | SubagentStop | `agent.finished: completed` (with its last message as the summary only when bodies are captured) |
+| PostToolUse `wait_agent` naming an agent `errored` | `agent.finished: failed`, with Codex's error as the summary (an agent whose run broke; one that only reports a problem has completed) |
 | PermissionRequest | `status: input_required`, "Needs approval: <Codex's description of it>", or "Needs approval to run a command" (never the command itself) |
 | PreToolUse `request_user_input` | `status: input_required`, "Asks: <first question>" |
 | PreToolUse `Bash` that starts an agent | `spawn.requested` (kind session), as for Claude Code, from the same shell parser |

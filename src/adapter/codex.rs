@@ -373,9 +373,26 @@ fn post_tool_use(input: &Value, session: &str, node: &str, drafts: &mut Vec<Draf
             ));
         }
         name if is_wait(name) => {
-            let timed_out = json_response(input)
+            let response = json_response(input);
+            let timed_out = response
+                .as_ref()
                 .and_then(|r| r.get("timed_out").and_then(Value::as_bool))
                 .unwrap_or(false);
+            // An agent whose run broke (a model or API error, say) is
+            // `errored` in Codex's own account of it: failed. One that only
+            // reports something went wrong has completed.
+            for (agent, error) in response.as_ref().map(errored_agents).unwrap_or_default() {
+                let Some(thread) = agent_thread(input, session, &agent) else {
+                    continue;
+                };
+                drafts.push(Draft::new(
+                    node_id(session, Some(&thread)),
+                    Payload::AgentFinished(AgentFinished {
+                        status: FinishStatus::Failed,
+                        summary: Some(truncate_chars(&error, LABEL_MAX)),
+                    }),
+                ));
+            }
             for (i, _) in wait_targets(tool_input).enumerate() {
                 drafts.push(Draft::new(
                     node,
@@ -388,6 +405,29 @@ fn post_tool_use(input: &Value, session: &str, node: &str, drafts: &mut Vec<Draf
         }
         _ => {}
     }
+}
+
+/// The agents a `wait_agent` result says errored, with Codex's error: v1's
+/// `{"status": {<thread id>: {"errored": …}}}`, or v2's `{"agents":
+/// [{"agent_name": <task path>, "agent_status": {"errored": …}}]}`.
+fn errored_agents(response: &Value) -> Vec<(String, String)> {
+    let error = |status: &Value| str_at(status, &["errored"]).map(String::from);
+    let v1 = response
+        .get("status")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(id, status)| Some((id.clone(), error(status)?)));
+    let v2 = response
+        .get("agents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|agent| {
+            let name = str_at(agent, &["agent_name"])?;
+            Some((name.to_string(), error(agent.get("agent_status")?)?))
+        });
+    v1.chain(v2).collect()
 }
 
 /// The thread of the agent `target` names: v1 names it by its thread id;

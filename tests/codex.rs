@@ -86,6 +86,22 @@ fn waiting_for_a_subagent_blocks_until_it_returns() {
 }
 
 #[test]
+fn an_agent_codex_says_errored_failed() {
+    let mut payloads = fixture("codex/session.jsonl");
+    payloads.truncate(13);
+    // The wait's result, as Codex gives it for an agent whose run broke.
+    payloads[12]["tool_response"] = serde_json::Value::String(
+        r#"{"status":{"01a0f497-0a98-7791-b93f-eb49954d9567":{"errored":"model not found"}},"timed_out":false}"#
+            .into(),
+    );
+    let g = reduce(translate_as("codex", &payloads, Capture::default()));
+    let agent = &g.nodes[AGENT];
+    assert_eq!(agent.state, State::Failed);
+    assert_eq!(agent.summary.as_deref(), Some("model not found"));
+    assert!(g.nodes[CODEX].blocked.is_none());
+}
+
+#[test]
 fn starting_another_agent_from_the_shell_is_a_spawn_request() {
     let events = translate_as(
         "codex",
