@@ -644,9 +644,11 @@ fn restart_notice(installed: bool, chatgpt: bool, color: bool) -> String {
 }
 
 /// After installing: offers to share live whenever this computer's logged
-/// in to (`watch-remote --autostart`, which logs in to the site first if
-/// need be), asking first; with --yes, or without a terminal to ask in, it
-/// only says how. Nothing if it's set up already, or can't be here.
+/// in to (`watch-remote --autostart`), asking first, yes by default. Not
+/// logged in, and without an API token, it first offers to log in (in the
+/// browser), or says how to sign up and make a token. With --yes, or
+/// without a terminal to ask in, it only says how. Nothing if it's set up
+/// already, or can't be here.
 fn offer_autostart(yes: bool) {
     let site = crate::remote::DEFAULT_URL;
     if crate::autostart::service_path().is_err() || crate::autostart::enabled() {
@@ -655,15 +657,42 @@ fn offer_autostart(yes: bool) {
     let Some(root) = paths::data_dir() else {
         return;
     };
+    let mut account = crate::account::load(&root, site);
+    let token = std::env::var(crate::account::TOKEN_VAR).is_ok_and(|t| !t.trim().is_empty());
     if yes || !io::stdin().is_terminal() {
         println!(
             "\nTo see your sessions live from anywhere (your phone, say), shared to your account at \
              {site}/watch whenever you log in to this computer: agent-graph watch-remote --autostart"
         );
+        if account.is_none() && !token {
+            println!("{}", sign_up_note(site));
+        }
         return;
     }
-    let account = crate::account::load(&root, site);
-    let token = std::env::var(crate::account::TOKEN_VAR).is_ok_and(|t| !t.trim().is_empty());
+    // Sharing needs an account: logged in first, if you'd like to be.
+    if account.is_none() && !token {
+        let question = format!(
+            "\nYour sessions can also be shared live to your account at {site}/watch, to see them \
+             from anywhere (your phone, say). Log in to {site} now? (It opens your browser.)"
+        );
+        match ask(&question, true) {
+            Ok(true) => {
+                let client = crate::remote::Client::new(site);
+                match crate::account::login(&root, site, &client) {
+                    Ok(logged_in) => account = Some(logged_in),
+                    Err(e) => {
+                        println!("Couldn't log in: {e}\n{}", sign_up_note(site));
+                        return;
+                    }
+                }
+            }
+            Ok(false) => {
+                println!("{}", sign_up_note(site));
+                return;
+            }
+            Err(_) => return,
+        }
+    }
     let question = autostart_question(site, account.as_ref(), token);
     // Yes, unless you say otherwise: it's what most people want.
     match ask(&question, true) {
@@ -675,6 +704,17 @@ fn offer_autostart(yes: bool) {
         Ok(false) => println!("Not now. To later: agent-graph watch-remote --autostart"),
         Err(_) => {}
     }
+}
+
+/// How to share live without logging in now: sign up, and either log in
+/// later or give an API token from the account page.
+fn sign_up_note(site: &str) -> String {
+    format!(
+        "To share them later: sign up at {site} if you haven't, then run `agent-graph \
+         watch-remote --autostart`, which logs you in, in your browser. Or make an API token on \
+         your account page ({site}/account), set {}=<the token>, and run it then.",
+        crate::account::TOKEN_VAR
+    )
 }
 
 /// The question `offer_autostart` asks, saying which login sharing will use:
@@ -1540,6 +1580,15 @@ mod tests {
         assert!(autostart_question(site, Some(&account), true).contains("API token"));
         assert!(autostart_question(site, Some(&account), false).contains("As me@example.com"));
         assert!(autostart_question(site, None, false).contains("in your browser"));
+        let note = sign_up_note(site);
+        assert!(
+            note.contains("sign up at https://agentgraph.chofter.com"),
+            "{note}"
+        );
+        assert!(
+            note.contains("/account") && note.contains("AGENT_GRAPH_TOKEN"),
+            "{note}"
+        );
     }
 
     #[test]
