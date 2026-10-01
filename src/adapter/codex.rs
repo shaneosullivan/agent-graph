@@ -223,7 +223,9 @@ impl Adapter for Codex {
         // Before the turn's status: any other event on the session would
         // take it back to working.
         if matches!(hook, "Stop" | "Interrupt") {
-            drafts.splice(0..0, unstarted_agents(session, &session_node));
+            let mut ended = unstarted_agents(session, &session_node);
+            ended.extend(errored_agents_of(input, session));
+            drafts.splice(0..0, ended);
         }
 
         Ok(Translation {
@@ -664,6 +666,72 @@ fn unstarted_agents(session: &str, session_node: &str) -> Vec<Draft> {
         ));
     }
     drafts
+}
+
+/// Agents of the session that started and haven't finished, whose last turn
+/// ended in an error (a model or API error, say), by their rollouts: Codex
+/// runs no SubagentStop for a turn that errors, and v2's `wait_agent` says
+/// only that the wait's over. Each is failed, with Codex's error.
+fn errored_agents_of(input: &Value, session: &str) -> Vec<Draft> {
+    let events = recorded(session);
+    let nodes_of = |kind: &str| -> std::collections::BTreeSet<String> {
+        events
+            .iter()
+            .filter(|e| str_at(e, &["type"]) == Some(kind))
+            .filter_map(|e| str_at(e, &["node"]).map(String::from))
+            .collect()
+    };
+    let finished = nodes_of("agent.finished");
+    let open: Vec<String> = nodes_of("agent.spawned")
+        .into_iter()
+        .filter(|node| !finished.contains(node))
+        .collect();
+    if open.is_empty() {
+        return Vec::new();
+    }
+    // sessions/YYYY/MM/DD/rollout-….jsonl
+    let Some(sessions) = str_at(input, &["transcript_path"])
+        .map(std::path::Path::new)
+        .and_then(|p| p.parent()?.parent()?.parent()?.parent())
+    else {
+        return Vec::new();
+    };
+    let rollouts = recent_rollouts(sessions, 7);
+    open.into_iter()
+        .filter_map(|node| {
+            let thread = node.rsplit_once('/')?.1;
+            let rollout = rollouts.iter().find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with(&format!("-{thread}.jsonl")))
+            })?;
+            let error = turn_error(&read_file(rollout, Some(TURN_TAIL))?)?;
+            Some(Draft::new(
+                &node,
+                Payload::AgentFinished(AgentFinished {
+                    status: FinishStatus::Failed,
+                    summary: Some(truncate_chars(&error, LABEL_MAX)),
+                }),
+            ))
+        })
+        .collect()
+}
+
+/// The error a rollout's last turn ended with, if it did: its
+/// `task_complete`'s `error`, whose message may itself be the API's JSON
+/// reply (`{"error": {"message": …}}`).
+fn turn_error(rollout: &str) -> Option<String> {
+    let end = rollout
+        .lines()
+        .rev()
+        .filter(|line| line.contains("task_complete"))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| str_at(entry, &["payload", "type"]) == Some("task_complete"))?;
+    let message = str_at(&end, &["payload", "error", "message"])?;
+    let inner = serde_json::from_str::<Value>(message)
+        .ok()
+        .and_then(|v| str_at(&v, &["error", "message"]).map(String::from));
+    Some(inner.unwrap_or_else(|| message.to_string()))
 }
 
 /// How much of the end of a rollout to read for the turn that just ended.

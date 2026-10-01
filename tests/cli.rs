@@ -1801,3 +1801,55 @@ fn codex_agents_that_never_started_fail_when_the_turn_ends() {
     let again = std::fs::read_to_string(&file).unwrap();
     assert_eq!(again.matches("\"spawn.returned\"").count(), 2);
 }
+
+/// A Codex agent whose turn errored (a model the account can't use, from a
+/// real run: `codex/errored`) gets no SubagentStop, and v2's `wait_agent`
+/// doesn't say how it ended. When the session's turn ends, its rollout
+/// does: it's failed, with Codex's error.
+#[test]
+fn a_codex_agent_whose_turn_errored_fails_when_the_turn_ends() {
+    use agent_graph::event::{Envelope, State};
+    let home = tempfile::tempdir().unwrap();
+    let session = "01a0f9a7-fb68-7540-be44-d2999bdc85c8";
+    let agent = "01a0f9a8-0e0c-7e12-8a64-156ab6a8ecd7";
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let file = events.join(format!("codex-{session}.jsonl"));
+    std::fs::copy("tests/fixtures/codex/errored/events.jsonl", &file).unwrap();
+    let day = home.path().join("codex/sessions/2026/10/01");
+    std::fs::create_dir_all(&day).unwrap();
+    let parent = day.join(format!("rollout-2026-10-01T23-48-50-{session}.jsonl"));
+    std::fs::write(&parent, "").unwrap();
+    std::fs::copy(
+        "tests/fixtures/codex/errored/agent-rollout.jsonl",
+        day.join(format!("rollout-2026-10-01T23-48-55-{agent}.jsonl")),
+    )
+    .unwrap();
+    let stop = serde_json::json!({
+        "session_id": session,
+        "hook_event_name": "Stop",
+        "turn_id": "01a0f9a7-fbc5-74a0-b932-c953fe261cda",
+        "transcript_path": parent,
+        "last_assistant_message": "The subagent finished with status errored.",
+    });
+    emit(
+        home.path(),
+        &["--provider", "codex"],
+        &stop.to_string(),
+        &[],
+    );
+
+    let recorded: Vec<Envelope> = std::fs::read_to_string(&file)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let g = common::reduce(recorded);
+    let node = &g.nodes[&format!("codex:{session}/{agent}")];
+    assert_eq!(node.state, State::Failed);
+    assert_eq!(
+        node.summary.as_deref(),
+        Some("The 'no-such-model' model is not supported when using Codex with a ChatGPT account.")
+    );
+    assert_eq!(g.nodes[&format!("codex:{session}")].state, State::Idle);
+}

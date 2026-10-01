@@ -39,6 +39,7 @@ Node ids: `codex:<session_id>` for a session, and `codex:<session_id>/<agent_id>
 | Stop | `status: idle`, with the session's name (the TUI names it during the first turn); `status: input_required` again if the session's last event was a question nobody's answered (Codex's cloud ends the turn on a question and waits for your reply) |
 | Stop, when the turn's last message ends on a question | `status: input_required`, "Asks you a question" ("Asks: <the question>" only when bodies are captured) |
 | Interrupt | `status: idle` |
+| Stop or Interrupt, for an agent that started and hasn't finished | Codex runs no SubagentStop for a turn that errored (a model the account can't use, an API error), and v2's `wait_agent` only says the wait's over: if the agent's rollout's last `task_complete` has an `error`, `agent.finished: failed`, with Codex's error message |
 | Stop or Interrupt, after a `spawn_agent` that failed | Codex runs no PostToolUse for a failed tool call, so a request with no reply and no agent started for its task never started: `spawn.returned` naming a node of its own (`codex:<session>/<call_id>`), and `agent.finished: failed`, "Couldn't start" |
 | SubagentStart | `agent.spawned` (`agent_type`), under its parent: the session, or, for a nested agent, the agent its rollout names |
 | SubagentStop | `agent.finished: completed` (with its last message as the summary only when bodies are captured) |
