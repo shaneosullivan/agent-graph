@@ -18,7 +18,7 @@
 //! so any other local web server would receive it.) The event stream, which
 //! can't set headers, carries it as `?key=`.
 
-mod desktop;
+pub(crate) mod desktop;
 mod http;
 mod names;
 pub mod open;
@@ -297,7 +297,12 @@ impl Shared {
     fn poll_names(&self) {
         let events = self.events();
         let renamed = self.names.lock().expect("names lock").poll(&events);
-        let desktop = self.desktop.lock().expect("desktop lock").poll(&events);
+        let mut apps = self.desktop.lock().expect("desktop lock");
+        let desktop = apps.poll(&events);
+        // Sessions the Claude app says are blocked on you, marked so in
+        // their logs (the tail then reads it, as any event).
+        apps.flag_blocked(&self.events_dir);
+        drop(apps);
         if renamed || desktop {
             self.bump();
         }

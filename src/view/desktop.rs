@@ -39,9 +39,21 @@ pub fn sessions_dir() -> Option<PathBuf> {
 /// it runs.
 const CODEX_DESKTOP: &str = "Codex Desktop";
 
-/// A record as last read: when it was changed, and what it says (Claude
-/// Code's id and the app's), if it's a session the link can show.
-type Record = (Option<SystemTime>, Option<(String, String)>);
+/// A record as last read: when it was changed, and what it says, if it's a
+/// session the link can show.
+type Record = (Option<SystemTime>, Option<AppSession>);
+
+/// What the Claude app's record of a session says.
+#[derive(Clone, Debug, PartialEq)]
+struct AppSession {
+    /// Claude Code's id for it.
+    cli: String,
+    /// The app's own (`local_…`).
+    app: String,
+    /// What it needs you to do, when the app's summary of its latest turn
+    /// says it's blocked on you ("unlock Mac, then run …").
+    blocked: Option<String>,
+}
 
 pub struct Desktop {
     dir: Option<PathBuf>,
@@ -79,9 +91,12 @@ impl Desktop {
         let sessions: BTreeMap<String, String> = self
             .records
             .values()
-            .filter_map(|(_, s)| s.clone())
-            .filter_map(|(cli, app)| {
-                Some((format!("claude-code:{cli}"), resume::claude_app_link(&app)?))
+            .filter_map(|(_, s)| s.as_ref())
+            .filter_map(|s| {
+                Some((
+                    format!("claude-code:{}", s.cli),
+                    resume::claude_app_link(&s.app)?,
+                ))
             })
             .chain(
                 self.codex
@@ -128,7 +143,30 @@ impl Desktop {
         self.seen = events.len();
     }
 
-    fn read_records(&mut self) {
+    /// Records, in the events in `events_dir`, that the Claude app's
+    /// sessions it says are blocked on you are: the app works that out
+    /// after each turn (`postTurnSummary`: "blocked", with what you need to
+    /// do), after its hooks have run, so they'd only say the session's
+    /// idle. A session is marked once, while its last word in the log is
+    /// that it's idle: your next prompt sets it working, as ever. Returns
+    /// how many were marked. (Both the viewer and `watch-remote` do this,
+    /// so the site shows it too.)
+    pub fn flag_blocked(&mut self, events_dir: &Path) -> usize {
+        self.read_records();
+        let blocked: Vec<(String, String)> = self
+            .records
+            .values()
+            .filter_map(|(_, s)| s.as_ref())
+            .filter_map(|s| Some((s.cli.clone(), s.blocked.clone()?)))
+            .collect();
+        blocked
+            .into_iter()
+            .filter(|(cli, needs)| mark_blocked(events_dir, cli, needs))
+            .count()
+    }
+
+    /// Re-reads the Claude app's records that are new or changed.
+    pub fn read_records(&mut self) {
         let Some(dir) = &self.dir else { return };
         let mut seen = BTreeMap::new();
         for path in records_in(dir) {
@@ -169,15 +207,95 @@ fn records_in(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Claude Code's id and the app's, from a record the link can show.
-fn read(path: &Path) -> Option<(String, String)> {
+/// What a record says, if it's a session the app's link can show.
+fn read(path: &Path) -> Option<AppSession> {
     let record: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     if record.get("isArchived").and_then(Value::as_bool) == Some(true) {
         return None;
     }
     let app = record.get("sessionId")?.as_str()?;
     let cli = record.get("cliSessionId")?.as_str()?;
-    (resume::is_claude_app_id(app) && !cli.is_empty()).then(|| (cli.to_string(), app.to_string()))
+    if !resume::is_claude_app_id(app) || !safe_cli_id(cli) {
+        return None;
+    }
+    // Only the summary of its latest turn says where it stands now.
+    let summary = record
+        .get("postTurnSummary")
+        .filter(|_| record.get("postTurnSummaryFor") == record.get("lastAssistantUuid"));
+    let text = |key: &str| {
+        summary
+            .and_then(|s| s.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+    };
+    let blocked = (text("status_category") == Some("blocked"))
+        .then(|| text("needs_action").or_else(|| text("status_detail")))
+        .flatten()
+        .map(|t| crate::event::truncate_chars(t, 200));
+    Some(AppSession {
+        cli: cli.to_string(),
+        app: app.to_string(),
+        blocked,
+    })
+}
+
+/// A Claude Code session id fit for a node id and a file name.
+fn safe_cli_id(id: &str) -> bool {
+    (1..=128).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Marks Claude Code session `cli` as waiting on you (`needs`), in its
+/// events file in `events_dir`, if the log's last word on it is that it's
+/// idle. Whether it did.
+fn mark_blocked(events_dir: &Path, cli: &str, needs: &str) -> bool {
+    use crate::adapter::Draft;
+    use crate::event::{Payload, Source, State, Status};
+    let node = format!("claude-code:{cli}");
+    let file = events_dir.join(format!(
+        "{}.jsonl",
+        crate::paths::file_key("claude-code", cli)
+    ));
+    let Some(tail) = crate::adapter::claude_code::read_file(&file, Some(256 * 1024)) else {
+        return false;
+    };
+    // The session's own last event that says how it stands (its agents'
+    // don't).
+    let last = tail.lines().rev().find_map(|line| {
+        let event: Value = serde_json::from_str(line).ok()?;
+        let kind = event.get("type")?.as_str()?;
+        (event.get("node")?.as_str()? == node
+            && matches!(kind, "status" | "session.started" | "session.ended"))
+        .then_some(event)
+    });
+    let idle = last.is_some_and(|e| {
+        e.get("type").and_then(Value::as_str) == Some("status")
+            && e.pointer("/data/state").and_then(Value::as_str) == Some("idle")
+    });
+    if !idle {
+        return false;
+    }
+    let draft = Draft::new(
+        &node,
+        Payload::Status(Status {
+            state: State::InputRequired,
+            summary: Some(needs.to_string()),
+            title: None,
+        }),
+    );
+    let source = Source {
+        provider: "claude-code".into(),
+        provider_version: None,
+        adapter: Some("claude-app@1".into()),
+    };
+    let lines: String = crate::emit::stamp(vec![draft], &source, SystemTime::now())
+        .iter()
+        .map(|e| crate::emit::to_line(e) + "\n")
+        .collect();
+    crate::store::append(&file, lines.as_bytes()).is_ok()
 }
 
 #[cfg(test)]
@@ -228,6 +346,62 @@ mod tests {
         std::fs::remove_file(dir.path().join("account/org/local_1.json")).unwrap();
         assert!(desktop.poll(&[]));
         assert!(desktop.sessions.is_empty());
+    }
+
+    /// The app's summary of a session's latest turn saying it's blocked on
+    /// you marks it so in its log, once, while it's idle; not for an older
+    /// turn's summary, nor one that isn't blocked.
+    #[test]
+    fn a_session_the_app_says_is_blocked_needs_you() {
+        let dir = tempfile::tempdir().unwrap();
+        let events = tempfile::tempdir().unwrap();
+        let record = |name: &str, cli: &str, category: &str, latest: bool| {
+            let json = serde_json::json!({
+                "sessionId": name, "cliSessionId": cli,
+                "lastAssistantUuid": "u2",
+                "postTurnSummaryFor": if latest { "u2" } else { "u1" },
+                "postTurnSummary": {
+                    "status_category": category,
+                    "status_detail": "Mac screen locked",
+                    "needs_action": "unlock Mac, then run the release"
+                }
+            });
+            write(dir.path(), &format!("{name}.json"), &json.to_string());
+        };
+        let log = |cli: &str, state: &str| {
+            let line = serde_json::json!({
+                "v": 1, "id": "01A", "ts": "2026-10-01T16:52:11.000Z", "type": "status",
+                "node": format!("claude-code:{cli}"), "data": {"state": state}
+            });
+            std::fs::write(
+                events.path().join(format!("claude-code-{cli}.jsonl")),
+                format!("{line}\n"),
+            )
+            .unwrap();
+        };
+        record("local_1", "blocked-idle", "blocked", true);
+        log("blocked-idle", "idle");
+        record("local_2", "blocked-working", "blocked", true);
+        log("blocked-working", "working");
+        record("local_3", "old-summary", "blocked", false);
+        log("old-summary", "idle");
+        record("local_4", "completed", "completed", true);
+        log("completed", "idle");
+
+        let mut desktop = Desktop::new(Some(dir.path().to_path_buf()), false);
+        assert_eq!(desktop.flag_blocked(events.path()), 1);
+        let text =
+            std::fs::read_to_string(events.path().join("claude-code-blocked-idle.jsonl")).unwrap();
+        let marked: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        assert_eq!(marked["type"], "status");
+        assert_eq!(marked["node"], "claude-code:blocked-idle");
+        assert_eq!(marked["data"]["state"], "input_required");
+        assert_eq!(
+            marked["data"]["summary"],
+            "unlock Mac, then run the release"
+        );
+        // Once: it isn't idle any more.
+        assert_eq!(desktop.flag_blocked(events.path()), 0);
     }
 
     #[test]

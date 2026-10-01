@@ -57,6 +57,9 @@ pub const DEFAULT_URL: &str = "https://agentgraph.chofter.com";
 pub const MAX_CHUNK: usize = 256 * 1024;
 /// How often to look for new lines.
 const POLL: Duration = Duration::from_secs(1);
+/// How often the Claude app's records are looked at for sessions it says
+/// are blocked on you.
+const APPS_EVERY: Duration = Duration::from_secs(5);
 /// How often, at most, to send them: each request costs the site, so what
 /// arrives in a burst goes together. After a quiet spell, what's new is
 /// sent at once; so is a full chunk's worth.
@@ -241,7 +244,16 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
     }
     let mut last_send = Instant::now();
     let mut last_alive: Option<Instant> = None;
+    // Sessions the Claude app says are blocked on you are marked so in
+    // their logs, now and then, so the site shows them (see
+    // `view::desktop::Desktop::flag_blocked`).
+    let mut apps = crate::view::desktop::Desktop::new(crate::view::desktop::sessions_dir(), false);
+    let mut last_apps: Option<Instant> = None;
     loop {
+        if last_apps.is_none_or(|t| t.elapsed() >= APPS_EVERY) {
+            last_apps = Some(Instant::now());
+            apps.flag_blocked(&events);
+        }
         // Still here, watching so many sessions: said now and then, while
         // the site can be reached (it's only for the home page, so a
         // failure's no matter; it's said again next time).
