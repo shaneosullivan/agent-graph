@@ -616,6 +616,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                  allowed domains, and All methods allowed"
             );
             report_cloud_checks(site, true)?;
+            save_cloud_login(site)?;
         } else if client == Client::Codex && scope != Scope::Local {
             let data = paths::data_dir()
                 .map(|d| d.display().to_string())
@@ -672,6 +673,31 @@ fn report_cloud_checks(url: &str, token_needed: bool) -> Result<(), String> {
     } else {
         println!("Everything sharing needs is in place.");
         Ok(())
+    }
+}
+
+/// Saves `AGENT_GRAPH_TOKEN` as this environment's login (checked: see
+/// `account::from_env`), installing for Codex's cloud. Codex gives the
+/// environment's variables to the commands its agent runs, but not to the
+/// hooks it runs itself: the sharing its `SessionStart` hook starts would
+/// find no token. The setup script, where this runs, has it, and what it
+/// leaves on disk is there in the tasks.
+fn save_cloud_login(site: &str) -> Result<(), String> {
+    let root = paths::data_dir().ok_or("can't find your home directory")?;
+    let client = crate::remote::Client::new(site);
+    match crate::account::from_env(&root, site, &client)
+        .map_err(crate::account::TokenError::message)?
+    {
+        Some(account) => {
+            println!(
+                "  ✓ {} saved as this environment's login{}, for the sharing Codex's hooks start \
+                 (Codex doesn't give its hooks the environment's variables).",
+                crate::account::TOKEN_VAR,
+                account.email.map(|e| format!(" ({e})")).unwrap_or_default()
+            );
+            Ok(())
+        }
+        None => Err(format!("{} isn't set", crate::account::TOKEN_VAR)),
     }
 }
 
