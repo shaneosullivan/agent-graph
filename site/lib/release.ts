@@ -132,6 +132,6 @@ case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "Add $dir to your PATH to run it as agent-graph." ;;
 esac
-echo "Next: agent-graph install claude-code"
+echo "Next: agent-graph install claude-code (or codex)"
 `;
 }

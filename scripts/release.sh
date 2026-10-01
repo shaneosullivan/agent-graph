@@ -330,7 +330,9 @@ for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
   chmod 755 "$dir/agent-graph"
   cp LICENSE "$dir/LICENSE"
   # No macOS metadata in the archive (._ files).
-  COPYFILE_DISABLE=1 tar -czf "$out/$name" -C "$dir" agent-graph LICENSE
+  # Without macOS's own metadata (extended attributes like
+  # com.apple.provenance), which Linux's tar warns it doesn't know.
+  COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$out/$name" -C "$dir" agent-graph LICENSE
   sha="$(shasum -a 256 "$out/$name" | cut -d' ' -f1)"
 
   object="releases/$VERSION/$os/$name"

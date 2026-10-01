@@ -595,7 +595,9 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
             println!(
                 "Installed. Codex's cloud tasks in this environment will be recorded, and shared \
                  live at {site}/watch once the environment's settings (chatgpt.com/codex) have:\n\
-                 \x20 1. Environment variables: AGENT_GRAPH_TOKEN=<an API token from {site}/account>\n\
+                 \x20 1. Environment variables: AGENT_GRAPH_TOKEN=<an API token from {site}/account>. \
+                 Make it an environment variable, not a secret: a secret reaches only the setup \
+                 script, and it's the tasks that share.\n\
                  \x20 2. Agent internet access: On, with agentgraph.chofter.com in Additional \
                  allowed domains, and All methods allowed"
             );
