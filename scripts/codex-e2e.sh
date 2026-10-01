@@ -18,7 +18,7 @@ TMP="$(mktemp -d)"
 trap 'kill "${MOCK_PID:-}" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 cargo build --quiet --manifest-path "$ROOT/Cargo.toml"
-AG="$ROOT/target/debug/agent-graph"
+AG="${CARGO_TARGET_DIR:-$ROOT/target}/debug/agent-graph"
 
 CODEX="${1:-$(command -v codex || true)}"
 if [ -z "$CODEX" ]; then

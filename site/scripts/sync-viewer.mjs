@@ -199,7 +199,12 @@ if (args.has("--wasm")) {
     },
   );
   if (build.status !== 0) process.exit(build.status ?? 1);
-  const target = join(crate, "target/wasm32-unknown-unknown/wasm");
+  // Cargo's own folder, or the one CARGO_TARGET_DIR names (Chofter CI
+  // keeps one between runs).
+  const target = join(
+    resolve(crate, process.env.CARGO_TARGET_DIR || "target"),
+    "wasm32-unknown-unknown/wasm",
+  );
   copyFileSync(
     join(target, "agent_graph_wasm.wasm"),
     join(out, "agent_graph.wasm"),

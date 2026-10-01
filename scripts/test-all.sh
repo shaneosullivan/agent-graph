@@ -5,10 +5,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-step() {
-  printf '\n==> %s\n' "$*"
-  "$@"
-}
+# step: prints each command and how long it took.
+source scripts/steps.sh
 
 # The toolchain's wasm linker, on a Mac, if it can't find its library.
 step bash scripts/fix-rust-lld.sh

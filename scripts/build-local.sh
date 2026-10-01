@@ -6,8 +6,10 @@
 #
 #   scripts/build-local.sh
 #
-# The binaries are copied to target/dist/mac, linux and windows: the ARM
-# build as agent-graph, and the x86_64 one beside it as agent-graph-x86_64.
+# The binaries are copied to target/dist/mac, linux and windows (or under
+# CARGO_TARGET_DIR, if it's set): the ARM build as agent-graph, and the
+# x86_64 one beside it as agent-graph-x86_64. The builds for each OS run
+# side by side, each one's output shown once they've all finished.
 # Runs on an Apple Silicon Mac, x86_64 Linux, or x86_64 Windows in Git
 # Bash (Chofter CI's machine, from scripts/ci-slow-checks.sh), with:
 #   Mac:     brew install zig llvm; cargo install cargo-zigbuild cargo-xwin
@@ -16,6 +18,8 @@
 #            Visual Studio's C++ build tools, with its ARM64 ones
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# step, lane: the builds run side by side.
+source scripts/steps.sh
 
 targets=(
   aarch64-apple-darwin x86_64-apple-darwin
@@ -133,41 +137,84 @@ if [ "$host" != Windows-x86_64 ] && [[ " ${targets[*]} " == *-windows-* ]]; then
   fi
 fi
 
-for target in "${targets[@]}"; do
-  case "$target" in
+# Each target's build command: cargo's own, or cargo-zigbuild's or
+# cargo-xwin's for cross-compiling.
+build_with() {
+  case "$1" in
     *-apple-darwin)
       # A Mac builds its own; elsewhere it's cross-compiled, with Zig's copy
       # of the macOS system libraries (nothing here links Apple's frameworks).
-      if [ "$host" = Darwin-arm64 ]; then build=(cargo build); else build=(cargo zigbuild); fi
+      if [ "$host" = Darwin-arm64 ]; then echo cargo; else echo zigbuild; fi
       ;;
-    *-linux-*) build=(cargo zigbuild) ;;
+    *-linux-*) echo zigbuild ;;
     *-windows-*)
-      if [ "$host" = Windows-x86_64 ]; then
-        build=(cargo build)
-        # ring's build script picks clang for Windows on ARM once it has a
-        # compiler to inspect, but cc-rs's own default probe for that target
-        # looks for cl.exe (and lib.exe, to archive it) first, and fails
-        # before ring gets a say, so point it at clang and llvm-lib directly.
-        if [ "$target" = aarch64-pc-windows-msvc ]; then
-          export CC_aarch64_pc_windows_msvc=clang
-          export AR_aarch64_pc_windows_msvc=llvm-lib
-        fi
-      else
-        # ring compiles its C with clang, not clang-cl, for Windows on ARM,
-        # so cargo-xwin must pass flags clang takes.
-        build=(cargo xwin build --cross-compiler clang)
-      fi
+      # Windows builds its own with Visual Studio's tools.
+      if [ "$host" = Windows-x86_64 ]; then echo cargo; else echo xwin; fi
       ;;
   esac
-  printf '\n==> %s --profile dist --target %s\n' "${build[*]}" "$target"
-  "${build[@]}" --profile dist --target "$target"
+}
+if [ "$host" = Windows-x86_64 ]; then
+  # ring's build script picks clang for Windows on ARM once it has a
+  # compiler to inspect, but cc-rs's own default probe for that target
+  # looks for cl.exe (and lib.exe, to archive it) first, and fails
+  # before ring gets a say, so point it at clang and llvm-lib directly.
+  # (Only that target's: these don't touch the x86_64 build.)
+  export CC_aarch64_pc_windows_msvc=clang
+  export AR_aarch64_pc_windows_msvc=llvm-lib
+fi
+
+# Where a target's build goes. The targets that share a command are built
+# by one cargo, so they keep the cores busy between them: each target's
+# last step (link-time optimisation, with codegen-units = 1) runs on one
+# core, and built one after another they left the rest idle. Each command
+# builds side by side with the others, in its own folder, since cargo
+# locks the one it builds in: cargo's own builds in the usual one.
+target_dir="$(cargo_target_dir)"
+dir_for() {
+  local with
+  with="$(build_with "$1")"
+  if [ "$with" = cargo ]; then echo "$target_dir"; else echo "$target_dir/cross-$with"; fi
+}
+
+# The OSes a command builds for, to name it by.
+oses_for() {
+  local with=$1 t os names=()
+  for t in "${targets[@]}"; do
+    [ "$(build_with "$t")" = "$with" ] || continue
+    case "$t" in
+      *-apple-darwin) os=mac ;;
+      *-linux-*) os=linux ;;
+      *-windows-*) os=windows ;;
+    esac
+    [[ " ${names[*]} " == *" $os "* ]] || names+=("$os")
+  done
+  local IFS=+
+  echo "${names[*]}"
+}
+
+for with in cargo zigbuild xwin; do
+  args=()
+  for target in "${targets[@]}"; do
+    [ "$(build_with "$target")" = "$with" ] && args+=(--target "$target")
+  done
+  [ ${#args[@]} -gt 0 ] || continue
+  case "$with" in
+    cargo) build=(cargo build) ;;
+    zigbuild) build=(cargo zigbuild) ;;
+    # ring compiles its C with clang, not clang-cl, for Windows on ARM,
+    # so cargo-xwin must pass flags clang takes.
+    xwin) build=(cargo xwin build --cross-compiler clang) ;;
+  esac
+  lane "$(oses_for "$with")" env CARGO_TARGET_DIR="$(dir_for "${args[1]}")" \
+    "${build[@]}" --profile dist "${args[@]}"
 done
+lanes_wait
 
 # Where each build is copied: one folder per OS, the ARM build named for
 # it, and the x86_64 build beside it, named for its arch.
 # (target/dist is also cargo's folder for the dist profile's build scripts,
 # so only these three folders are touched.)
-out=target/dist
+out="$target_dir/dist"
 dest() {
   local os ext=""
   case "$1" in
@@ -194,7 +241,7 @@ built=()
 for target in "${targets[@]}"; do
   bin="$(dest "$target")"
   mkdir -p "$(dirname "$bin")"
-  install_bin "target/$target/dist/$(basename "${bin/-x86_64/}")" "$bin"
+  install_bin "$(dir_for "$target")/$target/dist/$(basename "${bin/-x86_64/}")" "$bin"
   built+=("$bin")
   if command -v file >/dev/null 2>&1; then
     printf '%s\n    %s\n' "$bin" "$(file -b "$bin")"
