@@ -57,6 +57,97 @@ pub const DEFAULT_URL: &str = "https://agentgraph.chofter.com";
 pub const MAX_CHUNK: usize = 256 * 1024;
 /// How often to look for new lines.
 const POLL: Duration = Duration::from_secs(1);
+/// Why a ping (`Client::ping`) failed.
+#[derive(Debug)]
+pub enum Ping {
+    /// Nothing answered: no network, the name didn't resolve, refused…
+    Unreachable(String),
+    /// Something answered, but not with the number: a proxy's page, or a
+    /// site without `/api/ping`. What it said.
+    Wrong(String),
+}
+
+/// One thing sharing from a cloud needs, checked: whether it's in place,
+/// and what to say about it.
+pub struct Check {
+    pub ok: bool,
+    pub line: String,
+}
+
+/// What sharing from a coding agent's cloud needs, checked from here: that
+/// `url` can be reached (it's pinged), and that `AGENT_GRAPH_TOKEN` is set
+/// and is a login the site knows. Each says ✓ or ✗, and what to do.
+pub fn cloud_checks(url: &str) -> Vec<Check> {
+    let url = url.trim_end_matches('/');
+    let host = url.split("://").nth(1).unwrap_or(url);
+    let client = Client::new(url);
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(42, |d| d.subsec_nanos().into())
+        ^ u64::from(std::process::id());
+    let reached = client.ping(n);
+    let reach = match &reached {
+        Ok(()) => Check {
+            ok: true,
+            line: format!("✓ {host} can be reached"),
+        },
+        Err(Ping::Unreachable(e)) => Check {
+            ok: false,
+            line: format!(
+                "✗ {host} can't be reached ({e}). Allow it in the environment's internet \
+                 access (an allowed domain), with all HTTP methods."
+            ),
+        },
+        Err(Ping::Wrong(said)) => Check {
+            ok: false,
+            line: format!(
+                "✗ {host} answered, but not as Agent Graph's site does ({said}): a proxy \
+                 may be in the way. Allow it in the environment's internet access (an allowed \
+                 domain), with all HTTP methods."
+            ),
+        },
+    };
+    let var = crate::account::TOKEN_VAR;
+    let token = std::env::var(var)
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    let login = match token {
+        None => Check {
+            ok: false,
+            line: format!(
+                "✗ {var} isn't set. Add it to the environment's environment variables (not its \
+                 secrets, which only the setup script gets): an API token from {url}/account."
+            ),
+        },
+        Some(_) if reached.is_err() => Check {
+            ok: false,
+            line: format!("✗ {var} is set, but can't be checked without reaching {host}."),
+        },
+        Some(token) => match client.account_email(&token) {
+            Ok(email) => Check {
+                ok: true,
+                line: format!(
+                    "✓ {var} is a valid login{}",
+                    email.map(|e| format!(", for {e}")).unwrap_or_default()
+                ),
+            },
+            Err(SendError::LoggedOut(_)) => Check {
+                ok: false,
+                line: format!(
+                    "✗ {var} isn't a login {host} knows: it may be mistyped, or revoked. Make one \
+                     on your account page, {url}/account."
+                ),
+            },
+            Err(e) => Check {
+                ok: false,
+                line: format!("✗ {var} couldn't be checked: {}", e.message()),
+            },
+        },
+    };
+    vec![reach, login]
+}
+
 /// How often the Claude app's records are looked at for sessions it says
 /// are blocked on you.
 const APPS_EVERY: Duration = Duration::from_secs(5);
@@ -1582,6 +1673,26 @@ impl Client {
                 "the site refused it ({s}): {}",
                 text.trim()
             ))),
+        }
+    }
+
+    /// Whether this site can be reached: it pings it (`/api/ping`) with `n`,
+    /// and the site replies with the same number.
+    pub fn ping(&self, n: u64) -> Result<(), Ping> {
+        let mut res = self
+            .agent
+            .get(format!("{}/api/ping?n={n}", self.base))
+            .call()
+            .map_err(|e| Ping::Unreachable(e.to_string()))?;
+        let status = res.status().as_u16();
+        let text = res.body_mut().read_to_string().unwrap_or_default();
+        if status == 200 && text.trim() == n.to_string() {
+            Ok(())
+        } else {
+            Err(Ping::Wrong(format!(
+                "{status}: {}",
+                crate::event::truncate_chars(text.trim(), 80)
+            )))
         }
     }
 

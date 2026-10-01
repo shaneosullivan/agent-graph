@@ -1532,3 +1532,86 @@ fn an_api_token_the_site_doesnt_know_is_refused() {
         "and it isn't kept"
     );
 }
+
+/// A site that answers pings, and knows one login, `agt_good`.
+fn pinged_site() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let request = read_request(&stream);
+            let reply = |status: &str, body: &str| {
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            let reply = if let Some(n) = request.path.strip_prefix("/api/ping?n=") {
+                reply("200 OK", n)
+            } else if request.path == "/api/cli/account" {
+                match request.headers.get("authorization").map(String::as_str) {
+                    Some("Bearer agt_good") => reply("200 OK", r#"{"email":"me@example.com"}"#),
+                    _ => reply("401 Unauthorized", r#"{"error":"unknown"}"#),
+                }
+            } else {
+                reply("404 Not Found", "")
+            };
+            let _ = (&stream).write_all(reply.as_bytes());
+        }
+    });
+    port
+}
+
+/// `watch-remote --check`: ✓ or ✗ for reaching the site and the token, and
+/// a failure unless both are in place.
+#[test]
+fn check_says_whether_the_site_and_the_token_are_in_place() {
+    let home = tempfile::tempdir().unwrap();
+    let port = pinged_site();
+    let check = |token: Option<&str>, url: String| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_agent-graph"));
+        command
+            .args(["watch-remote", "--check", "--url", &url])
+            .env("AGENT_GRAPH_HOME", home.path())
+            .env_remove("AGENT_GRAPH_TOKEN");
+        if let Some(token) = token {
+            command.env("AGENT_GRAPH_TOKEN", token);
+        }
+        let out = command.output().unwrap();
+        let said = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        (out.status.success(), said)
+    };
+    let site = format!("http://127.0.0.1:{port}");
+
+    let (ok, said) = check(Some("agt_good"), site.clone());
+    assert!(ok, "{said}");
+    assert!(
+        said.contains("✓ 127.0.0.1:") && said.contains("can be reached"),
+        "{said}"
+    );
+    assert!(
+        said.contains("✓ AGENT_GRAPH_TOKEN is a valid login, for me@example.com"),
+        "{said}"
+    );
+
+    let (ok, said) = check(Some("agt_revoked"), site.clone());
+    assert!(!ok);
+    assert!(said.contains("✗ AGENT_GRAPH_TOKEN isn't a login"), "{said}");
+
+    let (ok, said) = check(None, site);
+    assert!(!ok);
+    assert!(said.contains("✗ AGENT_GRAPH_TOKEN isn't set"), "{said}");
+    assert!(said.contains("not its secrets"), "{said}");
+
+    // Nothing listening: it can't be reached, nor the token checked.
+    let closed = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let (ok, said) = check(Some("agt_good"), format!("http://127.0.0.1:{closed}"));
+    assert!(!ok);
+    assert!(said.contains("can't be reached"), "{said}");
+    assert!(said.contains("can't be checked"), "{said}");
+}

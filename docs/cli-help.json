@@ -296,7 +296,8 @@
         { "id": "logout", "flag": "--logout", "text": "Log this computer out of the site, and forget the login. The next run asks you to log in again." },
         { "id": "autostart", "flag": "--autostart", "text": "Share every session whenever you log in to this computer, without running this yourself: it's started now, and at every login (on macOS and Linux). If you aren't logged in, you log in first, in the browser." },
         { "id": "no_autostart", "flag": "--no-autostart", "text": "Stop sharing at login: what --autostart set up is stopped and removed." },
-        { "id": "background", "flag": "--background", "text": "Run unattended, as --autostart does: it never opens a browser, stops quietly if you have to log in again, and waits while another run is sharing." }
+        { "id": "background", "flag": "--background", "text": "Run unattended, as --autostart does: it never opens a browser, stops quietly if you have to log in again, and waits while another run is sharing." },
+        { "id": "check", "flag": "--check", "text": "Check what sharing from a coding agent's cloud needs, and share nothing: that the site can be reached (it's pinged), and that AGENT_GRAPH_TOKEN is set and is a valid login. Prints ✓ or ✗ for each, and fails if either isn't in place. Run it in a cloud task to check the task's own internet access: a cloud's setup script may have more than its tasks do." }
       ],
       "examples": [
         { "command": "agent-graph watch-remote", "text": "Share every session, live, to your account (logging in the first time). The first line printed is where to see it." },

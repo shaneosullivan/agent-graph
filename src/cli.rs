@@ -158,6 +158,12 @@ enum Command {
         no_autostart: bool,
         #[arg(long, help = help::watch_remote::opt::BACKGROUND)]
         background: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["session", "new", "logout", "autostart", "no_autostart", "background"],
+            help = help::watch_remote::opt::CHECK
+        )]
+        check: bool,
     },
     #[command(
         display_order = 4,
@@ -364,6 +370,9 @@ pub fn run() -> ExitCode {
             })
         }
         Command::WatchRemote {
+            url, check: true, ..
+        } => report_cloud_checks(&url, true),
+        Command::WatchRemote {
             url,
             session,
             new,
@@ -371,6 +380,7 @@ pub fn run() -> ExitCode {
             autostart,
             no_autostart,
             background,
+            check: _,
         } => paths::data_dir()
             .ok_or_else(|| "can't find your home directory".to_string())
             .and_then(|root| {
@@ -586,6 +596,10 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                      firebasestorage.googleapis.com\n\
                      Cloud sessions of this project are then shared live, at {site}/watch."
                 );
+                // Here, on a computer, the token's not needed: it's the
+                // cloud environment's. In Claude's cloud (a setup script), it is.
+                let in_cloud = std::env::var("CLAUDE_CODE_REMOTE").is_ok_and(|v| v == "true");
+                report_cloud_checks(site, in_cloud)?;
             } else {
                 println!("Installed. New Claude Code sessions will be recorded in {data}.");
                 offer_autostart(opts.yes);
@@ -601,6 +615,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                  \x20 2. Agent internet access: On, with agentgraph.chofter.com in Additional \
                  allowed domains, and All methods allowed"
             );
+            report_cloud_checks(site, true)?;
         } else if client == Client::Codex && scope != Scope::Local {
             let data = paths::data_dir()
                 .map(|d| d.display().to_string())
@@ -625,6 +640,39 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
         }
     }
     Ok(())
+}
+
+/// Checks, and prints, what sharing from a cloud needs (see
+/// `remote::cloud_checks`): reaching `url`, and a valid `AGENT_GRAPH_TOKEN`.
+/// An error if they aren't in place, so a setup script stops there. Without
+/// `token_needed` (installing on a computer, for a cloud whose settings
+/// hold the token), a token that isn't set here is only noted; one that is
+/// set must still be valid.
+fn report_cloud_checks(url: &str, token_needed: bool) -> Result<(), String> {
+    println!("\nChecking what sharing from the cloud needs:");
+    let token_set = std::env::var(crate::account::TOKEN_VAR).is_ok_and(|t| !t.trim().is_empty());
+    let mut failed = false;
+    for (i, check) in crate::remote::cloud_checks(url).into_iter().enumerate() {
+        // (The second check is the token's.)
+        if i == 1 && !token_needed && !token_set {
+            println!(
+                "• {} isn't set here, which is fine: it goes in the cloud environment's settings.",
+                crate::account::TOKEN_VAR
+            );
+            continue;
+        }
+        failed |= !check.ok;
+        println!("  {}", check.line);
+    }
+    if failed {
+        Err(
+            "not everything sharing needs is in place (see above), so nothing will be shared yet"
+                .into(),
+        )
+    } else {
+        println!("Everything sharing needs is in place.");
+        Ok(())
+    }
 }
 
 /// Whether the ChatGPT desktop app is installed (it runs Codex too).

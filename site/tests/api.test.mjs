@@ -665,3 +665,13 @@ test("the live build's version, never cached, and a service worker that isn't", 
   // It caches nothing: no cache is ever opened or written to.
   assert.doesNotMatch(code, /caches\.open|cache\.put|cache\.add/);
 });
+
+test("ping replies with the number it's given, and refuses anything else", async () => {
+  const res = await fetch(`${BASE}/api/ping?n=4815162342`);
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "4815162342");
+  for (const n of ["", "abc", "1.5", "12345678901234567"]) {
+    const bad = await fetch(`${BASE}/api/ping?n=${encodeURIComponent(n)}`);
+    assert.equal(bad.status, 400, `n=${n}`);
+  }
+});
