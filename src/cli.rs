@@ -264,19 +264,42 @@ pub fn run() -> ExitCode {
             cloud,
         } => {
             // For Claude Code's cloud: the project's committed settings, and
-            // no slash command (it'd run the CLI on the computer).
+            // no slash command (it'd run the CLI on the computer). For
+            // Codex's: Codex's own files in the cloud's machine, from the
+            // environment's setup script.
+            let codex_cloud = cloud && matches!(provider, Provider::Codex);
             if cloud
-                && (!matches!(provider, Provider::ClaudeCode)
-                    || !matches!(scope, ScopeArg::User | ScopeArg::Project))
+                && (!matches!(provider, Provider::ClaudeCode | Provider::Codex)
+                    || !matches!(scope, ScopeArg::User | ScopeArg::Project)
+                    || (codex_cloud && !matches!(scope, ScopeArg::User)))
             {
                 eprintln!(
-                    "agent-graph: --cloud is for Claude Code, in a project's settings (--scope project)"
+                    "agent-graph: --cloud is for Claude Code, in a project's settings (--scope project), \
+                     or for Codex, in its cloud environment's setup script"
                 );
                 return ExitCode::FAILURE;
             }
+            if codex_cloud && std::env::var_os("CODEX_HOME").is_none_or(|v| v.is_empty()) {
+                if !Path::new(install::CODEX_CLOUD_HOME).is_dir() {
+                    eprintln!(
+                        "agent-graph: install codex --cloud is for the setup script of a Codex cloud \
+                         environment (chatgpt.com/codex), where Codex is in {}; it isn't here. \
+                         On a computer, use `agent-graph install codex`.",
+                        install::CODEX_CLOUD_HOME
+                    );
+                    return ExitCode::FAILURE;
+                }
+                // The setup script isn't told where Codex's home is, though
+                // its tasks are. (Nothing else runs yet.)
+                unsafe { std::env::set_var("CODEX_HOME", install::CODEX_CLOUD_HOME) };
+            }
             install_cmd(
                 provider.into(),
-                if cloud { Scope::Project } else { scope.into() },
+                if cloud && !codex_cloud {
+                    Scope::Project
+                } else {
+                    scope.into()
+                },
                 InstallOptions {
                     dry_run,
                     yes,
@@ -567,6 +590,15 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                 println!("Installed. New Claude Code sessions will be recorded in {data}.");
                 offer_autostart(opts.yes);
             }
+        } else if client == Client::Codex && opts.cloud {
+            let site = crate::remote::DEFAULT_URL;
+            println!(
+                "Installed. Codex's cloud tasks in this environment will be recorded, and shared \
+                 live at {site}/watch once the environment's settings (chatgpt.com/codex) have:\n\
+                 \x20 1. Environment variables: AGENT_GRAPH_TOKEN=<an API token from {site}/account>\n\
+                 \x20 2. Agent internet access: On, with agentgraph.chofter.com in Additional \
+                 allowed domains, and All methods allowed"
+            );
         } else if client == Client::Codex && scope != Scope::Local {
             let data = paths::data_dir()
                 .map(|d| d.display().to_string())
@@ -924,7 +956,9 @@ fn codex_hooks_changes(
         None => install::default_command("codex")?,
     };
     let mut after = before.clone();
-    if opts.add {
+    if opts.add && opts.cloud {
+        install::install_codex_cloud(&mut after, &command)?;
+    } else if opts.add {
         install::install_codex(&mut after, &command)?;
     } else {
         install::uninstall_codex(&mut after)?;

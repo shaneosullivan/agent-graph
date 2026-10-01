@@ -48,6 +48,12 @@ For **Codex**, `agent-graph install codex` does the same:
 
 `agent-graph uninstall codex` removes all of it. [docs/codex.md](docs/codex.md) has the details.
 
+**In the cloud**, sessions are recorded and shared live, to your account at [agentgraph.chofter.com/watch](https://agentgraph.chofter.com/watch), given an API token from your account page as `AGENT_GRAPH_TOKEN` in the cloud environment's settings:
+- **Claude Code's cloud** (claude.ai/code): `agent-graph install claude-code --cloud` adds hooks to the project's `.claude/settings.json`, to commit.
+- **Codex's cloud** (chatgpt.com/codex): the environment's setup script runs the install script, then `~/.local/bin/agent-graph install codex --cloud --yes`, which adds the hooks to Codex's files in the cloud. [docs/codex-cloud.md](docs/codex-cloud.md) has the details.
+
+The site's [Download section](https://agentgraph.chofter.com/#install) has the steps for each, page by page.
+
 For other coding agents, `install` adds the same command:
 
 | Agent | Command | Written to |

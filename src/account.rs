@@ -308,10 +308,18 @@ fn random_secret() -> Result<String, String> {
 
 /// What to call this computer on the account page and at /watch: its host
 /// name, or, in Claude Code's cloud (whose containers are all called "vm"),
-/// "Claude Code cloud".
+/// "Claude Code cloud", and in Codex's (whose containers have random
+/// names), "Codex cloud".
 pub fn host_name() -> String {
     if in_claude_code_cloud(std::env::var("CLAUDE_CODE_REMOTE").ok().as_deref()) {
         return CLAUDE_CODE_CLOUD.to_string();
+    }
+    if in_codex_cloud(
+        std::env::var("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")
+            .ok()
+            .as_deref(),
+    ) {
+        return CODEX_CLOUD.to_string();
     }
     std::process::Command::new("hostname")
         .output()
@@ -329,6 +337,14 @@ const CLAUDE_CODE_CLOUD: &str = "Claude Code cloud";
 /// Whether CLAUDE_CODE_REMOTE says this is Claude Code's cloud.
 fn in_claude_code_cloud(remote: Option<&str>) -> bool {
     remote == Some("true")
+}
+
+const CODEX_CLOUD: &str = "Codex cloud";
+
+/// Whether CODEX_INTERNAL_ORIGINATOR_OVERRIDE, which a Codex cloud task
+/// (chatgpt.com/codex) is given, says this is Codex's cloud.
+fn in_codex_cloud(originator: Option<&str>) -> bool {
+    originator == Some("codex_web_agent")
 }
 
 fn percent_decode(s: &str) -> String {
@@ -371,6 +387,13 @@ mod tests {
         assert!(!in_claude_code_cloud(Some("false")));
         assert!(!in_claude_code_cloud(Some("")));
         assert!(!in_claude_code_cloud(None));
+    }
+
+    #[test]
+    fn only_codex_cloud_is_called_so() {
+        assert!(in_codex_cloud(Some("codex_web_agent")));
+        assert!(!in_codex_cloud(Some("codex_cli_rs")));
+        assert!(!in_codex_cloud(None));
     }
 
     #[test]

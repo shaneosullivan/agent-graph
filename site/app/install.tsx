@@ -9,7 +9,7 @@ import {BREW_COMMAND, INSTALL_COMMAND, latestRelease} from "@/lib/release";
 
 import {CopyCommand} from "./copy-command";
 
-type Os = "mac" | "linux" | "windows" | "npm" | "cloud";
+type Os = "mac" | "linux" | "windows" | "npm" | "cloud" | "codex-cloud";
 
 const release = latestRelease();
 
@@ -70,7 +70,13 @@ const ways: Record<Os, Way> = {
   },
   // Its steps are its own (CloudSteps).
   cloud: {label: "Claude Code cloud"},
+  // Its steps are its own too (CodexCloudSteps).
+  "codex-cloud": {label: "Codex cloud"},
 };
+
+/** What goes in a Codex cloud environment's setup script. */
+const CODEX_CLOUD_SETUP = `curl -fsSL https://agentgraph.chofter.com/install.sh | sh
+~/.local/bin/agent-graph install codex --cloud --yes`;
 
 /**
  * Recording and sharing live from Claude Code's cloud (claude.ai/code): the
@@ -129,6 +135,87 @@ function CloudSteps() {
         At claude.ai/code, start a session in that repository, with that
         environment. It installs agent-graph, records the session, and shares it
         live: watch it at <a href="/watch">/watch</a>.
+      </li>
+    </ol>
+  );
+}
+
+/**
+ * Recording and sharing live from Codex's cloud (chatgpt.com/codex): the
+ * environment's setup script installs agent-graph and its hooks
+ * (`agent-graph install codex --cloud`), and each task shares to the account
+ * whose API token the environment gives. Every step is done on a web page:
+ * nothing is installed on the visitor's computer, or committed.
+ */
+function CodexCloudSteps() {
+  return (
+    <ol className="card-body install-steps">
+      <li>
+        On this site&rsquo;s{" "}
+        <a href="/account#api-tokens">account page, under API tokens</a>, make a
+        token, and copy it (it starts with <code>agt_</code>). It&rsquo;s shown
+        only once, so keep the page open until step 4.
+      </li>
+      <li>
+        Go to <a {...link("https://chatgpt.com/codex")}>chatgpt.com/codex</a>{" "}
+        and sign in with your ChatGPT account. If you see a page that says
+        &ldquo;Build anything with Codex&rdquo;, click{" "}
+        <strong>Go to Cloud</strong> at its top right.
+      </li>
+      <li>
+        Click the gear icon at the top right (beside the bell and your picture),
+        then <strong>Environments</strong>. Click the environment for the GitHub
+        repository you&rsquo;ll work in (create one for it there first, if there
+        isn&rsquo;t one), then click <strong>Edit</strong>. Everything in steps
+        4 to 7 is on that Edit page. (Not ChatGPT&rsquo;s own settings, whose
+        options are for chats.)
+      </li>
+      <li>
+        Under <strong>Environment variables</strong>, add one named{" "}
+        <code>AGENT_GRAPH_TOKEN</code>, with the token from step 1 as its value:
+        <CopyCommand command="AGENT_GRAPH_TOKEN" />
+        <span className="install-or">
+          Not under <strong>Secrets</strong>: a secret reaches only the setup
+          script, not the task, so nothing would be shared.
+        </span>
+      </li>
+      <li>
+        Under <strong>Setup script</strong>, choose <strong>Manual</strong>, and
+        add these two lines to the box, after anything already there:
+        <Copyable command={CODEX_CLOUD_SETUP} copied="codex-cloud" />
+        <span className="install-or">
+          They install agent-graph in the cloud&rsquo;s machine (not on your
+          computer), and the hooks that record each task there and share it.
+        </span>
+      </li>
+      <li>
+        Under <strong>Agent internet access</strong>, choose <strong>On</strong>
+        . Keep the <strong>Domain allowlist</strong> as it is, and in{" "}
+        <strong>Additional allowed domains</strong> add (after a comma, if there
+        are domains there already):
+        <CopyCommand command="agentgraph.chofter.com" />
+        <span className="install-or">
+          Set <strong>Allowed HTTP Methods</strong> to{" "}
+          <strong>All methods</strong>: sharing sends the session with POST
+          requests.
+        </span>
+      </li>
+      <li>
+        Click <strong>Save environment</strong>, at the bottom right.
+      </li>
+      <li>
+        Back on the environment&rsquo;s page, click <strong>Use this</strong>,
+        and give Codex a task. Its session is recorded and shared live: watch it
+        at <a href="/watch">/watch</a>, where it&rsquo;s labelled &ldquo;Codex
+        cloud&rdquo;. Every task in that environment is shared the same way,
+        with nothing more to do.
+        <span className="install-or">
+          Nothing at /watch? On the environment&rsquo;s page, click{" "}
+          <strong>Reset cache</strong>, so the setup script runs again, then
+          start a new task. Codex can read the token, as it can any environment
+          variable, but it can only share to your account; delete it on your
+          account page to stop it working.
+        </span>
       </li>
     </ol>
   );
@@ -248,6 +335,8 @@ export function Install() {
       </div>
       {os === "cloud" ? (
         <CloudSteps />
+      ) : os === "codex-cloud" ? (
+        <CodexCloudSteps />
       ) : way.soon ? (
         <p className="card-body install-soon">{way.soon}</p>
       ) : (

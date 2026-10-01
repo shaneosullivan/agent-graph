@@ -474,9 +474,45 @@ pub fn codex_config_path() -> Option<PathBuf> {
     Some(crate::adapter::codex::codex_home()?.join("config.toml"))
 }
 
+/// Where Codex lives in its cloud (chatgpt.com/codex): `CODEX_HOME` in a
+/// task, though an environment's setup script, which installs our hooks,
+/// isn't told so.
+pub const CODEX_CLOUD_HOME: &str = "/opt/codex";
+
 /// Adds our hooks to a Codex hooks file, replacing any earlier copy.
 /// `command` must contain `CODEX_MARKER`.
 pub fn install_codex(hooks_file: &mut Value, command: &str) -> Result<(), String> {
+    add_codex(hooks_file, command, false)
+}
+
+/// Adds our hooks for Codex's cloud (chatgpt.com/codex) to the hooks file
+/// in its home there (`CODEX_CLOUD_HOME`), replacing any earlier copy. The
+/// cloud runs only synchronous hooks, so none is in the background (each
+/// takes a few milliseconds); and `SessionStart` also starts sharing, with
+/// the API token the environment gives as AGENT_GRAPH_TOKEN, in a process
+/// of its own that lasts the task. (`watch-remote` waits while another's
+/// sharing, so each session starting one is harmless.)
+pub fn install_codex_cloud(hooks_file: &mut Value, command: &str) -> Result<(), String> {
+    add_codex(hooks_file, command, true)
+}
+
+/// `command`, the `SessionStart` hook's in Codex's cloud: records the
+/// start, then starts sharing, detached (in a session of its own, where
+/// there's `setsid`), with nothing of the hook's open, so Codex isn't kept
+/// waiting for it.
+fn codex_cloud_start_command(command: &str) -> String {
+    let bin = command
+        .strip_suffix(CODEX_MARKER)
+        .unwrap_or(command)
+        .trim_end();
+    let share = format!("{bin} {CLOUD_SHARE_MARKER}");
+    format!(
+        "{command}; (if command -v setsid >/dev/null; then exec setsid {share}; \
+         else exec {share}; fi) </dev/null >>\"${{AGENT_GRAPH_HOME:-$HOME/.agent-graph}}/watch-remote.log\" 2>&1 &"
+    )
+}
+
+fn add_codex(hooks_file: &mut Value, command: &str, cloud: bool) -> Result<(), String> {
     if !command.contains(CODEX_MARKER) {
         return Err(format!(
             "the hook command must contain `{CODEX_MARKER}`, which is how Agent Graph \
@@ -489,9 +525,13 @@ pub fn install_codex(hooks_file: &mut Value, command: &str) -> Result<(), String
     for spec in CODEX_HOOKS {
         let mut handler = Map::new();
         handler.insert("type".into(), json!("command"));
-        handler.insert("command".into(), json!(command));
+        if cloud && spec.event == "SessionStart" {
+            handler.insert("command".into(), json!(codex_cloud_start_command(command)));
+        } else {
+            handler.insert("command".into(), json!(command));
+        }
         handler.insert("timeout".into(), json!(spec.timeout));
-        if spec.background {
+        if spec.background && !cloud {
             handler.insert("async".into(), json!(true));
         }
         let mut group = Map::new();
@@ -948,6 +988,37 @@ mod tests {
         assert_eq!(hooks, original);
         // A command it couldn't find again is refused.
         assert!(install_codex(&mut json!({}), "my-wrapper").is_err());
+    }
+
+    #[test]
+    fn codex_cloud_hooks_are_synchronous_and_start_sharing() {
+        let mut hooks = json!({});
+        install_codex_cloud(&mut hooks, CODEX_CMD).unwrap();
+        assert_eq!(our_codex_events(&hooks).len(), CODEX_HOOKS.len());
+        for groups in hooks["hooks"].as_object().unwrap().values() {
+            let handler = &groups[0]["hooks"][0];
+            assert!(handler.get("async").is_none(), "{handler}");
+        }
+        let start = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(start.starts_with(CODEX_CMD), "records first: {start}");
+        assert!(
+            start.contains("\"/usr/local/bin/agent-graph\" watch-remote --background"),
+            "{start}"
+        );
+        assert!(
+            start.contains("</dev/null >>") && start.ends_with('&'),
+            "{start}"
+        );
+        assert_eq!(
+            hooks["hooks"]["Stop"][0]["hooks"][0]["command"],
+            json!(CODEX_CMD)
+        );
+        // Found again, as any of ours: replaced, and removed.
+        install_codex_cloud(&mut hooks, CODEX_CMD).unwrap();
+        assert_eq!(our_codex_events(&hooks).len(), CODEX_HOOKS.len());
+        assert_eq!(uninstall_codex(&mut hooks).unwrap(), CODEX_HOOKS.len());
     }
 
     #[test]

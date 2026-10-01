@@ -356,8 +356,9 @@ export function ApiTokens({tokens}: {tokens: Array<Computer>}) {
           <CopyCommand command={`export AGENT_GRAPH_TOKEN=${made.token}`} />
           <p>
             Next, use it where it&rsquo;s needed:{" "}
-            <a href="/#install-cloud">set up Claude Code&rsquo;s cloud</a>.
-            Codex and Cursor&rsquo;s cloud agents aren&rsquo;t supported yet.
+            <a href="/#install-cloud">set up Claude Code&rsquo;s cloud</a>, or{" "}
+            <a href="/#install-codex-cloud">Codex&rsquo;s cloud</a>.
+            Cursor&rsquo;s cloud agents aren&rsquo;t supported yet.
           </p>
           <button
             className="link-button"

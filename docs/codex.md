@@ -82,7 +82,7 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 
 ### Not now
 
-- **Codex cloud** (chatgpt.com/codex): nothing in Codex's source says whether it runs a project's hooks, or trusts them, and there's no variable that marks a cloud run. Planned in [codex-cloud.md](codex-cloud.md).
+- **Codex cloud** (chatgpt.com/codex): supported, with `install codex --cloud` in an environment's setup script: see [codex-cloud.md](codex-cloud.md).
 - **Multi-agent v2's waits:** its `wait_agent` names no agents, so no wait is shown.
 - **The IDE extension** runs the same core, so it should fire the same hooks; untested. (The ChatGPT desktop app is tested: see Testing.)
 - Windows.

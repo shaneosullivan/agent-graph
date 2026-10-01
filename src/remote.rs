@@ -1375,6 +1375,34 @@ pub struct Client {
     base: String,
 }
 
+/// The certificates HTTPS is checked against: those in SSL_CERT_FILE, where
+/// it names a file of them (as for curl and OpenSSL), or else the ones
+/// built in. A proxy that looks inside HTTPS signs with a certificate of
+/// its own, which only that file has: Codex's cloud, for one, sets it so.
+fn tls_config() -> ureq::tls::TlsConfig {
+    let builder = ureq::tls::TlsConfig::builder();
+    match std::env::var_os("SSL_CERT_FILE")
+        .filter(|f| !f.is_empty())
+        .and_then(|f| std::fs::read(f).ok())
+        .map(|pem| certificates(&pem))
+        .filter(|certs| !certs.is_empty())
+    {
+        Some(certs) => builder.root_certs(ureq::tls::RootCerts::new_with_certs(&certs)),
+        None => builder,
+    }
+    .build()
+}
+
+/// The certificates in a PEM file, without anything else in it.
+fn certificates(pem: &[u8]) -> Vec<ureq::tls::Certificate<'static>> {
+    ureq::tls::parse_pem(pem)
+        .filter_map(|item| match item {
+            Ok(ureq::tls::PemItem::Certificate(cert)) => Some(cert),
+            _ => None,
+        })
+        .collect()
+}
+
 impl Client {
     pub fn new(base: &str) -> Client {
         // Plain HTTP to this machine, as a login's token may be sent (see
@@ -1396,6 +1424,7 @@ impl Client {
                 ureq::Proxy::try_from_env()
             })
             .user_agent(concat!("agent-graph/", env!("CARGO_PKG_VERSION")))
+            .tls_config(tls_config())
             .build();
         Client {
             agent: ureq::Agent::new_with_config(config),

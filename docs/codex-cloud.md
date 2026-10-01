@@ -1,4 +1,6 @@
-# Codex cloud: plan
+# Codex cloud
+
+**Built (0.1.8):** plan A, `agent-graph install codex --cloud` in the setup script, with the hooks synchronous; `watch-remote` trusts `SSL_CERT_FILE`; the host is called "Codex cloud". The site's Download section has a "Codex cloud" tab (`/#install-codex-cloud`). The rest of this file is how it was worked out.
 
 Recording and sharing live the sessions Codex runs in its cloud (a "cloud task", started from chatgpt.com/codex, the Codex app, or `codex cloud`), as Agent Graph does for Claude Code's cloud (`install claude-code --cloud`). Local Codex support ([codex.md](codex.md)) comes first; this builds on it. Written 2026-10-01, from OpenAI's docs and Codex's source; the unknowns below need one experiment in a real cloud environment before building.
 
@@ -37,6 +39,30 @@ Everything here is done at chatgpt.com/codex (or the Codex app), in a cloud envi
    > Run each of these shell commands and show me their complete output, without changing anything: `echo HOME=$HOME CODEX_HOME=$CODEX_HOME; id; hostname; env | sort`; `ls -la ~ ~/.codex ~/.agent-graph-probe`; `cat ~/.agent-graph-probe/setup-env.txt`; `tail -3 ~/.agent-graph-probe/alive.txt; date`; `cat ~/.codex/config.toml`; `find ~/.codex -maxdepth 4 | head -50`; `codex --version; which codex`; `ps aux | head -40`; `curl -sS -o /dev/null -w '%{http_code}\n' https://agentgraph.chofter.com/install.sh`; `curl -sS -o /dev/null -w '%{http_code}\n' https://example.com`.
 
 That answers 2 to 5, and says whether the network allowlist works as documented. Question 1 (hooks) and 6 (the secret in a header) need step 2's build, and a second task.
+
+### What step 1 found (2026-10-01)
+
+- **Codex runs in the VM** as `/opt/codex/bin/codex app-server`, with `CODEX_HOME=/opt/codex` (not `~/.codex`, which doesn't exist). `codex` isn't on the PATH. So hooks, trust and rollouts, if any, are under `/opt/codex`.
+- **The install script's files last** into the task (`~/.agent-graph-probe/setup-env.txt` was there), but **its processes don't**: the background loop never wrote a line, and nothing of it was running.
+- **The install script doesn't see `CODEX_HOME`**: it's only set for the task. Anything the install script writes for Codex must name `/opt/codex` itself.
+- **Network secrets are for the install script only**: `AGENT_GRAPH_PROBE_SECRET` had its real value there, and wasn't in the task's environment at all (no placeholder). Plain environment variables are in both.
+- **What marks Codex's cloud:** `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_web_agent` (also `CODEX_CI=1`), in the task only.
+- **The allowlist works:** `agentgraph.chofter.com` gave 200, `example.com` was refused by the proxy (403). Everything goes through `http://proxy:8080`, with its own CA (`SSL_CERT_FILE`).
+- HOME is `/root`, running as root; the repository is in `/workspace/<repo>`.
+- **Setup starts from the image each time** the environment is republished: nothing an earlier install script wrote is there.
+
+Then, with `CODEX_HOME=/opt/codex agent-graph install codex --yes` in the install script (0.1.7):
+
+- **Hooks run.** Codex (`codex-cli 0.144.0-alpha.4`, as `app-server`, `originator: codex_web_agent`, `source: vscode`) read `/opt/codex/hooks.json`, honoured our trust in `/opt/codex/config.toml`, and ran `SessionStart`: `session.started` was recorded, with the rollout's path.
+- **Nothing else was recorded**: no `UserPromptSubmit`, no tool events, no `Stop`, over a task that ran shell commands. The cloud's tools aren't the CLI's: its rollout has `custom_tool_call`s named `exec` (Codex's "code mode", run by `codex-code-mode-host`), which our matcher (`Bash|apply_patch|…`) doesn't name. The other events are all `async`, and may not be run, or not waited for.
+- **Rollouts are written**, in `/opt/codex/sessions/YYYY/MM/DD/`.
+
+Then, with every event hooked by hand, synchronous and with no matcher, logging each payload:
+
+- **Every event came**, and is recorded: `SessionStart`, `UserPromptSubmit` (with the prompt and `turn_id`), and `PreToolUse`/`PostToolUse` for `update_plan` and `Bash` (`tool_input.command`, `tool_response`), each with a `tool_use_id` like `exec-<uuid>`. Hooks see the CLI's tool names, not code mode's `exec`, so our matcher is right as it is.
+- **So it was `async`**: the cloud doesn't run async hooks (or doesn't wait for them). In the cloud, every hook must be synchronous. Each `emit` took well under 0.1s.
+- Payloads also carry `model` (`gpt-5.6-sol`) and `permission_mode: bypassPermissions`, so there are no approvals to wait on.
+- **TLS goes through a man-in-the-middle proxy** (`envoy-mitmproxy-ca-cert.crt`, named by `SSL_CERT_FILE` and the other `*_CA*` variables). `watch-remote` uses ureq with rustls and its own bundled roots, so it would likely refuse the proxy's certificate: it has to trust `SSL_CERT_FILE` too. Not yet tried.
 
 ## Step 2: build, by what step 1 found
 

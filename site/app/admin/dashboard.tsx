@@ -53,6 +53,7 @@ const COPIED_LABEL: Record<Copied, string> = {
   "claude-code": "Claude Code setup command copied",
   "claude-code-cloud": "Claude Code cloud setup command copied",
   codex: "Codex setup command copied",
+  "codex-cloud": "Codex cloud setup script copied",
 };
 
 /** Every kind of download: a button's target, or a command copied. */
