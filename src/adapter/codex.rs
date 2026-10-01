@@ -89,6 +89,17 @@ impl Adapter for Codex {
                     title: title_of(session),
                 }),
             )),
+            // A turn that ended on a question nobody's answered (Codex's
+            // cloud ends the turn there, and waits for your reply) still
+            // waits for you.
+            "Stop" if open_question(session, &session_node).is_some() => drafts.push(Draft::new(
+                &session_node,
+                Payload::Status(Status {
+                    state: State::InputRequired,
+                    summary: open_question(session, &session_node),
+                    title: title_of(session),
+                }),
+            )),
             "Stop" | "Interrupt" => drafts.push(titled(&session_node, session, State::Idle)),
             "SubagentStart" => {
                 let agent = agent_id.ok_or("SubagentStart has no agent_id")?;
@@ -487,6 +498,29 @@ fn titled(node: &str, session: &str, state: State) -> Draft {
             title: title_of(session),
         }),
     )
+}
+
+/// How much of the end of a session's event log to read for its last event.
+const EVENTS_TAIL: u64 = 64 * 1024;
+
+/// The question the session asked (`request_user_input`), if it's the last
+/// thing recorded of the session's own node: nothing since has answered it.
+fn open_question(session: &str, node: &str) -> Option<String> {
+    let root = crate::paths::data_dir()?;
+    let file =
+        crate::paths::events_dir(&root).join(format!("{}.jsonl", file_key(PROVIDER, session)));
+    let tail = read_file(&file, Some(EVENTS_TAIL))?;
+    let last = tail
+        .lines()
+        .rev()
+        .filter(|line| line.contains(node))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| str_at(event, &["node"]) == Some(node))?;
+    let summary = str_at(&last, &["data", "summary"])?;
+    (str_at(&last, &["type"]) == Some("status")
+        && str_at(&last, &["data", "state"]) == Some("input_required")
+        && summary.starts_with("Asks"))
+    .then(|| summary.to_string())
 }
 
 /// How much of the end of a rollout to read for the turn that just ended.

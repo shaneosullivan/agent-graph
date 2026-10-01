@@ -36,7 +36,7 @@ Node ids: `codex:<session_id>` for a session, and `codex:<session_id>/<agent_id>
 | SessionStart | `session.started` (`cwd`, `source`, `transcript_path`, `title` from `session_index.jsonl`) |
 | SessionEnd | `session.ended` |
 | UserPromptSubmit | `status: working` for the node it's in (session, or subagent given more work), with the session's name |
-| Stop | `status: idle`, with the session's name (the TUI names it during the first turn) |
+| Stop | `status: idle`, with the session's name (the TUI names it during the first turn); `status: input_required` again if the session's last event was a question nobody's answered (Codex's cloud ends the turn on a question and waits for your reply) |
 | Interrupt | `status: idle` |
 | SubagentStart | `agent.spawned` (`agent_type`), under its parent: the session, or, for a nested agent, the agent its rollout names |
 | SubagentStop | `agent.finished: completed` (with its last message as the summary only when bodies are captured) |

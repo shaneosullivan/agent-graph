@@ -1697,3 +1697,46 @@ fn codex_hooks_are_installed_trusted_and_removed() {
     assert!(!codex.path().join("hooks.json").exists(), "only ever ours");
     assert!(!project.path().join(".agents").exists(), "nor its command");
 }
+
+/// Codex's cloud ends a turn on a question (`request_user_input`) and waits
+/// for your reply: the turn's Stop leaves the session needing you. A
+/// question answered first ends the turn idle, as ever.
+#[test]
+fn a_codex_turn_that_ends_on_a_question_still_needs_you() {
+    let payloads: Vec<String> = std::fs::read_to_string("tests/fixtures/codex/session.jsonl")
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    let (stop, ask, answer) = (&payloads[17], &payloads[21], &payloads[22]);
+    let last_status = |home: &Path| -> serde_json::Value {
+        let dir = home.join("events");
+        let file = std::fs::read_dir(&dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::read_to_string(file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .rfind(|e| e["type"] == "status")
+            .unwrap()["data"]
+            .clone()
+    };
+
+    let home = tempfile::tempdir().unwrap();
+    for payload in [ask, stop] {
+        emit(home.path(), &["--provider", "codex"], payload, &[]);
+    }
+    let status = last_status(home.path());
+    assert_eq!(status["state"], "input_required");
+    assert_eq!(status["summary"], "Asks: Keep the cache folder?");
+
+    let home = tempfile::tempdir().unwrap();
+    for payload in [ask, answer, stop] {
+        emit(home.path(), &["--provider", "codex"], payload, &[]);
+    }
+    assert_eq!(last_status(home.path())["state"], "idle");
+}
