@@ -169,6 +169,11 @@ function CodexCloudSteps() {
         isn&rsquo;t one), then click <strong>Edit</strong>. Everything in steps
         4 to 7 is on that Edit page. (Not ChatGPT&rsquo;s own settings, whose
         options are for chats.)
+        <span className="install-or">
+          Each environment has its own settings: only tasks in an environment
+          set up this way are recorded. If you have more than one, do steps 3 to
+          7 for each of them (step 9 says so again).
+        </span>
       </li>
       <li>
         Under <strong>Environment variables</strong>, add one named{" "}
@@ -216,6 +221,12 @@ function CodexCloudSteps() {
           variable, but it can only share to your account; delete it on your
           account page to stop it working.
         </span>
+      </li>
+      <li>
+        Using other environments too, ones you already had or new ones? Each
+        needs the same settings: go back to <strong>Environments</strong>, and
+        do steps 3 to 7 for each of them. You can use the same token in all of
+        them. Tasks in an environment without them aren&rsquo;t recorded.
       </li>
     </ol>
   );
