@@ -1646,6 +1646,9 @@ function renderGraph(host, graph, keep, ringed, flash) {
         const inner = g.append('g').attr('class', 'grow').attr('transform', 'scale(0.01)');
         inner.append('circle').attr('class', 'halo');
         inner.append('path').attr('class', 'shape');
+        // A session's app (Claude Code, Codex …), in its square, so sessions
+        // of different apps are told apart; its state still shows round it.
+        inner.append('image').attr('class', 'gapp');
         inner.append('text').attr('class', 'glabel');
         // Its tasks' pill (shown when it has some): its own stop for the keyboard.
         const pill = inner.append('g').attr('class', 'pill').attr('tabindex', 0).attr('role', 'button');
@@ -1684,6 +1687,15 @@ function renderGraph(host, graph, keep, ringed, flash) {
       const g = d3.select(this);
       g.select('circle.halo').attr('r', n.r + 7);
       g.select('path.shape').attr('d', shapePath(n.shape, n.r));
+      const app = n.shape === 'session' ? APP_ICON[n.node.provider] || letterIcon(n.node.provider) : null;
+      const size = Math.round(n.r * 1.25);
+      g.select('image.gapp')
+        .attr('display', app ? null : 'none')
+        .attr('href', app)
+        .attr('width', size)
+        .attr('height', size)
+        .attr('x', -size / 2)
+        .attr('y', -size / 2);
       g.select('text.glabel')
         .attr('y', n.r + 15)
         .text(n.label);
