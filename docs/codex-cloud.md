@@ -78,7 +78,7 @@ Two ways in, in order of preference. Both install `agent-graph` in the **install
 
 What you'd set up, all in the environment's configuration at chatgpt.com/codex:
 
-- install script: `curl -fsSL https://agentgraph.chofter.com/install.sh | sh && ~/.local/bin/agent-graph install codex --cloud`;
+- install script: `curl -fsSL "https://agentgraph.chofter.com/install.sh?cache_bust=$(date +%s)" | sh && ~/.local/bin/agent-graph install codex --cloud`. The address is different every time, so no cache in between hands out an older install script, and so an older release;
 - environment variable (or network secret, if step 2's check shows it works in a header): `AGENT_GRAPH_TOKEN=<an API token from your account page>`;
 - internet access: Custom domains only, with `agentgraph.chofter.com`.
 

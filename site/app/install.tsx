@@ -74,8 +74,12 @@ const ways: Record<Os, Way> = {
   "codex-cloud": {label: "Codex cloud"},
 };
 
-/** What goes in a Codex cloud environment's setup script. */
-const CODEX_CLOUD_SETUP = `curl -fsSL https://agentgraph.chofter.com/install.sh | sh
+/**
+ * What goes in a Codex cloud environment's setup script. The install
+ * script's address is different every time (the time, as `cache_bust`), so
+ * no cache on the way gives an older one, with an older release.
+ */
+const CODEX_CLOUD_SETUP = `curl -fsSL "https://agentgraph.chofter.com/install.sh?cache_bust=$(date +%s)" | sh
 ~/.local/bin/agent-graph install codex --cloud --yes`;
 
 /**
