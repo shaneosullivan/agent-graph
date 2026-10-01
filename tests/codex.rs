@@ -125,6 +125,29 @@ fn a_turn_ends_idle() {
     assert_eq!(g.nodes[CODEX].state, State::Idle);
 }
 
+/// A turn that ends asking you something in words (as Codex's cloud did:
+/// "What value should I use for X in `10 + X`?") waits for your reply.
+#[test]
+fn a_turn_that_ends_on_a_question_in_words_needs_you() {
+    let mut payloads = fixture("codex/session.jsonl");
+    payloads.truncate(18);
+    payloads[17]["last_assistant_message"] = serde_json::Value::String(
+        "The 120-second sleeper agent is running.\n\nWhat value should I use for **X** in `10 + X`?\n"
+            .into(),
+    );
+    let g = reduce(translate_as("codex", &payloads, Capture::default()));
+    assert_eq!(g.nodes[CODEX].state, State::InputRequired);
+    assert_eq!(
+        g.nodes[CODEX].attention.as_deref(),
+        Some("Asks you a question")
+    );
+    let g = reduce(translate_as("codex", &payloads, Capture { bodies: true }));
+    assert_eq!(
+        g.nodes[CODEX].attention.as_deref(),
+        Some("Asks: What value should I use for X in 10 + X?")
+    );
+}
+
 #[test]
 fn approvals_and_questions_need_you_until_answered() {
     let g = after(20);

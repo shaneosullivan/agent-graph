@@ -100,6 +100,25 @@ impl Adapter for Codex {
                     title: title_of(session),
                 }),
             )),
+            // A turn that ends by asking you something in words waits for
+            // your reply as much as one that used the question tool.
+            "Stop" if asks_in_words(input).is_some() => drafts.push(Draft::new(
+                &session_node,
+                Payload::Status(Status {
+                    state: State::InputRequired,
+                    // What it asks is the agent's own words: kept only with
+                    // bodies.
+                    summary: Some(
+                        capture
+                            .bodies
+                            .then(|| asks_in_words(input))
+                            .flatten()
+                            .map(|q| truncate_chars(&format!("Asks: {q}"), LABEL_MAX))
+                            .unwrap_or_else(|| "Asks you a question".to_string()),
+                    ),
+                    title: title_of(session),
+                }),
+            )),
             "Stop" | "Interrupt" => drafts.push(titled(&session_node, session, State::Idle)),
             "SubagentStart" => {
                 let agent = agent_id.ok_or("SubagentStart has no agent_id")?;
@@ -544,6 +563,20 @@ fn titled(node: &str, session: &str, state: State) -> Draft {
             title: title_of(session),
         }),
     )
+}
+
+/// The question the turn's last message ends on, if it ends on one: its
+/// last line, ending in a question mark, without Markdown's emphasis.
+fn asks_in_words(input: &Value) -> Option<String> {
+    let message = str_at(input, &["last_assistant_message"])?;
+    let line = message
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())?;
+    let line = line.replace("**", "").replace('`', "");
+    let line = line.trim().trim_end_matches(['*', '_']).trim_end();
+    line.ends_with('?').then(|| line.to_string())
 }
 
 /// How much of the end of a session's event log to read for its last event.
