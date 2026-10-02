@@ -392,8 +392,17 @@ test("the home page hears whether an account's watch-remote is running, and how 
   assert.equal((await alive(writeToken, {sessions: 1.5})).status, 400);
   assert.equal((await alive(writeToken, {})).status, 400);
 
+  // With only a count (a watch-remote from before summaries), all active.
   assert.equal((await alive(writeToken, {sessions: 3})).status, 204);
-  assert.deepEqual(await watching(owner.cookie), {watching: true, sessions: 3});
+  assert.deepEqual(await watching(owner.cookie), {
+    watching: true,
+    sessions: 3,
+    active: 3,
+    completed: 0,
+    agents: [],
+    computers: 1,
+    clouds: [],
+  });
   // Only its owner hears of it.
   const other = await loggedIn();
   assert.deepEqual(await watching(other.cookie), {watching: false});
@@ -532,11 +541,20 @@ test("/watch lists every live share's sessions, from what each says of itself", 
   );
   assert.deepEqual(await list((await loggedIn()).cookie), [], "only theirs");
 
-  // The home page counts them all.
+  // The home page counts them all, from their summaries: a session each,
+  // neither over, on two computers.
   const watching = await (
     await fetch(`${BASE}/api/watching`, {headers: {Cookie: owner.cookie}})
   ).json();
-  assert.deepEqual(watching, {watching: true, sessions: 3});
+  assert.deepEqual(watching, {
+    watching: true,
+    sessions: 2,
+    active: 2,
+    completed: 0,
+    agents: ["Claude Code"],
+    computers: 2,
+    clouds: [],
+  });
 });
 
 test("logging the CLI out ends its login", async () => {
