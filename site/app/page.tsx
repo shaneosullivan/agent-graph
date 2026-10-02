@@ -60,20 +60,13 @@ export default function Home() {
                   target="_blank"
                   rel="noopener noreferrer">
                   Claude Code
-                </a>
-                ,{" "}
+                </a>{" "}
+                and{" "}
                 <a
                   href="https://openai.com/codex/"
                   target="_blank"
                   rel="noopener noreferrer">
                   Codex
-                </a>{" "}
-                and{" "}
-                <a
-                  href="https://cursor.com/"
-                  target="_blank"
-                  rel="noopener noreferrer">
-                  Cursor
                 </a>{" "}
                 to record a log of all your sessions, agents and tasks and the
                 dependencies between them. It highlights where you are needed at
@@ -102,10 +95,14 @@ export default function Home() {
         />
 
         <section className="section">
-          <h2>
-            Install Agent Graph on Mac, Linux and
-            {hasWindows(latestRelease()) ? " Windows" : " soon Windows"}
-          </h2>
+          <h2>Install Agent Graph</h2>
+          <p className="section-lead">
+            {hasWindows(latestRelease())
+              ? "For macOS, Linux and Windows, on ARM and x86_64. "
+              : "For macOS and Linux, on ARM and x86_64 (Windows is coming). "}
+            It records Claude Code and Codex, on your computer and in their
+            clouds.
+          </p>
           <Install />
         </section>
 

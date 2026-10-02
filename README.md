@@ -54,14 +54,13 @@ For **Codex**, `agent-graph install codex` does the same:
 
 The site's [Download section](https://agentgraph.chofter.com/#install) has the steps for each, page by page.
 
-For other coding agents, `install` adds the same command:
+For Gemini CLI, `install` adds the same command:
 
 | Agent | Command | Written to |
 |---|---|---|
 | Gemini CLI | `agent-graph install gemini` | `~/.gemini/commands/agent-graph.toml` |
-| Cursor | `agent-graph install cursor` | `~/.cursor/skills/agent-graph/` |
 
-Their own sessions aren't recorded yet; only Claude Code and Codex have hooks so far.
+Its own sessions aren't recorded yet; only Claude Code and Codex have hooks so far.
 
 `agent-graph --help` gives an overview, and `agent-graph <command> --help` explains a command in full, with examples. The same text is on the web at [agentgraph.chofter.com/docs](https://agentgraph.chofter.com/docs).
 

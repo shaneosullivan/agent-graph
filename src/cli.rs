@@ -216,6 +216,9 @@ enum Provider {
     ClaudeCode,
     Codex,
     Gemini,
+    /// Only the /agent-graph command: Cursor's sessions aren't recorded, so
+    /// it isn't offered until they are (but still works, and uninstalls).
+    #[value(hide = true)]
     Cursor,
 }
 
