@@ -73,10 +73,12 @@ const CLAUDE_CODE_HOOKS: &[HookSpec] = &[
         matcher: Some("Agent|Task|AskUserQuestion|ExitPlanMode|Bash"),
         background: true,
     },
+    // `spawn_task`: a session suggested to you, which the desktop app starts
+    // if you accept it (`claude_code::SPAWN_TASK`).
     HookSpec {
         event: "PostToolUse",
         matcher: Some(
-            "Agent|Task|TaskCreate|TaskUpdate|TodoWrite|SendMessage|AskUserQuestion|ExitPlanMode|Bash",
+            "Agent|Task|TaskCreate|TaskUpdate|TodoWrite|SendMessage|AskUserQuestion|ExitPlanMode|Bash|mcp__ccd_session__spawn_task",
         ),
         background: true,
     },

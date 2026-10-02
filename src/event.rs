@@ -225,6 +225,12 @@ pub struct SpawnRequested {
     /// known in logs from before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<bool>,
+    /// For a session suggested to you, which the app starts if and when you
+    /// accept it (Claude Code's `spawn_task`): the name it's given. Such a
+    /// request is paired with the session that takes that name after it,
+    /// however much later, and only with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// The spawning call returned. `child`, when the provider reports it, is authoritative.

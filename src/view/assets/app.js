@@ -3354,6 +3354,7 @@ const LINK_LABEL = {
   env: 'Inherited from its parent’s shell',
   run: 'agent-graph run',
   process: 'Its processes (the parent’s agent started it)',
+  suggested: 'Its name (the parent suggested it, and you started it)',
 };
 
 function section(title, ...body) {

@@ -41,14 +41,15 @@ const UNDER: &str = "claude-code:c0ffee00-0000-4000-8000-000000000004";
 const GUESSED: &str = "claude-code:c0ffee00-0000-4000-8000-000000000005";
 const ENDED: &str = "claude-code:c0ffee00-0000-4000-8000-000000000006";
 const EARLY: &str = "claude-code:c0ffee00-0000-4000-8000-000000000007";
+const SUGGESTED: &str = "claude-code:c0ffee00-0000-4000-8000-000000000008";
 
 /// A log with a bit of everything, so that everything the reducer keeps
 /// matters across some point in it: the session fixture (tasks, agents,
 /// requests, waits, messages, a question); a session it starts from its
 /// shell, which ends, with a late status, and is resumed; one that ends as
 /// soon as it starts; one linked by its process; one paired by a guess
-/// that the request's return puts right; and one whose start sorts before
-/// its request.
+/// that the request's return puts right; one whose start sorts before its
+/// request; and one it suggested, paired once it's named.
 fn log() -> Vec<Envelope> {
     let mut events = translate(
         &fixture("claude-code/session.jsonl"),
@@ -115,6 +116,13 @@ fn log() -> Vec<Envelope> {
         e.id = format!("{}{i:016}", &e.id[..10]);
     }
     events.extend(early);
+    // Suggested, and paired by its name (the requests by name) once it has
+    // one.
+    events.extend([
+        ev(102_000, SESSION, "spawn.requested", json!({"call_id": "s1", "kind": "session", "background": true, "run": false, "title": "Fix the hook"})),
+        ev(104_000, SUGGESTED, "session.started", json!({})),
+        ev(105_000, SUGGESTED, "status", json!({"state": "working", "title": "Fix the hook"})),
+    ]);
     events.sort_by_cached_key(sort_key);
     events
 }
@@ -137,6 +145,7 @@ fn shown(g: reducer::Graph) -> Value {
 fn a_keyframe_carries_on_exactly() {
     let events = log();
     let whole = shown(reducer::reduce(events.clone(), &opts()));
+    assert_eq!(whole["nodes"][SUGGESTED]["parent"], SESSION);
     for cut in 1..=events.len() {
         let parts = reducer::keyframe(None, &events[..cut], KEYFRAME_PART).unwrap();
         assert_eq!(parts.len(), 1, "a small state is one line");

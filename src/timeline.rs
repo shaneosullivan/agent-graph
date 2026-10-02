@@ -649,6 +649,10 @@ pub fn describe(e: &Envelope, graph: &Graph) -> (&'static str, String) {
             ("task", label)
         }
         Payload::TaskDeleted(d) => ("task", format!("Task removed: {}", task_text(&d.id, None))),
+        Payload::SpawnRequested(d) if d.title.is_some() => (
+            "agent",
+            with_detail("Suggested a session".to_string(), d.title.as_deref()),
+        ),
         Payload::SpawnRequested(d) => {
             let what = match d.kind {
                 SpawnKind::Agent => d

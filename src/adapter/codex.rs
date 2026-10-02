@@ -266,6 +266,7 @@ fn pre_tool_use(
                         purpose: None,
                         background: launch.background,
                         run: Some(launch.run),
+                        title: None,
                     }),
                 ));
             }
@@ -292,6 +293,7 @@ fn pre_tool_use(
                     }),
                 background: true,
                 run: None,
+                title: None,
             }),
         )),
         "request_user_input" => {

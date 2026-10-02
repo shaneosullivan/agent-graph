@@ -61,8 +61,12 @@ impl Adapter for ClaudeCode {
                 Payload::SessionStarted(SessionStarted {
                     cwd: str_at(input, &["cwd"]).map(String::from),
                     source: str_at(input, &["source"]).map(String::from),
-                    // A resumed session already has its name.
-                    title: read_transcript(input, Some(TITLE_TAIL)).and_then(|t| title_in(&t)),
+                    // A resumed session already has its name, as may a new one
+                    // the desktop app started.
+                    title: session_title(
+                        input,
+                        read_transcript(input, Some(TITLE_TAIL)).as_deref(),
+                    ),
                     transcript_path: str_at(input, &["transcript_path"]).map(String::from),
                     ..Default::default()
                 }),
@@ -76,6 +80,7 @@ impl Adapter for ClaudeCode {
             "UserPromptSubmit" => drafts.push(titled(
                 &session_node,
                 State::Working,
+                input,
                 read_transcript(input, Some(TITLE_TAIL)).as_deref(),
             )),
             "Stop" => drafts.push(turn_over(input, &node, agent_id)),
@@ -155,6 +160,7 @@ impl Adapter for ClaudeCode {
                                 purpose: label(&["tool_input", "description"]),
                                 background,
                                 run: Some(launch.run),
+                                title: None,
                             }),
                         ));
                     }
@@ -172,6 +178,7 @@ impl Adapter for ClaudeCode {
                             background: bool_at(input, &["tool_input", "run_in_background"])
                                 .unwrap_or(false),
                             run: None,
+                            title: None,
                         }),
                     ));
                 }
@@ -236,6 +243,29 @@ fn post_tool_use(
                     call_id: call_id.to_string(),
                     child: str_at(response, &["agentId"]).map(|a| node_id(session, Some(a))),
                     outcome: str_at(response, &["status"]).map(String::from),
+                }),
+            ));
+        }
+        // A session suggested to you (the desktop app shows it as a task to
+        // start): the app starts it if you accept, maybe much later, named
+        // this. Nothing names the child; the reducer pairs it by its name.
+        SPAWN_TASK => {
+            let title = str_at(tool_input, &["title"])
+                .map(str::trim)
+                .filter(|t| !t.is_empty());
+            let (Some(call_id), Some(title)) = (tool_use_id(input), title) else {
+                return;
+            };
+            drafts.push(Draft::new(
+                node,
+                Payload::SpawnRequested(SpawnRequested {
+                    call_id: call_id.to_string(),
+                    kind: SpawnKind::Session,
+                    agent_type: None,
+                    purpose: label(tool_input, &["tldr"]),
+                    background: true,
+                    run: Some(false),
+                    title: Some(truncate_chars(title, LABEL_MAX)),
                 }),
             ));
         }
@@ -340,14 +370,14 @@ fn status(node: &str, state: State, summary: Option<String>) -> Draft {
     )
 }
 
-/// A session's status, with its name from its transcript if it has one.
-fn titled(session: &str, state: State, transcript: Option<&str>) -> Draft {
+/// A session's status, with its name if it has one (`session_title`).
+fn titled(session: &str, state: State, input: &Value, transcript: Option<&str>) -> Draft {
     Draft::new(
         session,
         Payload::Status(Status {
             state,
             summary: None,
-            title: transcript.and_then(title_in),
+            title: session_title(input, transcript),
         }),
     )
 }
@@ -365,8 +395,11 @@ fn turn_over(input: &Value, node: &str, agent: Option<&str>) -> Draft {
         .as_deref()
         .is_some_and(|t| background_commands_running(t) > 0);
     let state = if running { State::Working } else { State::Idle };
-    titled(node, state, transcript.as_deref())
+    titled(node, state, input, transcript.as_deref())
 }
+
+/// The desktop app's tool for suggesting a session to start (a task chip).
+pub const SPAWN_TASK: &str = "mcp__ccd_session__spawn_task";
 
 /// How much of a transcript's end to read for the session's name. Claude
 /// Code writes the name again every turn, so the last one is near the end;
@@ -381,9 +414,33 @@ fn read_transcript(input: &Value, tail: Option<u64>) -> Option<String> {
     )
 }
 
-/// The session's name, from the end of its transcript at `path`.
+/// The session's name, from the end of its transcript at `path`, or the
+/// name it was started with (`app_title`).
 pub fn title_of(path: &std::path::Path) -> Option<String> {
-    title_in(&read_file(path, Some(TITLE_TAIL))?)
+    read_file(path, Some(TITLE_TAIL))
+        .as_deref()
+        .and_then(title_in)
+        .or_else(|| app_title(path))
+}
+
+/// The session's name: the latest in its `transcript`, or the name it was
+/// started with (`app_title`).
+fn session_title(input: &Value, transcript: Option<&str>) -> Option<String> {
+    transcript
+        .and_then(title_in)
+        .or_else(|| app_title(std::path::Path::new(str_at(input, &["transcript_path"])?)))
+}
+
+/// The name a session was started with, kept beside its transcript (at
+/// `<session id>/custom-title.json`). The desktop app writes it as it starts
+/// a session it has named, such as one from a suggested task, so it's there
+/// from the session's first event; the transcript only says so once its
+/// first prompt's hook has run.
+fn app_title(transcript: &std::path::Path) -> Option<String> {
+    let file = transcript.with_extension("").join("custom-title.json");
+    let entry = serde_json::from_str::<Value>(&read_file(&file, None)?).ok()?;
+    let title = str_at(&entry, &["customTitle"])?.trim();
+    (!title.is_empty()).then(|| truncate_chars(title, LABEL_MAX))
 }
 
 /// A file, or its last `tail` bytes (from a line's start).

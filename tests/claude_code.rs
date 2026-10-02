@@ -420,3 +420,130 @@ fn sessions_take_the_name_claude_code_gives_them() {
         "Login redirect loop"
     );
 }
+
+#[test]
+fn a_session_the_desktop_app_named_has_its_name_from_its_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("s.jsonl");
+    let hook = |name: &str| {
+        json!({"session_id": "s", "hook_event_name": name,
+            "transcript_path": transcript.to_str().unwrap()})
+    };
+    // The app writes the name beside the transcript as it starts the
+    // session; the transcript doesn't have it yet.
+    std::fs::write(&transcript, "").unwrap();
+    std::fs::create_dir(dir.path().join("s")).unwrap();
+    std::fs::write(
+        dir.path().join("s/custom-title.json"),
+        json!({"customTitle": "Fix the hook"}).to_string(),
+    )
+    .unwrap();
+    let events = translate(&[hook("SessionStart")], Capture::default());
+    match events[0].payload() {
+        Payload::SessionStarted(d) => assert_eq!(d.title.as_deref(), Some("Fix the hook")),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        agent_graph::adapter::claude_code::title_of(&transcript).as_deref(),
+        Some("Fix the hook")
+    );
+
+    // Renamed since: the transcript's name wins.
+    std::fs::write(
+        &transcript,
+        json!({"type": "custom-title", "customTitle": "Hook paths"}).to_string() + "\n",
+    )
+    .unwrap();
+    let g = reduce(translate(
+        &[hook("SessionStart"), hook("Stop")],
+        Capture::default(),
+    ));
+    assert_eq!(
+        g.nodes["claude-code:s"].title.as_deref(),
+        Some("Hook paths")
+    );
+}
+
+#[test]
+fn a_suggested_session_is_paired_by_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let hook = |session: &str, name: &str, title: Option<&str>| {
+        let transcript = dir.path().join(format!("{session}.jsonl"));
+        let line = title.map_or(String::new(), |t| {
+            json!({"type": "custom-title", "customTitle": t}).to_string() + "\n"
+        });
+        std::fs::write(&transcript, line).unwrap();
+        json!({"session_id": session, "hook_event_name": name,
+            "transcript_path": transcript.to_str().unwrap()})
+    };
+    let suggest = |call: &str, title: &str| {
+        json!({"session_id": "p", "hook_event_name": "PostToolUse",
+            "tool_name": "mcp__ccd_session__spawn_task", "tool_use_id": call,
+            "tool_input": {"title": title, "tldr": "Stray root files in worktree commits.",
+                "prompt": "…"},
+            "tool_response": [{"type": "text", "text": "task_id: t1"}]})
+    };
+    let payloads = [
+        hook("p", "SessionStart", Some("Publishing")),
+        // Named so before it was suggested: not it.
+        hook("early", "SessionStart", None),
+        hook("early", "Stop", Some("Fix the hook")),
+        suggest("toolu_S", "Fix the hook"),
+        hook("p", "Stop", Some("Publishing")),
+        // Another session, by another name.
+        hook("other", "SessionStart", None),
+        hook("other", "Stop", Some("Something else")),
+        // Accepted, much later; named once its first turn is over.
+        hook("c", "SessionStart", None),
+        hook("c", "UserPromptSubmit", None),
+        hook("c", "Stop", Some("Fix the hook")),
+        // The same name again: the request is taken.
+        hook("again", "SessionStart", None),
+        hook("again", "Stop", Some("Fix the hook")),
+    ];
+    let events = translate(&payloads, Capture::default());
+    let g = reduce(events.clone());
+
+    let child = &g.nodes["claude-code:c"];
+    assert_eq!(child.parent.as_deref(), Some("claude-code:p"));
+    assert_eq!(child.spawned_by.as_deref(), Some("toolu_S"));
+    assert_eq!(child.link.as_deref(), Some("suggested"));
+    assert_eq!(
+        child.purpose.as_deref(),
+        Some("Stray root files in worktree commits.")
+    );
+    assert_eq!(child.background, Some(true));
+    for id in ["early", "other", "again"] {
+        assert_eq!(g.nodes[&format!("claude-code:{id}")].parent, None, "{id}");
+    }
+    // Nothing waits on a suggestion.
+    assert!(g.nodes["claude-code:p"].blocked.is_none());
+    let request = events.iter().find(|e| e.kind == "spawn.requested").unwrap();
+    assert_eq!(
+        agent_graph::timeline::describe(request, &g).1,
+        "Suggested a session: Fix the hook"
+    );
+}
+
+#[test]
+fn a_suggestion_waits_for_its_name() {
+    // A session linked to the one that suggested it, but started some other
+    // way (a script it ran, say) and by another name, isn't the suggested
+    // one, though it's the only request it might answer.
+    let mut events = translate(
+        &[
+            json!({"session_id": "p", "hook_event_name": "SessionStart"}),
+            json!({"session_id": "p", "hook_event_name": "PostToolUse",
+                "tool_name": "mcp__ccd_session__spawn_task", "tool_use_id": "toolu_S",
+                "tool_input": {"title": "Fix the hook"}}),
+            json!({"session_id": "launched", "hook_event_name": "SessionStart"}),
+        ],
+        Capture::default(),
+    );
+    events[2].parent = Some("claude-code:p".into());
+    let g = reduce(events);
+    let launched = &g.nodes["claude-code:launched"];
+    assert_eq!(launched.parent.as_deref(), Some("claude-code:p"));
+    assert_eq!(launched.spawned_by, None);
+    assert_eq!(g.nodes["claude-code:p"].spawns[0].child, None);
+}

@@ -108,7 +108,7 @@ Many sessions write at the same time. If they all rewrite one `state.json`, two 
 | `tasks.updated` | `items: [{id, text, active_text?, status}]` | A todo tool sent its full list. Replaces the node's list |
 | `task.upserted` | `id`, `text?`, `active_text?`, `status?` | An incremental task tool created or changed one task |
 | `task.deleted` | `id` | A task was removed |
-| `spawn.requested` | `call_id`, `kind` (agent/session), `agent_type?`, `purpose?`, `background`, `run?` (through `agent-graph run`) | A node asked for a child to start. Unless `background`, the node is blocked until the matching `spawn.returned`, or until it goes idle or ends (§4) |
+| `spawn.requested` | `call_id`, `kind` (agent/session), `agent_type?`, `purpose?`, `background`, `run?` (through `agent-graph run`), `title?` (a suggested session's name) | A node asked for a child to start. Unless `background`, the node is blocked until the matching `spawn.returned`, or until it goes idle or ends (§4) |
 | `spawn.returned` | `call_id`, `child?`, `outcome?` | The spawning call returned. `child`, when the provider reports it, is authoritative |
 | `wait.started` | `wait_id`, `on` (node id), `reason?` | A node blocks on another node for some other reason |
 | `wait.ended` | `wait_id`, `outcome?` | That block clears |
@@ -247,7 +247,7 @@ The adapter turns that into:
 
 | Claude Code hook | Agent Graph event |
 |---|---|
-| `SessionStart` (`source`: startup/resume/clear/compact) | `session.started`. A new session is `idle` until its first prompt. A resumed one's `title` is its name, the last `custom-title` in its transcript |
+| `SessionStart` (`source`: startup/resume/clear/compact) | `session.started`. A new session is `idle` until its first prompt. A resumed one's `title` is its name, the last `custom-title` in its transcript; so is one the desktop app started with a name, which it writes beside the transcript first (`<session id>/custom-title.json`), since the transcript only has it after the first prompt's hook |
 | `UserPromptSubmit` | `status: working`, with the session's name as `title` once Claude Code has named it (`Stop` carries it too) |
 | `PreToolUse` on `Agent`/`Task` | `spawn.requested` with the call's `tool_use_id`, `description` as the purpose, `subagent_type`, and `run_in_background` |
 | `SubagentStart` | `agent.spawned` for `<session>/<agent_id>` |
@@ -256,6 +256,7 @@ The adapter turns that into:
 | `PostToolUse` on `TaskCreate` / `TaskUpdate` | `task.upserted` (the new id comes from `tool_response.task.id`), or `task.deleted` |
 | `PostToolUse` on `TodoWrite` | `tasks.updated` with the full list |
 | `PostToolUse` on `SendMessage` | `message.sent` with `to`, `summary` and `msg_id`. The body only with body capture on |
+| `PostToolUse` on `mcp__ccd_session__spawn_task` (the desktop app's suggested task) | `spawn.requested` with `kind: session`, `background`, the task's `title` as `title` and its `tldr` as the purpose. The app starts the session if you accept it, maybe much later; the reducer pairs it by its name (§6) |
 | `PreToolUse` on `Bash`, when the command starts another agent | `spawn.requested` with `kind: session`, the program as `agent_type`, the call's `description` as the purpose, `background` for `&` (unless a `wait` follows) or `run_in_background`, and `run` for `agent-graph run` |
 | `PostToolUse` on `Bash`, for the same command | `spawn.returned`, without a `child`: the reducer pairs it (below) |
 | `PreToolUse`/`PostToolUse` on any other `Bash` command | Nothing |
@@ -331,7 +332,7 @@ An MCP server that lets agents report these things themselves could be added lat
 
 ## 6. Correlation: linking sessions across processes
 
-Subagents are easy because the provider tells us the parent (§5.2). **Separate sessions** are harder. Examples: Claude running `codex exec …` from its shell tool, or a script launching three `claude -p` workers. We use these methods in order. The reducer records which one linked each session (`node.link`: `env`, `run` or `process`), and the viewer shows it as "Linked by".
+Subagents are easy because the provider tells us the parent (§5.2). **Separate sessions** are harder. Examples: Claude running `codex exec …` from its shell tool, or a script launching three `claude -p` workers. We use these methods in order. The reducer records which one linked each session (`node.link`: `env`, `run`, `process` or `suggested`), and the viewer shows it as "Linked by".
 
 1. **Environment propagation (preferred).** When a session starts, `emit` passes its identity to the agent's shell, so any process started from that shell inherits it. The child's own `SessionStart` hook reads it back, and its `session.started` gets that `parent` (`data.link_method: env`).
    - Variables: `AGENT_GRAPH_PARENT=<node id>`, plus a W3C `TRACEPARENT` following OpenTelemetry's environment-variable spec for passing trace context to child processes. The child continues the parent's trace, and its own `traceparent` goes in its envelope's `trace`.
@@ -345,6 +346,8 @@ Subagents are easy because the provider tells us the parent (§5.2). **Separate 
    - Linux reads `/proc`, macOS `proc_pidinfo`, and Windows a Toolhelp snapshot with `GetProcessTimes`. Elsewhere nothing is recorded.
    - The reducer links a session with no `parent` to the session whose agent process is its nearest ancestor (`link: process`), which catches a child that didn't inherit the environment. It needs no provider support, and fails for detached processes.
    - A `/clear` starts a new session in the same process. The newer session owns the process from then on, and neither is the other's parent.
+
+4. **Suggested sessions, by name.** The Claude Code desktop app lets a session suggest one (`spawn_task`), which the app starts, as a session of its own, if and when you accept it. Nothing passes from one to the other but the name the app gives it, so the request records that name (`spawn.requested`'s `title`), and the reducer pairs it with the first session that takes that name after the request, if nothing else has linked it (`link: suggested`). Such requests are kept apart from the rest, so a session launched from the shell in the meantime is never paired with one; nor is a second session of the same name, nor one named so before it was suggested.
 
 We use the standard W3C `TRACEPARENT` format rather than inventing our own, so the IDs stay compatible with OpenTelemetry tooling.
 

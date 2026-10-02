@@ -81,7 +81,8 @@ pub struct Node {
     pub requested_by: Option<String>,
     /// For a session started by another: how the link was found. `env` (it
     /// inherited its parent's identity), `run` (`agent-graph run` started
-    /// it) or `process` (its parent's agent is among its processes).
+    /// it), `process` (its parent's agent is among its processes) or
+    /// `suggested` (it took the name of a session its parent suggested).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
     /// The session's agent process, `<pid>@<start>`, when recorded.
@@ -129,6 +130,10 @@ pub struct Spawn {
     /// `SpawnRequested::run`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<bool>,
+    /// For a suggested session: the name it's given (see
+    /// `SpawnRequested::title`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child: Option<String>,
     pub returned: bool,
@@ -423,6 +428,9 @@ struct Index {
     /// The requests in each session (by it or its agents) that may yet be
     /// paired with a child, by what they're for, oldest first.
     unpaired: BTreeMap<(String, Pool), BTreeSet<Request>>,
+    /// The requests for a suggested session that may yet be paired, by the
+    /// name it's given, oldest first.
+    suggested: BTreeMap<String, BTreeSet<Request>>,
     /// Each node's open waits, by wait id (where they are in its `waits`).
     open: BTreeMap<String, BTreeMap<String, BTreeSet<usize>>>,
     /// The open waits on each node: the node waiting, and where the wait is
@@ -604,6 +612,12 @@ impl Reducer {
             node.attention = None;
         }
 
+        // A name may be one a session suggested this one be given.
+        let named = match &payload {
+            Payload::SessionStarted(d) => d.title.is_some(),
+            Payload::Status(d) => d.title.is_some(),
+            _ => false,
+        };
         match payload {
             Payload::SessionStarted(d) => {
                 node.cwd = d.cwd.or(node.cwd.take());
@@ -814,6 +828,7 @@ impl Reducer {
                     purpose: d.purpose,
                     background: d.background,
                     run: d.run,
+                    title: d.title,
                     child: None,
                     returned: false,
                     requested_at: e.ts.clone(),
@@ -900,6 +915,9 @@ impl Reducer {
                 }
             }
             Payload::Activity(_) | Payload::Keyframe(_) | Payload::Unknown(_) => {}
+        }
+        if named {
+            self.bind_suggested(&e.node);
         }
     }
 
@@ -1216,6 +1234,36 @@ impl Reducer {
         }
     }
 
+    /// Pairs session `id`, which has just been named, with the oldest
+    /// request made before it started that suggested a session of that name
+    /// (`SpawnRequested::title`), if nothing else has linked it. The desktop
+    /// app starts a suggested session when you accept it, which may be much
+    /// later, and as a session of its own: its name is all that links it.
+    fn bind_suggested(&mut self, id: &str) {
+        let node = &self.nodes[id];
+        if node.kind != NodeKind::Session || node.parent.is_some() || node.spawned_by.is_some() {
+            return;
+        }
+        let (Some(title), Some(started)) = (&node.title, &node.started_at) else {
+            return;
+        };
+        let pick = self.index.suggested.get(title).and_then(|requests| {
+            requests
+                .iter()
+                .take_while(|(at, ..)| at <= started)
+                .find(|(_, requester, _)| requester.split('/').next() != Some(id))
+                .cloned()
+        });
+        let Some((_, requester, call_id)) = pick else {
+            return;
+        };
+        self.bind(&requester, &call_id, id);
+        let node = self.nodes.get_mut(id).expect("exists");
+        if node.spawned_by.as_deref() == Some(call_id.as_str()) {
+            node.link = Some("suggested".to_string());
+        }
+    }
+
     /// Pairs the runs under `requester`'s session that started at `at`, the
     /// time of a session request it has just made, and found no request:
     /// their starts sorted before it.
@@ -1310,6 +1358,25 @@ impl Reducer {
     /// out, as it now stands.
     fn index_spawn(&mut self, node: &str, at: usize) {
         let spawn = &self.nodes[node].spawns[at];
+        // A suggested session is paired by its name (`bind_suggested`), not
+        // with whatever starts next. It's in the background: nothing waits.
+        if let Some(title) = &spawn.title {
+            let entry = (
+                spawn.requested_at.clone(),
+                node.to_string(),
+                spawn.call_id.clone(),
+            );
+            if spawn.child.is_none() {
+                let requests = self.index.suggested.entry(title.clone()).or_default();
+                requests.insert(entry);
+            } else if let Some(requests) = self.index.suggested.get_mut(title) {
+                requests.remove(&entry);
+                if requests.is_empty() {
+                    self.index.suggested.remove(title);
+                }
+            }
+            return;
+        }
         let for_session = spawn.kind == SpawnKind::Session;
         // A background launch returns before its child starts.
         let pairable =

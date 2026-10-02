@@ -191,6 +191,7 @@ fn spawn(call: &str, agent_type: &str, purpose: &str, background: bool) -> Paylo
         purpose: Some(purpose.into()),
         background,
         run: None,
+        title: None,
     })
 }
 /// Another agent started from the session's shell (design §5.2).
@@ -202,6 +203,7 @@ fn shell_spawn(call: &str, program: &str, purpose: &str, background: bool) -> Pa
         purpose: Some(purpose.into()),
         background,
         run: Some(false),
+        title: None,
     })
 }
 /// A session started by another, which it found through `link`.
