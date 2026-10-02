@@ -32,7 +32,7 @@ export default function Home() {
         />
 
         <section className="hero">
-          <h1>Keep up with your army of agents</h1>
+          <h1>Lead your army of agents with confidence</h1>
 
           <p>
             We humans are still an integral cog in the AI machine, but when
