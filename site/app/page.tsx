@@ -75,7 +75,7 @@ export default function Home() {
                 use on your computer.
               </p>
               <YouTubeVideo
-                id="v0GHik_RKJM"
+                id="WXhVAul7W0g"
                 title="Agent Graph, in action"
                 autoplay
               />
