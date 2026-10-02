@@ -441,7 +441,7 @@ if [ -n "$NPM" ]; then
       on_npm=true
       break
     fi
-    echo "Waiting for npm to show @chofter/agent-graph@$VERSION…"
+    echo "Waiting for npm to show @chofter/agent-graph@${VERSION}…"
     sleep 30
   done
   [ "$on_npm" = true ] ||
