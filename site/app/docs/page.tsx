@@ -5,6 +5,7 @@ import type {Metadata} from "next";
 import cliHelp from "@/lib/cli-help.json";
 import {Blocks, Examples, type Help, Inline, Options} from "@/lib/help-render";
 
+import {GettingStarted, GettingStartedLinks} from "../install";
 import {SiteHeader} from "../site-header";
 import {SiteFooter} from "../site-footer";
 
@@ -30,11 +31,18 @@ export default function Docs() {
         />
 
         <div className="docs-layout">
-          <aside className="docs-nav" aria-label="Commands">
+          <aside className="docs-nav" aria-label="Contents">
+            <a href="#getting-started" className="docs-nav-part">
+              Getting started
+            </a>
+            <GettingStartedLinks />
+            <a href="#reference" className="docs-nav-part">
+              Reference
+            </a>
             <a href="#overview">Overview</a>
             {help.sections.map(s => (
-              <a key={s.title} href={`#${slug(s.title)}`}>
-                {s.title}
+              <a key={s.title} href={`#${slug(titled(s.title))}`}>
+                {titled(s.title)}
               </a>
             ))}
             <span className="docs-nav-label">Commands</span>
@@ -46,10 +54,22 @@ export default function Docs() {
           </aside>
 
           <main className="docs-main">
-            <section id="overview" className="hero">
-              <h1>
+            <section id="getting-started" className="hero">
+              <h1>Getting started</h1>
+              <p>
+                Install <code>{help.program}</code> and start recording your
+                agents&rsquo; sessions. Choose where they run:
+              </p>
+            </section>
+            <GettingStarted />
+
+            <section id="reference" className="hero docs-part">
+              <h1>Reference</h1>
+            </section>
+            <section id="overview" className="doc-section">
+              <h2>
                 The <code>{help.program}</code> command
-              </h1>
+              </h2>
               <p>{help.summary}</p>
             </section>
             <div className="prose">
@@ -59,9 +79,9 @@ export default function Docs() {
             {help.sections.map(section => (
               <section
                 key={section.title}
-                id={slug(section.title)}
+                id={slug(titled(section.title))}
                 className="doc-section">
-                <h2>{section.title}</h2>
+                <h2>{titled(section.title)}</h2>
                 {section.blocks && (
                   <div className="prose">
                     <Blocks blocks={section.blocks} />
@@ -110,4 +130,13 @@ function slug(title: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+/**
+ * A section of `--help`, as the docs name it: its "Getting started" (the
+ * commands to run first) is "First steps" here, where Getting started is
+ * the page's own first part, installing.
+ */
+function titled(title: string): string {
+  return title === "Getting started" ? "First steps" : title;
 }

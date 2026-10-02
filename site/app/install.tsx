@@ -92,7 +92,7 @@ function CloudSteps() {
   return (
     <ol className="card-body install-steps">
       <li>
-        On your computer, with agent-graph installed (the Mac or Linux tab), go
+        On your computer, with agent-graph installed (as for macOS or Linux), go
         to the root folder of your copy of the GitHub repository you&rsquo;ll
         open in the cloud, and add the cloud&rsquo;s hooks to its{" "}
         <code>.claude/settings.json</code>
@@ -325,7 +325,6 @@ export function Install() {
     markMore(el);
   }, [os]);
 
-  const way = ways[os];
   return (
     <section
       className="card install"
@@ -348,6 +347,65 @@ export function Install() {
           </button>
         ))}
       </div>
+      <PlatformSteps os={os} />
+    </section>
+  );
+}
+
+/**
+ * The docs' Getting started: every platform's steps, as the Download
+ * section's tabs have them, one after another, with a list of them first.
+ * Each is at /docs#get-started-<platform>.
+ */
+export function GettingStarted() {
+  const platforms = Object.keys(ways) as Array<Os>;
+  return (
+    <>
+      <nav className="get-started-toc" aria-label="Platforms">
+        <ul>
+          {platforms.map(os => (
+            <li key={os}>
+              <a href={`#get-started-${os}`}>{ways[os].label}</a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      {platforms.map(os => (
+        <section
+          key={os}
+          id={`get-started-${os}`}
+          className="doc-section get-started">
+          <h3>{ways[os].label}</h3>
+          <div className="card install">
+            <PlatformSteps os={os} />
+          </div>
+        </section>
+      ))}
+    </>
+  );
+}
+
+/** The platforms the docs list, with their names: for its menu. */
+export function GettingStartedLinks() {
+  return (
+    <>
+      {(Object.keys(ways) as Array<Os>).map(os => (
+        <a key={os} href={`#get-started-${os}`}>
+          {ways[os].label}
+        </a>
+      ))}
+    </>
+  );
+}
+
+/**
+ * How to install Agent Graph on platform `os`, and start recording: the
+ * Download section's tab for it, and the docs' Getting started.
+ */
+export function PlatformSteps({os}: {os: Os}) {
+  const way = ways[os];
+  return (
+    <>
       {os === "cloud" ? (
         <CloudSteps />
       ) : os === "codex-cloud" ? (
@@ -407,6 +465,6 @@ export function Install() {
           </li>
         </ol>
       )}
-    </section>
+    </>
   );
 }
