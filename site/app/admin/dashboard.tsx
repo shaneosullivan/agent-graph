@@ -55,6 +55,7 @@ const COPIED_LABEL: Record<Copied, string> = {
   codex: "Codex setup command copied",
   "codex-cloud": "Codex cloud setup script copied",
   npm: "npm command copied",
+  powershell: "PowerShell install command copied",
 };
 
 /** Every kind of download: a button's target, or a command copied. */

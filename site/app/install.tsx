@@ -5,7 +5,13 @@ import {useEffect, useRef, useState, useSyncExternalStore} from "react";
 import type {Copied, Target} from "@/lib/analytics-core";
 import {track} from "@/lib/analytics-client";
 import {link} from "@/lib/links";
-import {BREW_COMMAND, INSTALL_COMMAND, latestRelease} from "@/lib/release";
+import {
+  BREW_COMMAND,
+  hasWindows,
+  INSTALL_COMMAND,
+  latestRelease,
+  POWERSHELL_COMMAND,
+} from "@/lib/release";
 
 import {CopyCommand} from "./copy-command";
 
@@ -18,6 +24,7 @@ type Command = {command: string; copied: Copied};
 
 const BREW: Command = {command: BREW_COMMAND, copied: "homebrew"};
 const SCRIPT: Command = {command: INSTALL_COMMAND, copied: "install-script"};
+const POWERSHELL: Command = {command: POWERSHELL_COMMAND, copied: "powershell"};
 // Global, so the hooks' path to the program stays (npx's doesn't).
 const NPM: Command = {
   command: "npm install -g @chofter/agent-graph",
@@ -67,15 +74,26 @@ const ways: Record<Os, Way> = {
         ],
       }
     : {label: "Linux", soon: "The first release is coming soon."},
-  windows: {
-    label: "Windows",
-    soon: "Coming soon: agent-graph for Windows, with winget.",
-  },
+  windows: hasWindows(release)
+    ? {
+        label: "Windows",
+        install: POWERSHELL,
+        note: "In PowerShell. It puts agent-graph.exe in %USERPROFILE%\\.local\\bin, and adds that to your PATH. Run it again to upgrade.",
+        ...(release?.npm ? {or: {note: "Or with Node (npm):", ...NPM}} : {}),
+        downloads: [
+          {label: "x64", target: "x86_64-pc-windows-msvc"},
+          {label: "ARM64", target: "aarch64-pc-windows-msvc"},
+        ],
+      }
+    : {
+        label: "Windows",
+        soon: "Coming soon: agent-graph for Windows.",
+      },
   npm: release?.npm
     ? {
         label: "npm",
         install: NPM,
-        note: "For macOS and Linux, with Node 16 or later. Install it globally, not with npx: the hooks run the program from where npm puts it. npm update -g @chofter/agent-graph upgrades it.",
+        note: `For macOS${hasWindows(release) ? ", Linux and Windows" : " and Linux"}, with Node 16 or later. Install it globally, not with npx: the hooks run the program from where npm puts it. npm update -g @chofter/agent-graph upgrades it.`,
       }
     : {
         label: "npm",

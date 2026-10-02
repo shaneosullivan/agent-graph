@@ -4,6 +4,7 @@ import {Fragment} from "react";
 
 import cliHelp from "@/lib/cli-help.json";
 import {type Help, Inline} from "@/lib/help-render";
+import {hasWindows, latestRelease} from "@/lib/release";
 
 import {DeletedNotice} from "./deleted-notice";
 import {Examples} from "./examples";
@@ -101,7 +102,10 @@ export default function Home() {
         />
 
         <section className="section">
-          <h2>Install Agent Graph on Mac, Linux and soon Windows</h2>
+          <h2>
+            Install Agent Graph on Mac, Linux and
+            {hasWindows(latestRelease()) ? " Windows" : " soon Windows"}
+          </h2>
           <Install />
         </section>
 

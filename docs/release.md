@@ -2,9 +2,9 @@
 
 Agent Graph ships as a prebuilt binary for each platform, so nobody needs Rust to install it. [dist](https://axodotdev.github.io/cargo-dist/) builds the binaries on each version tag, signs and notarizes the macOS ones, and publishes them to each package manager.
 
-## The beta: macOS and Linux, with scripts/release.sh
+## The beta: macOS, Linux and Windows, with scripts/release.sh
 
-For now, releases are macOS and Linux only, and are cut from a Mac on the build machine's network, not by dist. Windows is shown on the site as coming soon. Everything below this section is dist's release, for when all six targets ship.
+For now, releases are cut from a Mac on the build machine's network, not by dist, for all six targets: macOS, Linux and Windows, each ARM and x86_64. Windows has no winget package or signed programs yet. Everything below this section is dist's release, which isn't used.
 
 ```bash
 scripts/release.sh 0.1.0-beta.1
@@ -15,11 +15,11 @@ It checks everything it needs first (a clean `main` that matches `origin/main`, 
 1. sets the version in `Cargo.toml` (with `Cargo.lock`), commits it as "Release <version>" and pushes it. Nothing is built on the Mac;
 2. waits for Chofter CI's run of that commit to finish, and downloads its builds (`scripts/fetch-ci-builds.sh`), checking each is that version. They have to be that commit's, since the version is compiled in, so this waits for a whole CI run;
 3. signs and notarizes the macOS builds (`scripts/notarize-mac.sh --bin …`);
-4. packs each build with the LICENSE as `agent-graph-<target>.tar.gz`, uploads it to `$RELEASE_BUCKET/releases/<version>/mac` or `…/linux`, and downloads it again from its public URL to check it;
+4. packs each build with the LICENSE as `agent-graph-<target>.tar.gz` (on Windows, `.zip`, holding `agent-graph.exe`), uploads it to `$RELEASE_BUCKET/releases/<version>/mac`, `…/linux` or `…/windows`, and downloads it again from its public URL to check it;
 5. publishes the npm packages (below), skipping any already published at that version;
-6. writes [`site/release.json`](../site/release.json) (the version, commit, each archive's URL and SHA-256, and `npm: true`), and commits and pushes it. The site's download buttons, its npm tab and `/install.sh` read it, so they switch to the new release once Vercel has deployed that commit;
+6. writes [`site/release.json`](../site/release.json) (the version, commit, each archive's URL and SHA-256, and `npm: true`), and commits and pushes it. The site's download buttons, its npm and Windows tabs, `/install.sh` and `/install.ps1` read it, so they switch to the new release once Vercel has deployed that commit;
 7. writes the cask `Casks/agent-graph.rb` to the tap (`$HOMEBREW_TAP`), for macOS and Linux, ARM and Intel, and pushes it. A cask, not a formula: Homebrew checks that a formula with no bottle could be built from source, and refuses it when the Command Line Tools are out of date, though installing it only copies the program into place. `scripts/release.sh --tap-only` does this step alone, for the release in `site/release.json`.
-8. waits until the site's install script (`/install.sh`, which the site serves with a 30-second cache) installs the new version, that is, until Vercel has deployed step 6's commit, so that once it says "Released", installing gets this version. After 15 minutes it only warns. `SITE_URL` (optional) is the site it checks.
+8. waits until the site's install scripts (`/install.sh` and `/install.ps1`, which the site serves with a 30-second cache) install the new version, that is, until Vercel has deployed step 6's commit, so that once it says "Released", installing gets this version. After 15 minutes it only warns. `SITE_URL` (optional) is the site it checks.
 
 If it stops partway (notarization failing, say), fix the cause and run it again with the same version: the version's already committed, so it carries on from the builds.
 
@@ -29,29 +29,28 @@ It pushes no tag: a version tag starts dist's `release.yml`, which would try to 
 
 **Settings** (in `.env.local`; `.env.example` lists them): `RELEASE_BUCKET` (`gs://…`), `HOMEBREW_TAP` (`owner/homebrew-<name>`), optionally `GCLOUD_ACCOUNT`, and the notarization settings. gcloud must be logged in as an account that can write to the bucket, and gh as one that can push to the tap.
 
-**npm.** [`scripts/npm-packages.mjs`](../scripts/npm-packages.mjs) makes five packages, and step 5 publishes them, the platform packages first:
+**npm.** [`scripts/npm-packages.mjs`](../scripts/npm-packages.mjs) makes seven packages, and step 5 publishes them, the platform packages first:
 
 | Package | What's in it |
 |---|---|
 | `@chofter/agent-graph` | [`npm/agent-graph/`](../npm/agent-graph): `bin/agent-graph.js`, which runs the program, and the README that is npm's page for it. Each platform package is an optional dependency, of this version exactly. |
-| `@chofter/agent-graph-darwin-arm64`, `-darwin-x64`, `-linux-arm64`, `-linux-x64` | The program for that platform (the notarized one, for macOS), in `bin/`, with `os` and `cpu` set, so npm installs only the one for its machine. |
+| `@chofter/agent-graph-darwin-arm64`, `-darwin-x64`, `-linux-arm64`, `-linux-x64`, `-win32-arm64`, `-win32-x64` | The program for that platform (the notarized one, for macOS), in `bin/`, with `os` and `cpu` set, so npm installs only the one for its machine. |
 
 Nothing else in the repository goes in them. Publishing needs npm logged in as a member of the [chofter](https://www.npmjs.com/org/chofter) org. With `npm login` and two-factor authentication, each `npm publish` asks for a code or gives a link to approve, which expires in a few minutes. So that a release doesn't wait on you, use a granular access token instead (npmjs.com → Access Tokens → Generate New Token → Granular Access Token): read and write on the `@chofter` packages, read on the chofter org (for the membership check), and "Bypass two-factor authentication" ticked. Put it in `~/.npmrc` as the only `//registry.npmjs.org/:_authToken=` line (`npm login` adds another, which then wins). npm limits how long a token that can publish lasts, so make a new one when it expires. Just published, a package can take a few minutes to show in `npm view`; step 6 waits up to ten for `@chofter/agent-graph` before it writes `npm: true`. `scripts/release.sh <version> --no-npm` leaves npm out, and the site's npm tab says it's coming unless `@chofter/agent-graph` is on npm at that version. (It's scoped because npm refuses the name `agent-graph`, as too like another package's, `agentgraph`. The command it installs is still `agent-graph`.) A prerelease is published with the `next` tag, so `npm install -g @chofter/agent-graph` keeps getting the latest full release. The hooks name the program inside npm's global folder, which `npm update -g` keeps (`lasting_exe` finds the Node script on PATH, not the program, so it uses the program's own path).
 
-**Installing it.** With Homebrew, from the [Chofter tap](https://github.com/chofter/homebrew-tap), which Homebrew has to be told to trust first: `brew tap chofter/tap`, `brew trust chofter/tap`, `brew install --cask chofter/tap/agent-graph`. Or on either platform `curl -fsSL https://agentgraph.chofter.com/install.sh | sh`. That script is made from `site/release.json` (`site/lib/release.ts`): it picks the build for the machine, checks its SHA-256, and puts it in `$AGENT_GRAPH_INSTALL_DIR`, `$XDG_BIN_HOME` or `~/.local/bin`.
+**Installing it.** With Homebrew, from the [Chofter tap](https://github.com/chofter/homebrew-tap), which Homebrew has to be told to trust first: `brew tap chofter/tap`, `brew trust chofter/tap`, `brew install --cask chofter/tap/agent-graph`. Or on either platform `curl -fsSL https://agentgraph.chofter.com/install.sh | sh`. That script is made from `site/release.json` (`site/lib/release.ts`): it picks the build for the machine, checks its SHA-256, and puts it in `$AGENT_GRAPH_INSTALL_DIR`, `$XDG_BIN_HOME` or `~/.local/bin`. On Windows, in PowerShell, `irm https://agentgraph.chofter.com/install.ps1 | iex` does the same (`powerShellScript`): it puts `agent-graph.exe` in `$env:AGENT_GRAPH_INSTALL_DIR` or `%USERPROFILE%\.local\bin`, adding that to the user's PATH, and moves aside a copy that's running (watch-remote, say), since Windows can't replace a running program.
 
 ## What people install with
 
 | Platform | Command | Where it comes from |
 |---|---|---|
 | macOS (also Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install --cask chofter/tap/agent-graph` | The cask in [`chofter/homebrew-tap`](https://github.com/chofter/homebrew-tap), which each release updates |
-| macOS and Linux | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.sh \| sh` | The shell installer on the GitHub Release |
-| Windows | `winget install ShaneOSullivan.AgentGraph` | [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs), through a pull request each release opens |
-| Windows | `powershell -ExecutionPolicy Bypass -c "irm https://github.com/shaneosullivan/agent-graph/releases/latest/download/agent-graph-installer.ps1 \| iex"` | The PowerShell installer on the GitHub Release |
-| macOS and Linux, with Node | `npm install -g @chofter/agent-graph` | The `@chofter/agent-graph` npm package, which `scripts/release.sh` publishes, with the binary for its platform in an optional dependency |
+| macOS and Linux | `curl -fsSL https://agentgraph.chofter.com/install.sh \| sh` | The site's install script, made from `site/release.json` |
+| Windows | `irm https://agentgraph.chofter.com/install.ps1 \| iex` (in PowerShell) | The site's PowerShell install script, made from `site/release.json` |
+| macOS, Linux and Windows, with Node | `npm install -g @chofter/agent-graph` | The `@chofter/agent-graph` npm package, which `scripts/release.sh` publishes, with the binary for its platform in an optional dependency |
 | From source | `cargo install --path .` | This repository |
 
-The shell and PowerShell installers put the binary in `$XDG_BIN_HOME`, or `~/.local/bin` (on Windows, `%USERPROFILE%\.local\bin`), and add that to PATH. They don't install an updater: to upgrade, run the installer again, or the package manager's upgrade.
+The install scripts put the program in `~/.local/bin` (or `$XDG_BIN_HOME`), or on Windows `%USERPROFILE%\.local\bin`, which the PowerShell one adds to PATH. They don't install an updater: to upgrade, run the installer again, or the package manager's upgrade. (winget isn't offered yet: dist's release, below, would open its pull requests.)
 
 The site's home page shows the same commands, in tabs (`site/app/install.tsx`).
 

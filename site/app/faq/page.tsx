@@ -5,6 +5,7 @@ import type {Metadata} from "next";
 import {billingConfig} from "@/lib/billing";
 import {CONTACT} from "@/lib/contact";
 import {link} from "@/lib/links";
+import {hasWindows, latestRelease} from "@/lib/release";
 
 import {InfoPage} from "../info-page";
 
@@ -83,16 +84,30 @@ export default function Faq() {
       </p>
 
       <h2>Which platforms does it run on?</h2>
-      <p>
-        For now, <strong>macOS</strong> (Apple silicon and Intel) and{" "}
-        <strong>Linux</strong> (x86_64 and ARM64), with{" "}
-        <strong>Claude Code</strong> and <strong>Codex</strong>: it records
-        their sessions, and the agents they start, on your computer and in their
-        clouds (claude.ai/code and chatgpt.com/codex). We&rsquo;re still testing
-        it on the other platforms and coding agents, so Windows and recording
-        Cursor are coming, but not ready yet. <a href="/#install">Install it</a>{" "}
-        with Homebrew, npm, or the install script.
-      </p>
+      {hasWindows(latestRelease()) ? (
+        <p>
+          <strong>macOS</strong> (Apple silicon and Intel),{" "}
+          <strong>Linux</strong> (x86_64 and ARM64) and <strong>Windows</strong>{" "}
+          (x64 and ARM64), with <strong>Claude Code</strong> and{" "}
+          <strong>Codex</strong>: it records their sessions, and the agents they
+          start, on your computer and in their clouds (claude.ai/code and
+          chatgpt.com/codex). Recording Cursor is coming, but not ready yet.{" "}
+          <a href="/#install">Install it</a> with Homebrew, npm, the install
+          script, or on Windows, PowerShell.
+        </p>
+      ) : (
+        <p>
+          For now, <strong>macOS</strong> (Apple silicon and Intel) and{" "}
+          <strong>Linux</strong> (x86_64 and ARM64), with{" "}
+          <strong>Claude Code</strong> and <strong>Codex</strong>: it records
+          their sessions, and the agents they start, on your computer and in
+          their clouds (claude.ai/code and chatgpt.com/codex). We&rsquo;re still
+          testing it on the other platforms and coding agents, so Windows and
+          recording Cursor are coming, but not ready yet.{" "}
+          <a href="/#install">Install it</a> with Homebrew, npm, or the install
+          script.
+        </p>
+      )}
 
       <h2>What does it record?</h2>
       <p>

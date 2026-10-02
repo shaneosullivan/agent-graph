@@ -42,6 +42,7 @@ export const COPIED = [
   "codex",
   "codex-cloud",
   "npm",
+  "powershell",
 ] as const;
 export type Copied = (typeof COPIED)[number];
 

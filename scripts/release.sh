@@ -2,7 +2,7 @@
 # =============================================================================
 # release.sh
 #
-# Cuts a release of agent-graph for macOS and Linux, from this Mac:
+# Cuts a release of agent-graph for macOS, Linux and Windows, from this Mac:
 #
 #   1. Sets the version (Cargo.toml and Cargo.lock), commits it and pushes
 #      it. Nothing is built on this Mac.
@@ -11,23 +11,23 @@
 #      on the build machine's network). The builds have to be of that
 #      commit, so they're the version being released.
 #   3. Signs and notarizes the macOS builds (scripts/notarize-mac.sh).
-#   4. Packs each build as agent-graph-<target>.tar.gz and uploads it to
-#      $RELEASE_BUCKET, in releases/<version>/mac or releases/<version>/linux,
-#      then downloads it again from its public URL to check it.
+#   4. Packs each build as agent-graph-<target>.tar.gz (.zip on Windows)
+#      and uploads it to $RELEASE_BUCKET, in releases/<version>/mac, linux
+#      or windows, then downloads it again from its public URL to check it.
 #   5. Publishes the npm packages (scripts/npm-packages.mjs):
 #      @chofter/agent-graph,
 #      and the program for each platform, @chofter/agent-graph-<os>-<cpu>.
-#   6. Writes site/release.json, which the site's downloads and /install.sh
-#      use, and commits and pushes it: the site shows the release once
+#   6. Writes site/release.json, which the site's downloads, /install.sh
+#      and /install.ps1 use, and commits and pushes it: the site shows the release once
 #      Vercel has deployed that.
 #   7. Writes the Homebrew cask to $HOMEBREW_TAP (Casks/agent-graph.rb),
 #      for macOS and Linux, and pushes it. A cask, not a formula: Homebrew
 #      checks a formula without a bottle could be built from source, and
 #      refuses it when the Command Line Tools are out of date, though this
 #      only copies the program into place.
-#   8. Waits until the site's install script (/install.sh) installs this
-#      version: Vercel has deployed step 6's commit. Up to 15 minutes, then
-#      it only warns.
+#   8. Waits until the site's install scripts (/install.sh, /install.ps1)
+#      install this version: Vercel has deployed step 6's commit. Up to 15
+#      minutes, then it only warns.
 #
 # Usage:
 #   scripts/release.sh <version>          e.g. scripts/release.sh 0.1.0-beta.1
@@ -97,6 +97,7 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-AgentGraphNotary}"
 # The builds released, by folder in the bucket.
 MAC_TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 LINUX_TARGETS=(aarch64-unknown-linux-musl x86_64-unknown-linux-musl)
+WINDOWS_TARGETS=(aarch64-pc-windows-msvc x86_64-pc-windows-msvc)
 
 case "${1:-}" in
   -h | --help | "")
@@ -134,16 +135,17 @@ gcloud_() {
 
 # Where target $1's build is once fetched (scripts/fetch-ci-builds.sh's
 # layout: the ARM build as agent-graph, the x86_64 one as
-# agent-graph-x86_64).
+# agent-graph-x86_64, with .exe on Windows).
 fetched() {
-  local os
+  local os ext=""
   case "$1" in
     *-apple-darwin) os=mac ;;
+    *-windows-*) os=windows ext=.exe ;;
     *) os=linux ;;
   esac
   case "$1" in
-    aarch64-*) echo "target/ci/$os/agent-graph" ;;
-    *) echo "target/ci/$os/agent-graph-x86_64" ;;
+    aarch64-*) echo "target/ci/$os/agent-graph$ext" ;;
+    *) echo "target/ci/$os/agent-graph-x86_64$ext" ;;
   esac
 }
 
@@ -233,7 +235,7 @@ if [ -z "$VERSION" ]; then
   exit 0
 fi
 
-echo "=== Agent Graph: release $VERSION (macOS and Linux) ==="
+echo "=== Agent Graph: release $VERSION (macOS, Linux and Windows) ==="
 
 # =============================================================================
 # CHECKS: everything the release needs, before it changes anything
@@ -242,7 +244,7 @@ echo "=== Agent Graph: release $VERSION (macOS and Linux) ==="
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] ||
   fail "'$VERSION' isn't a version (as 0.1.0, or 0.1.0-beta.1)."
 [ "$(uname -s)" = Darwin ] || fail "Releasing needs macOS, to notarize the macOS builds."
-for tool in gh gcloud git cargo npm node curl shasum tar xcrun uuidgen; do
+for tool in gh gcloud git cargo npm node curl shasum tar zip xcrun uuidgen; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool isn't installed."
 done
 
@@ -315,7 +317,7 @@ COMMIT="$(git rev-parse HEAD)"
 
 step "2. Chofter CI's builds of ${COMMIT:0:7}"
 scripts/fetch-ci-builds.sh "$COMMIT"
-for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
+for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}" "${WINDOWS_TARGETS[@]}"; do
   bin="$(fetched "$target")"
   [ -f "$bin" ] || fail "CI's run has no build for $target."
   # Each is built from this version: its --version is compiled in.
@@ -324,7 +326,7 @@ for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
 done
 [ "$("$(fetched "${MAC_TARGETS[0]}")" --version)" = "agent-graph $VERSION" ] ||
   fail "$(fetched "${MAC_TARGETS[0]}") --version isn't 'agent-graph $VERSION'."
-echo "✓ All four builds are $VERSION"
+echo "✓ All six builds are $VERSION"
 
 # =============================================================================
 # 3. NOTARIZE
@@ -349,27 +351,40 @@ bucket="${RELEASE_BUCKET#gs://}"
 files="$out/files.tsv" # target, URL, SHA-256
 : >"$files"
 
-for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
+for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}" "${WINDOWS_TARGETS[@]}"; do
+  exe=agent-graph
   case "$target" in
     *-apple-darwin)
       os=mac
       bin="target/notarized/$target/agent-graph"
+      ;;
+    *-windows-*)
+      os=windows
+      exe=agent-graph.exe
+      bin="$(fetched "$target")"
       ;;
     *)
       os=linux
       bin="$(fetched "$target")"
       ;;
   esac
-  name="agent-graph-$target.tar.gz"
   dir="$out/$target"
   mkdir -p "$dir"
-  cp "$bin" "$dir/agent-graph"
-  chmod 755 "$dir/agent-graph"
+  cp "$bin" "$dir/$exe"
+  chmod 755 "$dir/$exe"
   cp LICENSE "$dir/LICENSE"
-  # No macOS metadata in the archive (._ files).
-  # Without macOS's own metadata (extended attributes like
-  # com.apple.provenance), which Linux's tar warns it doesn't know.
-  COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$out/$name" -C "$dir" agent-graph LICENSE
+  if [ "$os" = windows ]; then
+    # A .zip, which Windows opens itself (Expand-Archive, Explorer).
+    name="agent-graph-$target.zip"
+    type=application/zip
+    (cd "$dir" && rm -f "../$name" && zip -qX "../$name" "$exe" LICENSE)
+  else
+    name="agent-graph-$target.tar.gz"
+    type=application/gzip
+    # Without macOS's own metadata (._ files, and extended attributes like
+    # com.apple.provenance), which Linux's tar warns it doesn't know.
+    COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -czf "$out/$name" -C "$dir" agent-graph LICENSE
+  fi
   sha="$(shasum -a 256 "$out/$name" | cut -d' ' -f1)"
 
   object="releases/$VERSION/$os/$name"
@@ -377,7 +392,7 @@ for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
   # the bucket itself stays private.
   token="$(uuidgen | tr '[:upper:]' '[:lower:]')"
   gcloud_ storage cp "$out/$name" "$RELEASE_BUCKET/$object" \
-    --content-type=application/gzip \
+    --content-type="$type" \
     --cache-control="public, max-age=31536000, immutable" \
     --custom-metadata="firebaseStorageDownloadTokens=$token" \
     --quiet
@@ -402,6 +417,9 @@ else
   builds=()
   for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
     builds+=("$target=$out/$target/agent-graph")
+  done
+  for target in "${WINDOWS_TARGETS[@]}"; do
+    builds+=("$target=$out/$target/agent-graph.exe")
   done
   # A prerelease isn't what `npm install @chofter/agent-graph` gets: npm needs it
   # tagged as something else.
@@ -490,22 +508,23 @@ update_tap
 # 8. THE SITE
 # =============================================================================
 
-# Released means installable: the site's install script, once Vercel has
-# deployed release.json (and its cache, half a minute, has run out), installs
-# this version. Up to 15 minutes; past that, it only warns.
-step "8. Waiting for $SITE_URL/install.sh to install $VERSION"
+# Released means installable: the site's install scripts, once Vercel has
+# deployed release.json (and their cache, half a minute, has run out),
+# install this version. Up to 15 minutes; past that, it only warns.
+step "8. Waiting for $SITE_URL/install.sh and install.ps1 to install $VERSION"
 served=""
 for _ in $(seq 90); do
-  if curl -fsSL "$SITE_URL/install.sh" 2>/dev/null | grep -qF "agent-graph $VERSION"; then
+  if curl -fsSL "$SITE_URL/install.sh" 2>/dev/null | grep -qF "agent-graph $VERSION" &&
+    curl -fsSL "$SITE_URL/install.ps1" 2>/dev/null | grep -qF "agent-graph $VERSION"; then
     served=yes
     break
   fi
   sleep 10
 done
 if [ -n "$served" ]; then
-  echo "✓ $SITE_URL/install.sh installs $VERSION"
+  echo "✓ $SITE_URL/install.sh and install.ps1 install $VERSION"
 else
-  echo "WARNING: after 15 minutes, $SITE_URL/install.sh doesn't install $VERSION yet. Check Vercel's deployment of $(git rev-parse --short HEAD)."
+  echo "WARNING: after 15 minutes, $SITE_URL/install.sh or install.ps1 doesn't install $VERSION yet. Check Vercel's deployment of $(git rev-parse --short HEAD)."
 fi
 
 # =============================================================================

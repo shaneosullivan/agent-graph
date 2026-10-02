@@ -2,7 +2,7 @@
 
 Records how your AI coding sessions relate to each other: which session spawned which agents, who's waiting on whom, what's waiting on *you*, what looks stuck, and what work is left. It works from Claude Code's and Codex's hooks, and keeps an append-only log on your machine. Nothing leaves it unless you choose to share.
 
-For macOS and Linux (ARM and x86_64), with Node 16 or later. Windows is coming.
+For macOS, Linux and Windows (ARM and x86_64), with Node 16 or later.
 
 ## Install
 
