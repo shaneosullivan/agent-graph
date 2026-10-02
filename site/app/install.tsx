@@ -34,6 +34,8 @@ type Way = {
   /** Not out yet: the tab says so, and nothing else. */
   soon?: string;
   install?: Command;
+  /** Said under the install command. */
+  note?: string;
   or?: {note: string} & Command;
   /** The program itself, for each processor: counted when clicked (/admin). */
   downloads?: Array<{label: string; target: Target}>;
@@ -67,7 +69,11 @@ const ways: Record<Os, Way> = {
     soon: "Coming soon: agent-graph for Windows, with winget.",
   },
   npm: release?.npm
-    ? {label: "npm", install: NPM}
+    ? {
+        label: "npm",
+        install: NPM,
+        note: "For macOS and Linux, with Node 16 or later. Install it globally, not with npx: the hooks run the program from where npm puts it. npm update -g agent-graph upgrades it.",
+      }
     : {
         label: "npm",
         soon: "Coming soon: agent-graph from npm (npm install -g agent-graph).",
@@ -428,6 +434,7 @@ export function PlatformSteps({os}: {os: Os}) {
               </span>
             ) : null}
             :{way.install && <Copyable {...way.install} />}
+            {way.note && <span className="install-or">{way.note}</span>}
             {way.or && (
               <>
                 <span className="install-or">{way.or.note}</span>

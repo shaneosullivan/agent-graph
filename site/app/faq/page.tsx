@@ -89,9 +89,9 @@ export default function Faq() {
         <strong>Claude Code</strong> and <strong>Codex</strong>: it records
         their sessions, and the agents they start, on your computer and in their
         clouds (claude.ai/code and chatgpt.com/codex). We&rsquo;re still testing
-        it on the other platforms and coding agents, so Windows, installing from
-        npm, and recording Cursor are coming, but not ready yet.{" "}
-        <a href="/#install">Install it</a> with Homebrew, or the install script.
+        it on the other platforms and coding agents, so Windows and recording
+        Cursor are coming, but not ready yet. <a href="/#install">Install it</a>{" "}
+        with Homebrew, npm, or the install script.
       </p>
 
       <h2>What does it record?</h2>
