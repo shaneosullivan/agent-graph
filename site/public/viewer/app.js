@@ -1513,13 +1513,30 @@ function pillPath(w, h) {
 
 /** The most of a name shown under a node, in characters. */
 const LABEL_MAX = 16;
+/** The most of words shown under a node (what it's doing): a little more. */
+const WORDS_MAX = 24;
 
 /**
  * A name short enough to sit under a node (the whole one's in its summary
- * and hover tip): a long one keeps its start and its end, with an ellipsis
- * between, since names often differ only at the end ("worker-1", "worker-2").
+ * and hover tip). An agent's is what it was started for ("Port refunds"),
+ * which tells it from its siblings better than its type and id do. A
+ * session's is its title, after its folder only if that isn't `home`, the
+ * folder of the session the page is showing (named, with it, at the top):
+ * a tree's sessions are nearly always in that one. Those are cut at a word.
+ * Any other keeps its start and its end, with an ellipsis between, since
+ * names often differ only at the end ("worker-1", "worker-2").
  */
-function graphLabel(n) {
+function graphLabel(n, home) {
+  const dir = n.kind === 'session' && basename(n.cwd);
+  const elsewhere = dir && dir !== home && dir !== n.title;
+  const said = n.kind === 'agent' ? n.purpose : n.title && (elsewhere ? `${dir}: ${n.title}` : n.title);
+  const words = said ? said.replace(/\s+/g, ' ').trim() : '';
+  if (words) {
+    if (words.length <= WORDS_MAX) return words;
+    // A space just after the room left for the ellipsis still ends a word that fits.
+    const space = words.slice(0, WORDS_MAX).lastIndexOf(' ');
+    return `${(space > WORDS_MAX / 2 ? words.slice(0, space) : words.slice(0, WORDS_MAX - 1)).trimEnd()}…`;
+  }
   const name = nodeName(n);
   if (name.length <= LABEL_MAX) return name;
   const tail = Math.floor((LABEL_MAX - 1) / 2.5);
@@ -1571,6 +1588,7 @@ function renderGraph(host, graph, keep, ringed, flash) {
   }
 
   const { nodes: data, links } = graphData(graph, S.root, keep);
+  const home = basename((nodeOf(graph, S.root) || {}).cwd);
   // The same object for a node from one drawing to the next, so it keeps
   // its place; a new one starts at its parent's, and grows out of it.
   const before = new Set(G.byId.keys());
@@ -1585,7 +1603,7 @@ function renderGraph(host, graph, keep, ringed, flash) {
       };
       G.byId.set(d.id, n);
     }
-    Object.assign(n, { node: d.node, depth: d.depth, parent: d.parent, label: graphLabel(d.node) }, nodeShape(d.node));
+    Object.assign(n, { node: d.node, depth: d.depth, parent: d.parent, label: graphLabel(d.node, home) }, nodeShape(d.node));
     // Its tasks, as one pill beside it: how many are done, of how many.
     const total = d.node.tasks.length;
     n.tasks = total ? `${total - d.node.open_tasks}/${total}` : null;
@@ -2628,6 +2646,15 @@ function fitText(text, px) {
   return text.length > most ? `${text.slice(0, most - 1)}…` : text;
 }
 
+/**
+ * A session's name beside the one the page is showing, whose folder is
+ * `home`: just its title when it's in that folder too (it nearly always is,
+ * and the top of the page names the folder), else its whole name.
+ */
+function nameBeside(session, home) {
+  return session.title && home && basename(session.cwd) === home ? session.title : nodeName(session);
+}
+
 /** Draws (or updates) the other sessions: only while zoomed out, flying in and out. */
 function drawOthers() {
   const d3 = window.d3;
@@ -2644,6 +2671,7 @@ function drawOthers() {
     items = G.placed.items.map((d) => ({ ...d, session: now.get(d.id) || d.session }));
   }
   const ms = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 500;
+  const home = basename(((S.live && S.live.sessions[S.root]) || {}).cwd);
   G.svg
     .select('g.others')
     .selectAll('g.onode')
@@ -2733,7 +2761,7 @@ function drawOthers() {
         .attr('width', Math.max(0, d.w - 8))
         .attr('height', Math.max(0, d.h - 8))
         .attr('rx', 10);
-      g.select('text.oname').text(fitText(nodeName(d.session), width));
+      g.select('text.oname').text(fitText(nameBeside(d.session, home), width));
       g.select('text.ostatus').text(fitText(d.session.needs_you ? 'Needs you' : STATE_LABEL[sessionState(d.session)] || '', width));
     });
   // The button that zooms out to them: only with some to show, and orange

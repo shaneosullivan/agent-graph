@@ -1725,6 +1725,91 @@ test("a long name under a graph node keeps its start and end, with an ellipsis b
   assert.ok(label.endsWith("1"), label);
 });
 
+test("the graph names an agent by what it was started for, and a session by its title, cut at a word, after its folder if it's another", async t => {
+  const window = loadViewer(t, {graph: async () => graph([node("x:a")])});
+  await until(() => window.document.querySelector("#view .node"));
+  const {graphLabel} = window.__viewer;
+  const agent = fields =>
+    node("x:a/1", {agent_type: "general-purpose", ...fields});
+  assert.equal(graphLabel(agent({purpose: "Port refunds"})), "Port refunds");
+  // Spaces and newlines a prompt brings with it are one space.
+  assert.equal(
+    graphLabel(agent({purpose: "  Port\n refunds "})),
+    "Port refunds",
+  );
+  const long = graphLabel(
+    agent({purpose: "Re-encrypt the card tokens in the vault"}),
+  );
+  assert.equal(long, "Re-encrypt the card…");
+  // One long word is cut where it has to be.
+  const word = graphLabel(
+    agent({purpose: "Supercalifragilisticexpialidocious"}),
+  );
+  assert.ok(word.length <= 24 && word.endsWith("…"), word);
+  // Without one, it's its type and id, as before.
+  assert.equal(
+    graphLabel(node("x:a/1", {agent_type: "Explore", purpose: null})),
+    "Explore 1",
+  );
+  // A session's its title, without its folder when that's the folder of the session shown at the top…
+  assert.equal(
+    graphLabel(
+      node("x:b", {
+        title: "Fix it",
+        purpose: "Fix it with Codex",
+        cwd: "/home/dev/shop",
+      }),
+      "shop",
+    ),
+    "Fix it",
+  );
+  assert.equal(
+    graphLabel(
+      node("x:b", {title: "Migrate checkout to the new payments API"}),
+      "shop",
+    ),
+    "Migrate checkout to the…",
+  );
+  // …and after it when it's another.
+  assert.equal(
+    graphLabel(node("x:b", {title: "Fix it", cwd: "/home/dev/docs"}), "shop"),
+    "docs: Fix it",
+  );
+  assert.equal(
+    graphLabel(
+      node("x:b", {
+        title: "Update the button tokens",
+        cwd: "/home/dev/design-system",
+      }),
+      "shop",
+    ),
+    "design-system: Update…",
+  );
+  // Untitled, it's named as it is elsewhere.
+  assert.equal(
+    graphLabel(node("x:b", {cwd: "/home/dev/shop"}), "shop"),
+    "shop",
+  );
+});
+
+test("the graph's other sessions leave out the folder when it's the shown session's", async t => {
+  const window = loadViewer(t, {graph: async () => graph([node("x:a")])});
+  await until(() => window.document.querySelector("#view .node"));
+  const {nameBeside} = window.__viewer;
+  assert.equal(
+    nameBeside(node("x:b", {title: "Fix it", cwd: "/home/dev/shop"}), "shop"),
+    "Fix it",
+  );
+  assert.equal(
+    nameBeside(node("x:b", {title: "Fix it", cwd: "/home/dev/docs"}), "shop"),
+    "docs: Fix it",
+  );
+  assert.equal(
+    nameBeside(node("x:b", {cwd: "/home/dev/shop"}), "shop"),
+    "shop",
+  );
+});
+
 test("the graph's legend button shows the legend, and tapping the legend hides it", async t => {
   const g = agentsTree();
   const window = loadViewer(t, {graph: async () => g});

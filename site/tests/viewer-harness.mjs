@@ -71,7 +71,7 @@ export function loadViewer(
   }
   // (Inside the block the viewer's all in, before it closes: see app.js.)
   const hook =
-    "window.__viewer = { S, G, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, renderMain, graphData, setViewMode, openModal, graphLabel, CACHED_STEPS };";
+    "window.__viewer = { S, G, goTo, goLive, selectRoot, selectNode, scheduleRefresh, renderAll, renderMain, graphData, setViewMode, openModal, graphLabel, nameBeside, CACHED_STEPS };";
   window.eval(app.replace(/\}\s*$/, `${hook}\n}\n`));
   return window;
 }
