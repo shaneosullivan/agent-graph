@@ -30,6 +30,10 @@
 #
 # Usage:
 #   scripts/release.sh <version>          e.g. scripts/release.sh 0.1.0-beta.1
+#   scripts/release.sh <version> --no-npm  without step 5: nothing's
+#                                         published to npm, and the site
+#                                         says npm's coming, unless
+#                                         agent-graph <version> is there
 #   scripts/release.sh --tap-only         step 7 alone, for the release in
 #                                         site/release.json
 #
@@ -94,7 +98,7 @@ LINUX_TARGETS=(aarch64-unknown-linux-musl x86_64-unknown-linux-musl)
 
 case "${1:-}" in
   -h | --help | "")
-    sed -n '3,52p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,56p' "$0" | sed 's/^# \{0,1\}//'
     [ -n "${1:-}" ] && exit 0 || exit 1
     ;;
   --tap-only) VERSION="" ;;
@@ -110,6 +114,13 @@ step() {
   echo ""
   echo "=== $* ==="
 }
+
+NPM=yes
+case "${2:-}" in
+  "") ;;
+  --no-npm) NPM="" ;;
+  *) fail "Unknown option: $2" ;;
+esac
 
 gcloud_() {
   if [ -n "$GCLOUD_ACCOUNT" ]; then
@@ -263,10 +274,12 @@ xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 ||
   fail "No working notarization credentials in the Keychain profile '$NOTARY_PROFILE': see scripts/notarize-mac.sh --help."
 echo "✓ Notarization credentials: $NOTARY_PROFILE"
 
-npm_user="$(npm whoami 2>/dev/null)" || fail "npm isn't logged in: npm login"
-npm org ls chofter "$npm_user" 2>/dev/null | grep -q "$npm_user" ||
-  fail "npm's $npm_user isn't in the chofter org, which @chofter/agent-graph-* are published under."
-echo "✓ npm: $npm_user"
+if [ -n "$NPM" ]; then
+  npm_user="$(npm whoami 2>/dev/null)" || fail "npm isn't logged in: npm login"
+  npm org ls chofter "$npm_user" 2>/dev/null | grep -q "$npm_user" ||
+    fail "npm's $npm_user isn't in the chofter org, which @chofter/agent-graph-* are published under."
+  echo "✓ npm: $npm_user"
+fi
 
 # =============================================================================
 # 1. THE VERSION
@@ -374,45 +387,55 @@ done
 # 5. NPM
 # =============================================================================
 
-step "5. npm: agent-graph $VERSION"
-builds=()
-for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
-  builds+=("$target=$out/$target/agent-graph")
-done
-# A prerelease isn't what `npm install agent-graph` gets: npm needs it
-# tagged as something else.
-case "$VERSION" in
-  *-*) npm_tag=next ;;
-  *) npm_tag=latest ;;
-esac
-# The platform packages first: agent-graph depends on them. Listed first,
-# not read in the loop, so npm publish has the terminal: it asks for a
-# two-factor code only there.
-packages=()
-while IFS= read -r dir; do
-  packages+=("$dir")
-done < <(node scripts/npm-packages.mjs "$VERSION" "$out/npm" "${builds[@]}")
-[ "${#packages[@]}" -gt 0 ] || fail "scripts/npm-packages.mjs made no packages."
-for dir in "${packages[@]}"; do
-  name="$(node -p "require('./$dir/package.json').name")"
-  # Run again, it carries on: a version can only be published once.
-  if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
-    echo "✓ $name@$VERSION (already published)"
-    continue
-  fi
-  # ./ so npm reads it as a folder, not a GitHub repository. What it says
-  # isn't hidden: with two-factor authentication, it asks for a code, or
-  # gives a link to log in with.
-  npm publish "./$dir" --access public --tag "$npm_tag"
-  echo "✓ $name@$VERSION"
-done
+if [ -z "$NPM" ]; then
+  step "5. npm: skipped (--no-npm)"
+else
+  step "5. npm: agent-graph $VERSION"
+  builds=()
+  for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
+    builds+=("$target=$out/$target/agent-graph")
+  done
+  # A prerelease isn't what `npm install agent-graph` gets: npm needs it
+  # tagged as something else.
+  case "$VERSION" in
+    *-*) npm_tag=next ;;
+    *) npm_tag=latest ;;
+  esac
+  # The platform packages first: agent-graph depends on them. Listed first,
+  # not read in the loop, so npm publish has the terminal: it asks for a
+  # two-factor code only there.
+  packages=()
+  while IFS= read -r dir; do
+    packages+=("$dir")
+  done < <(node scripts/npm-packages.mjs "$VERSION" "$out/npm" "${builds[@]}")
+  [ "${#packages[@]}" -gt 0 ] || fail "scripts/npm-packages.mjs made no packages."
+  for dir in "${packages[@]}"; do
+    name="$(node -p "require('./$dir/package.json').name")"
+    # Run again, it carries on: a version can only be published once.
+    if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+      echo "✓ $name@$VERSION (already published)"
+      continue
+    fi
+    # ./ so npm reads it as a folder, not a GitHub repository. What it says
+    # isn't hidden: with two-factor authentication, it asks for a code, or
+    # gives a link to log in with.
+    npm publish "./$dir" --access public --tag "$npm_tag"
+    echo "✓ $name@$VERSION"
+  done
+fi
+# The site offers npm once agent-graph is there, at this version.
+if [ "$(npm view "agent-graph@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+  on_npm=true
+else
+  on_npm=false
+fi
 
 # =============================================================================
 # 6. THE SITE
 # =============================================================================
 
 step "6. site/release.json"
-VERSION="$VERSION" COMMIT="$COMMIT" FILES="$files" node -e '
+VERSION="$VERSION" COMMIT="$COMMIT" FILES="$files" NPM="$on_npm" node -e '
   const fs = require("fs");
   const files = {};
   for (const line of fs.readFileSync(process.env.FILES, "utf8").trim().split("\n")) {
@@ -424,7 +447,7 @@ VERSION="$VERSION" COMMIT="$COMMIT" FILES="$files" node -e '
     commit: process.env.COMMIT,
     date: new Date().toISOString().slice(0, 10),
     files,
-    npm: true,
+    npm: process.env.NPM === "true",
   };
   fs.writeFileSync("site/release.json", JSON.stringify(release, null, 2) + "\n");
 '
