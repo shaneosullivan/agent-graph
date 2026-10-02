@@ -6,7 +6,7 @@ import {Analytics} from "./analytics";
 import {AppUpdates} from "./app-updates";
 
 const DESCRIPTION =
-  "Share a live, step-through view of your AI coding agents: which session started which agents, who's waiting on whom, what's stuck, and what needs you.";
+  "Observe a live, step-through view of your AI coding agents: what agents are waiting on your input,  what's stuck & which session started which agents.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(
