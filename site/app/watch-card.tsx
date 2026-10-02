@@ -3,10 +3,9 @@
 import {useEffect, useRef, useState, useSyncExternalStore} from "react";
 import {flushSync} from "react-dom";
 
-import {CopyCommand} from "./copy-command";
+import {type Watching, watchingText} from "@/lib/watching";
 
-/** What GET /api/watching says of the account's `watch-remote`. */
-type Watching = {watching: true; sessions: number} | {watching: false};
+import {CopyCommand} from "./copy-command";
 
 interface Props {
   loggedOutContent: React.ReactNode;
@@ -15,7 +14,9 @@ interface Props {
 /**
  * For a logged-in visitor, above the install card: whether their
  * `agent-graph watch-remote` is running now, and if so how many sessions
- * it's watching (the whole card a link to /watch); if not, the command that
+ * it's watching are active and how many completed, from which coding
+ * agents, and where it's running (the whole card a link to /watch:
+ * lib/watching.ts's `watchingText`); if not, the command that
  * starts it. Asked again whenever the page is shown again or focused, so
  * it's never out of date.
  *
@@ -89,18 +90,7 @@ export function WatchCard(props: Props) {
   return state.watching ? (
     <a className="card watch-card live" href="/watch">
       <span className="watch-dot" aria-hidden="true" />
-      <span className="watch-text">
-        <strong>
-          {state.sessions === 0
-            ? "Watching, live"
-            : `Watching ${state.sessions} ${state.sessions === 1 ? "session" : "sessions"}, live`}
-        </strong>
-        <span className="watch-sub">
-          {state.sessions === 0
-            ? "agent-graph watch-remote is running; no session has had an event in the last day."
-            : "agent-graph watch-remote is running on your computer."}
-        </span>
-      </span>
+      <WatchingText {...state} />
       <span className="watch-go" aria-hidden="true">
         Open →
       </span>
@@ -117,5 +107,19 @@ export function WatchCard(props: Props) {
     </div>
   ) : (
     props.loggedOutContent
+  );
+}
+
+function WatchingText(props: Extract<Watching, {watching: true}>) {
+  const {title, lines} = watchingText(props);
+  return (
+    <span className="watch-text">
+      <strong>{title}</strong>
+      {lines.map(line => (
+        <span key={line} className="watch-sub">
+          {line}
+        </span>
+      ))}
+    </span>
   );
 }
