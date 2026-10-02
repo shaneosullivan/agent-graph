@@ -14,3 +14,6 @@
 # What a viewer or share run on the example logs records beside them
 /examples/logs/view-*.json
 /examples/logs/shares/
+
+# Launch video assets, not committed for now
+/media/
