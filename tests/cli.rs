@@ -1853,3 +1853,84 @@ fn a_codex_agent_whose_turn_errored_fails_when_the_turn_ends() {
     );
     assert_eq!(g.nodes[&format!("codex:{session}")].state, State::Idle);
 }
+
+/// In Codex's cloud, each reply resumes the session on a new machine (from
+/// a real task: `codex/cloud-resume-events.jsonl`): an agent the last one
+/// left running (sleeping 120 s) went with it, so it's stopped, not working
+/// for ever. One Codex brings back starts, and works, again.
+#[test]
+fn a_resumed_codex_session_stops_the_agents_it_left_running() {
+    use agent_graph::event::{Envelope, State};
+    let home = tempfile::tempdir().unwrap();
+    let session = "01a0f9b6-ce46-7712-a724-05cd298bb0da";
+    let events = home.path().join("events");
+    std::fs::create_dir_all(&events).unwrap();
+    let file = events.join(format!("codex-{session}.jsonl"));
+    std::fs::copy("tests/fixtures/codex/cloud-resume-events.jsonl", &file).unwrap();
+    let resume = serde_json::json!({
+        "session_id": session,
+        "hook_event_name": "SessionStart",
+        "source": "resume",
+        "cwd": "/workspace/app",
+        "transcript_path": "/opt/codex/sessions/none.jsonl",
+    });
+    emit(
+        home.path(),
+        &["--provider", "codex"],
+        &resume.to_string(),
+        &[],
+    );
+    let graph = || {
+        let recorded: Vec<Envelope> = std::fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        common::reduce(recorded)
+    };
+    let g = graph();
+    let sleeper = g
+        .nodes
+        .values()
+        .find(|n| n.purpose.as_deref() == Some("Sleep 120"))
+        .unwrap();
+    assert_eq!(sleeper.state, State::Canceled);
+    let finished = g
+        .nodes
+        .values()
+        .find(|n| n.purpose.as_deref() == Some("Broken"))
+        .unwrap();
+    assert_eq!(
+        finished.state,
+        State::Completed,
+        "a finished one is left as it was"
+    );
+
+    // Codex brings it back.
+    let agent = sleeper.id.rsplit_once('/').unwrap().1.to_string();
+    let start = serde_json::json!({
+        "session_id": session,
+        "agent_id": agent,
+        "hook_event_name": "SubagentStart",
+        "agent_type": "default",
+        "transcript_path": "/opt/codex/sessions/none.jsonl",
+    });
+    emit(
+        home.path(),
+        &["--provider", "codex"],
+        &start.to_string(),
+        &[],
+    );
+    let prompt = serde_json::json!({
+        "session_id": session,
+        "agent_id": agent,
+        "hook_event_name": "UserPromptSubmit",
+    });
+    emit(
+        home.path(),
+        &["--provider", "codex"],
+        &prompt.to_string(),
+        &[],
+    );
+    assert_eq!(graph().nodes[&sleeper.id].state, State::Working);
+}

@@ -222,6 +222,12 @@ impl Adapter for Codex {
 
         // Before the turn's status: any other event on the session would
         // take it back to working.
+        // A session resumed (in Codex's cloud, each reply is a new machine)
+        // is a new process: the agents the last one left running went with
+        // it. (One Codex brings back starts again, and works again.)
+        if hook == "SessionStart" && str_at(input, &["source"]) == Some("resume") {
+            drafts.splice(0..0, left_running(session));
+        }
         if matches!(hook, "Stop" | "Interrupt") {
             let mut ended = unstarted_agents(session, &session_node);
             ended.extend(errored_agents_of(input, session));
@@ -668,12 +674,25 @@ fn unstarted_agents(session: &str, session_node: &str) -> Vec<Draft> {
     drafts
 }
 
-/// Agents of the session that started and haven't finished, whose last turn
-/// ended in an error (a model or API error, say), by their rollouts: Codex
-/// runs no SubagentStop for a turn that errors, and v2's `wait_agent` says
-/// only that the wait's over. Each is failed, with Codex's error.
-fn errored_agents_of(input: &Value, session: &str) -> Vec<Draft> {
-    let events = recorded(session);
+/// The session's agents that started and haven't finished, stopped: what a
+/// resumed session's last process left running.
+fn left_running(session: &str) -> Vec<Draft> {
+    open_agents(&recorded(session))
+        .into_iter()
+        .map(|node| {
+            Draft::new(
+                node,
+                Payload::AgentFinished(AgentFinished {
+                    status: FinishStatus::Canceled,
+                    summary: Some("Stopped when the session was resumed".into()),
+                }),
+            )
+        })
+        .collect()
+}
+
+/// The agent nodes of recorded events that started and haven't finished.
+fn open_agents(events: &[Value]) -> Vec<String> {
     let nodes_of = |kind: &str| -> std::collections::BTreeSet<String> {
         events
             .iter()
@@ -682,10 +701,18 @@ fn errored_agents_of(input: &Value, session: &str) -> Vec<Draft> {
             .collect()
     };
     let finished = nodes_of("agent.finished");
-    let open: Vec<String> = nodes_of("agent.spawned")
+    nodes_of("agent.spawned")
         .into_iter()
         .filter(|node| !finished.contains(node))
-        .collect();
+        .collect()
+}
+
+/// Agents of the session that started and haven't finished, whose last turn
+/// ended in an error (a model or API error, say), by their rollouts: Codex
+/// runs no SubagentStop for a turn that errors, and v2's `wait_agent` says
+/// only that the wait's over. Each is failed, with Codex's error.
+fn errored_agents_of(input: &Value, session: &str) -> Vec<Draft> {
+    let open = open_agents(&recorded(session));
     if open.is_empty() {
         return Vec::new();
     }

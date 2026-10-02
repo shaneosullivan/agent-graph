@@ -35,6 +35,7 @@ Node ids: `codex:<session_id>` for a session, and `codex:<session_id>/<agent_id>
 |---|---|
 | SessionStart | `session.started` (`cwd`, `source`, `transcript_path`, `title` from `session_index.jsonl`) |
 | SessionEnd | `session.ended` |
+| SessionStart with `source: resume` | Also `agent.finished: canceled`, "Stopped when the session was resumed", for each of the session's agents that started and hasn't finished: a resumed session is a new process (in Codex's cloud, each reply is a new machine), and the last one's agents went with it. One Codex brings back starts, and works, again |
 | UserPromptSubmit | `status: working` for the node it's in (session, or subagent given more work), with the session's name |
 | Stop | `status: idle`, with the session's name (the TUI names it during the first turn); `status: input_required` again if the session's last event was a question nobody's answered (Codex's cloud ends the turn on a question and waits for your reply) |
 | Stop, when the turn's last message ends on a question | `status: input_required`, "Asks you a question" ("Asks: <the question>" only when bodies are captured) |
