@@ -385,8 +385,15 @@ case "$VERSION" in
   *-*) npm_tag=next ;;
   *) npm_tag=latest ;;
 esac
-# The platform packages first: agent-graph depends on them.
+# The platform packages first: agent-graph depends on them. Listed first,
+# not read in the loop, so npm publish has the terminal: it asks for a
+# two-factor code only there.
+packages=()
 while IFS= read -r dir; do
+  packages+=("$dir")
+done < <(node scripts/npm-packages.mjs "$VERSION" "$out/npm" "${builds[@]}")
+[ "${#packages[@]}" -gt 0 ] || fail "scripts/npm-packages.mjs made no packages."
+for dir in "${packages[@]}"; do
   name="$(node -p "require('./$dir/package.json').name")"
   # Run again, it carries on: a version can only be published once.
   if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
@@ -398,7 +405,7 @@ while IFS= read -r dir; do
   # gives a link to log in with.
   npm publish "./$dir" --access public --tag "$npm_tag"
   echo "✓ $name@$VERSION"
-done < <(node scripts/npm-packages.mjs "$VERSION" "$out/npm" "${builds[@]}")
+done
 
 # =============================================================================
 # 6. THE SITE
