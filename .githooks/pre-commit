@@ -6,11 +6,68 @@
 # `core.hooksPath` is .githooks, which `npm install` in site/ sets (its
 # `prepare` script).
 #
+# First, what the site copies from the crate, which CI checks is up to
+# date: the viewer (src/view/assets/ → site/public/viewer/ and
+# site/lib/viewer-shell.ts), synced and staged when a commit changes it;
+# and the WebAssembly (site/public/viewer/agent_graph.wasm), checked when a
+# commit changes what it's built from, and rebuilt and staged if it's out
+# of date.
+#
 # A file with changes that aren't staged is only checked, not fixed:
 # staging it again would commit those changes too. If it needs fixing, the
 # commit stops, and says so.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+
+# The viewer's copies. (Generated, and in .prettierignore: nothing below
+# formats them.)
+copies=(site/public/viewer/app.js site/public/viewer/app.css site/public/viewer/d3.min.js site/lib/viewer-shell.ts)
+if ! git diff --cached --quiet -- src/view/assets; then
+  if ! git diff --quiet -- src/view/assets; then
+    echo "pre-commit: src/view/assets has changes that aren't staged, so the site's copies of the viewer weren't synced. Stage them (or stash them), and commit again." >&2
+    exit 1
+  fi
+  node site/scripts/sync-viewer.mjs >/dev/null
+  git add -- "${copies[@]}"
+fi
+
+# The WebAssembly: what it's built from is the files its record lists, and
+# the crates and build profile (Cargo.toml, Cargo.lock). Checking takes a
+# fraction of a second; rebuilding, a few seconds more.
+stamp=site/public/viewer/agent_graph.wasm.sources
+if [ -f "$stamp" ]; then
+  listed="$(node -e 'const fs = require("fs");
+    for (const f of JSON.parse(fs.readFileSync(process.argv[1], "utf8")).files) console.log(f)' "$stamp")" || {
+    echo "pre-commit: can't read $stamp, which says what the site's WebAssembly is built from." >&2
+    exit 1
+  }
+  inputs=(Cargo.toml Cargo.lock wasm/Cargo.toml)
+  while IFS= read -r f; do
+    [ -n "$f" ] && inputs+=("$f")
+  done <<<"$listed"
+  # Cargo, where rustup puts it, if it isn't on PATH (as release.sh finds it).
+  PATH="$HOME/.cargo/bin:$PATH"
+  if ! command -v cargo >/dev/null 2>&1 && command -v rustup >/dev/null 2>&1; then
+    PATH="$(dirname "$(rustup which cargo)"):$PATH"
+  fi
+  if git diff --cached --quiet -- "${inputs[@]}"; then
+    : # Nothing it's built from is changing.
+  elif ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: Rust isn't installed, so the site's WebAssembly wasn't checked. CI checks it." >&2
+  elif ! node site/scripts/sync-viewer.mjs --check-wasm >/dev/null 2>&1; then
+    # Built from the files as they are: only what's committed, if all of it's staged.
+    if ! git diff --quiet -- "${inputs[@]}"; then
+      echo "pre-commit: site/public/viewer/agent_graph.wasm is out of date, and what it's built from has changes that aren't staged, so it wasn't rebuilt. Stage them (or stash them), and commit again; or run \`npm run build-wasm\` in site/ and stage it." >&2
+      exit 1
+    fi
+    echo "pre-commit: the site's WebAssembly is out of date: rebuilding it (npm run build-wasm)…" >&2
+    if ! (cd site && npm run -s build-wasm) >&2; then
+      echo "pre-commit: couldn't rebuild it. Fix that, run \`npm run build-wasm\` in site/, stage it, and commit again." >&2
+      exit 1
+    fi
+    git add -- site/public/viewer/agent_graph.wasm "$stamp" "${copies[@]}"
+  fi
+fi
 
 # The staged site files Prettier formats, as paths inside site/.
 files=()
