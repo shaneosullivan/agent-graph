@@ -32,13 +32,15 @@ if [ ! -x "site/$eslint" ]; then
   eslint=
 fi
 
-# From site/, so its .prettierignore applies (it's read from where
-# Prettier runs).
-cd site
+# Git runs from the top, with paths under site/: in a linked worktree it
+# hands the hook GIT_DIR, and with that set, git takes wherever it runs as
+# the top of the work tree, so from site/ a path would be read as one at the
+# top. ESLint and Prettier run from site/, so its .prettierignore applies
+# (it's read from where Prettier runs).
 whole=()
 partial=()
 for f in "${files[@]}"; do
-  if git diff --quiet -- "$f"; then whole+=("$f"); else partial+=("$f"); fi
+  if git diff --quiet -- "site/$f"; then whole+=("$f"); else partial+=("$f"); fi
 done
 
 # The files ESLint lints (eslint.config.mjs), of those.
@@ -54,14 +56,14 @@ if [ ${#whole[@]} -gt 0 ]; then
     lint=()
     while IFS= read -r f; do lint+=("$f"); done < <(linted "${whole[@]}")
     # --no-warn-ignored: a staged file the config ignores isn't an error.
-    if [ ${#lint[@]} -gt 0 ] && ! "$eslint" --fix --no-warn-ignored -- "${lint[@]}"; then
-      git add -- "${whole[@]}"
+    if [ ${#lint[@]} -gt 0 ] && ! (cd site && "$eslint" --fix --no-warn-ignored -- "${lint[@]}"); then
+      git add -- "${whole[@]/#/site/}"
       echo "pre-commit: fix the lint errors above, stage them, and commit again." >&2
       exit 1
     fi
   fi
-  "$prettier" --write --ignore-unknown --log-level warn -- "${whole[@]}"
-  git add -- "${whole[@]}"
+  (cd site && "$prettier" --write --ignore-unknown --log-level warn -- "${whole[@]}")
+  git add -- "${whole[@]/#/site/}"
 fi
 
 # What's staged of each, as it's what's committed: formatted, it's the same.
@@ -70,11 +72,11 @@ fi
 unformatted=()
 if [ ${#partial[@]} -gt 0 ]; then
   for f in "${partial[@]}"; do
-    staged="$(git show ":./$f")"
-    if [ "$(printf '%s\n' "$staged" | "$prettier" --stdin-filepath "$f")" != "$staged" ]; then
+    staged="$(git show ":site/$f")"
+    if [ "$(printf '%s\n' "$staged" | (cd site && "$prettier" --stdin-filepath "$f"))" != "$staged" ]; then
       unformatted+=("site/$f")
     elif [ -n "$eslint" ] && [ -n "$(linted "$f")" ] &&
-      ! printf '%s\n' "$staged" | "$eslint" --no-warn-ignored --stdin --stdin-filename "$f" >&2; then
+      ! printf '%s\n' "$staged" | (cd site && "$eslint" --no-warn-ignored --stdin --stdin-filename "$f") >&2; then
       unformatted+=("site/$f")
     fi
   done
