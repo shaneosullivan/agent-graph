@@ -278,9 +278,15 @@ echo "✓ Notarization credentials: $NOTARY_PROFILE"
 
 if [ -n "$NPM" ]; then
   npm_user="$(npm whoami 2>/dev/null)" || fail "npm isn't logged in: npm login"
-  npm org ls chofter "$npm_user" 2>/dev/null | grep -q "$npm_user" ||
-    fail "npm's $npm_user isn't in the chofter org, which @chofter/agent-graph and its platform packages are published under."
-  echo "✓ npm: $npm_user"
+  # A publishing token without the Organizations permission (enough to
+  # publish) can't list the org's members: then it can't be checked.
+  if members="$(npm org ls chofter "$npm_user" 2>/dev/null)"; then
+    grep -q "$npm_user" <<<"$members" ||
+      fail "npm's $npm_user isn't in the chofter org, which @chofter/agent-graph and its platform packages are published under."
+    echo "✓ npm: $npm_user"
+  else
+    echo "✓ npm: $npm_user (its token can't list the chofter org's members, so that's left to npm publish)"
+  fi
 fi
 
 # =============================================================================
