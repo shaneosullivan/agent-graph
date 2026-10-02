@@ -432,10 +432,22 @@ else
   done
 fi
 # The site offers npm once @chofter/agent-graph is there, at this version.
-if [ "$(npm view "@chofter/agent-graph@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+# Just published, npm can take a few minutes to show it (0.1.17 took four):
+# up to ten, then it's left out.
+on_npm=false
+if [ -n "$NPM" ]; then
+  for _ in $(seq 1 20); do
+    if [ "$(npm view "@chofter/agent-graph@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+      on_npm=true
+      break
+    fi
+    echo "Waiting for npm to show @chofter/agent-graph@$VERSION…"
+    sleep 30
+  done
+  [ "$on_npm" = true ] ||
+    echo "WARNING: npm doesn't show @chofter/agent-graph@$VERSION yet, so the site's npm tab says it's coming. Once it does, set \"npm\": true in site/release.json, and commit and push it."
+elif [ "$(npm view "@chofter/agent-graph@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
   on_npm=true
-else
-  on_npm=false
 fi
 
 # =============================================================================
