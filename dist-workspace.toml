@@ -7,8 +7,10 @@ members = ["cargo:."]
 cargo-dist-version = "0.33.0"
 # CI backends to support
 ci = "github"
+# Not on pull requests: Chofter CI checks those (.github/workflows/chofter-ci.yml)
+pr-run-mode = "skip"
 # The installers to generate for each app
-installers = ["shell", "powershell", "homebrew", "npm"]
+installers = ["shell", "powershell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = [
     "aarch64-apple-darwin",
@@ -25,11 +27,12 @@ install-updater = false
 # A GitHub repo to push Homebrew formulas to
 tap = "chofter/homebrew-tap"
 # Publish jobs to run in CI
-publish-jobs = ["homebrew", "npm", "./notarize"]
+publish-jobs = ["homebrew", "./notarize"]
 # Jobs to run once the release is out
 post-announce-jobs = ["./winget"]
-# The npm package to publish
-npm-package = "agent-graph"
+# npm isn't one of them: scripts/release.sh publishes agent-graph to npm
+# itself (scripts/npm-packages.mjs), with the program in a package per
+# platform, not downloaded from a GitHub Release.
 # Sign the macOS binaries with a Developer ID (secrets: CODESIGN_*), for
 # the notarize job to submit to Apple
 macos-sign = true

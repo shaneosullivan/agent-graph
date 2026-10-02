@@ -41,6 +41,7 @@ export const COPIED = [
   "claude-code-cloud",
   "codex",
   "codex-cloud",
+  "npm",
 ] as const;
 export type Copied = (typeof COPIED)[number];
 

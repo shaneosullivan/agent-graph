@@ -10,6 +10,9 @@ import published from "../release.json" with {type: "json"};
  * Each archive is a .tar.gz holding the program, `agent-graph`, kept in the
  * release bucket (releases/<version>/mac or linux) and fetched by its
  * Firebase Storage download URL.
+ *
+ * `npm` is whether it was published to npm too (`agent-graph`, with its
+ * program for each platform in @chofter/agent-graph-<os>-<cpu>).
  */
 
 export type ReleaseFile = {url: string; sha256: string};
@@ -18,6 +21,7 @@ export type Release = {
   commit: string;
   date: string;
   files: Partial<Record<Target, ReleaseFile>>;
+  npm?: boolean;
 };
 
 /** The latest release, or null before there's been one. */

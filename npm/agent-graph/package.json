@@ -1,0 +1,30 @@
+{
+  "name": "agent-graph",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Records a live graph of your AI coding agent sessions (Claude Code, Codex): who spawned whom, who's waiting on whom, and what needs you",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "ai",
+    "agents",
+    "hooks",
+    "cli"
+  ],
+  "homepage": "https://agentgraph.chofter.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shaneosullivan/agent-graph.git",
+    "directory": "npm/agent-graph"
+  },
+  "license": "MIT",
+  "bin": {
+    "agent-graph": "bin/agent-graph.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}

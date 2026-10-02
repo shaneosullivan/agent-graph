@@ -14,29 +14,31 @@
 #   4. Packs each build as agent-graph-<target>.tar.gz and uploads it to
 #      $RELEASE_BUCKET, in releases/<version>/mac or releases/<version>/linux,
 #      then downloads it again from its public URL to check it.
-#   5. Writes site/release.json, which the site's downloads and /install.sh
+#   5. Publishes the npm packages (scripts/npm-packages.mjs): agent-graph,
+#      and the program for each platform, @chofter/agent-graph-<os>-<cpu>.
+#   6. Writes site/release.json, which the site's downloads and /install.sh
 #      use, and commits and pushes it: the site shows the release once
 #      Vercel has deployed that.
-#   6. Writes the Homebrew cask to $HOMEBREW_TAP (Casks/agent-graph.rb),
+#   7. Writes the Homebrew cask to $HOMEBREW_TAP (Casks/agent-graph.rb),
 #      for macOS and Linux, and pushes it. A cask, not a formula: Homebrew
 #      checks a formula without a bottle could be built from source, and
 #      refuses it when the Command Line Tools are out of date, though this
 #      only copies the program into place.
-#   7. Waits until the site's install script (/install.sh) installs this
-#      version: Vercel has deployed step 5's commit. Up to 15 minutes, then
+#   8. Waits until the site's install script (/install.sh) installs this
+#      version: Vercel has deployed step 6's commit. Up to 15 minutes, then
 #      it only warns.
 #
 # Usage:
 #   scripts/release.sh <version>          e.g. scripts/release.sh 0.1.0-beta.1
-#   scripts/release.sh --tap-only         step 6 alone, for the release in
+#   scripts/release.sh --tap-only         step 7 alone, for the release in
 #                                         site/release.json
 #
 # Run again with the same version, it carries on: the version's already
 # set, so it fetches that commit's builds, and does the rest again.
 #
 # It pushes no git tag: a version tag starts dist's release workflow
-# (.github/workflows/release.yml), which publishes to GitHub Releases, npm
-# and winget as well. Windows and npm aren't released this way yet.
+# (.github/workflows/release.yml), which publishes to GitHub Releases and
+# winget as well. Windows isn't released this way yet.
 #
 # Settings, from the environment, or from .env.local at the repository's
 # root (see .env.example), where the environment doesn't set them:
@@ -47,6 +49,7 @@
 #   SITE_URL         the site whose install script is checked at the end
 #                    (optional: https://agentgraph.chofter.com otherwise)
 # and notarize-mac.sh's (NOTARY_PROFILE, APPLE_TEAM_ID: see its --help).
+# npm must be logged in (npm login) as a member of the chofter org.
 # =============================================================================
 
 set -euo pipefail
@@ -91,7 +94,7 @@ LINUX_TARGETS=(aarch64-unknown-linux-musl x86_64-unknown-linux-musl)
 
 case "${1:-}" in
   -h | --help | "")
-    sed -n '3,46p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,52p' "$0" | sed 's/^# \{0,1\}//'
     [ -n "${1:-}" ] && exit 0 || exit 1
     ;;
   --tap-only) VERSION="" ;;
@@ -260,6 +263,11 @@ xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 ||
   fail "No working notarization credentials in the Keychain profile '$NOTARY_PROFILE': see scripts/notarize-mac.sh --help."
 echo "✓ Notarization credentials: $NOTARY_PROFILE"
 
+npm_user="$(npm whoami 2>/dev/null)" || fail "npm isn't logged in: npm login"
+npm org ls chofter "$npm_user" 2>/dev/null | grep -q "$npm_user" ||
+  fail "npm's $npm_user isn't in the chofter org, which @chofter/agent-graph-* are published under."
+echo "✓ npm: $npm_user"
+
 # =============================================================================
 # 1. THE VERSION
 # =============================================================================
@@ -363,10 +371,40 @@ for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
 done
 
 # =============================================================================
-# 5. THE SITE
+# 5. NPM
 # =============================================================================
 
-step "5. site/release.json"
+step "5. npm: agent-graph $VERSION"
+builds=()
+for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
+  builds+=("$target=$out/$target/agent-graph")
+done
+# A prerelease isn't what `npm install agent-graph` gets: npm needs it
+# tagged as something else.
+case "$VERSION" in
+  *-*) npm_tag=next ;;
+  *) npm_tag=latest ;;
+esac
+# The platform packages first: agent-graph depends on them.
+while IFS= read -r dir; do
+  name="$(node -p "require('./$dir/package.json').name")"
+  # Run again, it carries on: a version can only be published once.
+  if [ "$(npm view "$name@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+    echo "✓ $name@$VERSION (already published)"
+    continue
+  fi
+  # ./ so npm reads it as a folder, not a GitHub repository. What it says
+  # isn't hidden: with two-factor authentication, it asks for a code, or
+  # gives a link to log in with.
+  npm publish "./$dir" --access public --tag "$npm_tag"
+  echo "✓ $name@$VERSION"
+done < <(node scripts/npm-packages.mjs "$VERSION" "$out/npm" "${builds[@]}")
+
+# =============================================================================
+# 6. THE SITE
+# =============================================================================
+
+step "6. site/release.json"
 VERSION="$VERSION" COMMIT="$COMMIT" FILES="$files" node -e '
   const fs = require("fs");
   const files = {};
@@ -379,6 +417,7 @@ VERSION="$VERSION" COMMIT="$COMMIT" FILES="$files" node -e '
     commit: process.env.COMMIT,
     date: new Date().toISOString().slice(0, 10),
     files,
+    npm: true,
   };
   fs.writeFileSync("site/release.json", JSON.stringify(release, null, 2) + "\n");
 '
@@ -391,20 +430,20 @@ git push --quiet origin main
 echo "✓ Committed and pushed $(git rev-parse --short HEAD): the site shows $VERSION once Vercel has deployed it"
 
 # =============================================================================
-# 6. THE HOMEBREW TAP
+# 7. THE HOMEBREW TAP
 # =============================================================================
 
-step "6. Homebrew: $HOMEBREW_TAP"
+step "7. Homebrew: $HOMEBREW_TAP"
 update_tap
 
 # =============================================================================
-# 7. THE SITE
+# 8. THE SITE
 # =============================================================================
 
 # Released means installable: the site's install script, once Vercel has
 # deployed release.json (and its cache, half a minute, has run out), installs
 # this version. Up to 15 minutes; past that, it only warns.
-step "7. Waiting for $SITE_URL/install.sh to install $VERSION"
+step "8. Waiting for $SITE_URL/install.sh to install $VERSION"
 served=""
 for _ in $(seq 90); do
   if curl -fsSL "$SITE_URL/install.sh" 2>/dev/null | grep -qF "agent-graph $VERSION"; then
