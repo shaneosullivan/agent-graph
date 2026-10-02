@@ -351,16 +351,29 @@ export function Install() {
         {(Object.keys(ways) as Array<Os>).map(key => (
           <button
             key={key}
+            id={`install-tab-${key}`}
             type="button"
             role="tab"
             className="tab"
             aria-selected={os === key}
+            aria-controls={`install-panel-${key}`}
             onClick={() => setOs(key)}>
             {ways[key].label}
           </button>
         ))}
       </div>
-      <PlatformSteps os={os} />
+      {/* Every tab's steps are in the page, for search engines; only the
+          chosen one is shown. */}
+      {(Object.keys(ways) as Array<Os>).map(key => (
+        <div
+          key={key}
+          id={`install-panel-${key}`}
+          role="tabpanel"
+          aria-labelledby={`install-tab-${key}`}
+          hidden={os !== key}>
+          <PlatformSteps os={key} />
+        </div>
+      ))}
     </section>
   );
 }
