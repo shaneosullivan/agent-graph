@@ -11,7 +11,7 @@ import published from "../release.json" with {type: "json"};
  * release bucket (releases/<version>/mac or linux) and fetched by its
  * Firebase Storage download URL.
  *
- * `npm` is whether it was published to npm too (`agent-graph`, with its
+ * `npm` is whether it was published to npm too (`@chofter/agent-graph`, with its
  * program for each platform in @chofter/agent-graph-<os>-<cpu>).
  */
 

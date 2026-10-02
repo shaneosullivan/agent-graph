@@ -19,7 +19,10 @@ type Command = {command: string; copied: Copied};
 const BREW: Command = {command: BREW_COMMAND, copied: "homebrew"};
 const SCRIPT: Command = {command: INSTALL_COMMAND, copied: "install-script"};
 // Global, so the hooks' path to the program stays (npx's doesn't).
-const NPM: Command = {command: "npm install -g agent-graph", copied: "npm"};
+const NPM: Command = {
+  command: "npm install -g @chofter/agent-graph",
+  copied: "npm",
+};
 const SETUP: Command = {
   command: "agent-graph install claude-code",
   copied: "claude-code",
@@ -72,11 +75,11 @@ const ways: Record<Os, Way> = {
     ? {
         label: "npm",
         install: NPM,
-        note: "For macOS and Linux, with Node 16 or later. Install it globally, not with npx: the hooks run the program from where npm puts it. npm update -g agent-graph upgrades it.",
+        note: "For macOS and Linux, with Node 16 or later. Install it globally, not with npx: the hooks run the program from where npm puts it. npm update -g @chofter/agent-graph upgrades it.",
       }
     : {
         label: "npm",
-        soon: "Coming soon: agent-graph from npm (npm install -g agent-graph).",
+        soon: "Coming soon: agent-graph from npm (npm install -g @chofter/agent-graph).",
       },
   // Its steps are its own (CloudSteps).
   cloud: {label: "Claude Code cloud"},

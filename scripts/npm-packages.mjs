@@ -4,13 +4,13 @@
 //
 // Makes the npm packages for a release, ready for `npm publish`:
 //
-//   agent-graph                        npm/agent-graph: the command (a Node
+//   @chofter/agent-graph               npm/agent-graph: the command (a Node
 //                                      script that runs the program) and its
 //                                      README, which is npm's page for it
 //   @chofter/agent-graph-<os>-<cpu>    one per build: the program itself,
 //                                      for that os and cpu
 //
-// agent-graph has every platform package as an optional dependency, of
+// @chofter/agent-graph has every platform package as an optional dependency, of
 // this version exactly, and npm installs only the one for its machine.
 // Nothing else in this repository goes in them.
 //
@@ -22,7 +22,7 @@
 //
 // Each package is a folder in <out> (replaced). It prints them, one per
 // line, in the order to publish them: the platform packages first, so
-// agent-graph's dependencies are there before it is.
+// @chofter/agent-graph's dependencies are there before it is.
 // =============================================================================
 
 import fs from "node:fs";
@@ -96,9 +96,9 @@ for (const build of builds) {
   fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
   fs.writeFileSync(
     path.join(dir, "README.md"),
-    `# ${name}\n\nThe [agent-graph](https://www.npmjs.com/package/agent-graph) program for ${platform.name}. ` +
-      `Don't install this yourself: install agent-graph, which installs the one for your machine.\n\n` +
-      "```bash\nnpm install -g agent-graph\n```\n",
+    `# ${name}\n\nThe [agent-graph](https://www.npmjs.com/package/@chofter/agent-graph) program for ${platform.name}. ` +
+      `Don't install this yourself: install @chofter/agent-graph, which installs the one for your machine.\n\n` +
+      "```bash\nnpm install -g @chofter/agent-graph\n```\n",
   );
   dependencies[name] = version;
   dirs.push(dir);

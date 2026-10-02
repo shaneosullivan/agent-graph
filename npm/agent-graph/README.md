@@ -1,4 +1,4 @@
-# agent-graph
+# @chofter/agent-graph
 
 Records how your AI coding sessions relate to each other: which session spawned which agents, who's waiting on whom, what's waiting on *you*, what looks stuck, and what work is left. It works from Claude Code's and Codex's hooks, and keeps an append-only log on your machine. Nothing leaves it unless you choose to share.
 
@@ -7,7 +7,7 @@ For macOS and Linux (ARM and x86_64), with Node 16 or later. Windows is coming.
 ## Install
 
 ```bash
-npm install -g agent-graph
+npm install -g @chofter/agent-graph
 ```
 
 Install it globally, not with `npx`: the hooks run the program from where npm put it, and `npx`'s copy doesn't stay there. npm installs only the program for your machine (about 3.5 MB), from an optional dependency, `@chofter/agent-graph-<platform>`, so don't install with `--omit=optional`.
@@ -31,7 +31,7 @@ Each also adds a command you can run in a session: `/agent-graph` in Claude Code
 
 `agent-graph uninstall claude-code` and `agent-graph uninstall codex` remove it all again.
 
-The hooks name the program by its path inside npm's global folder, which upgrades keep. If you switch to another Node version (with nvm, say), which has its own global folder, install agent-graph there and run `agent-graph install …` again.
+The hooks name the program by its path inside npm's global folder, which upgrades keep. If you switch to another Node version (with nvm, say), which has its own global folder, install @chofter/agent-graph there and run `agent-graph install …` again.
 
 ## Look at your agents
 
@@ -51,10 +51,10 @@ Every view flags what needs you (a permission prompt, a question, a plan to appr
 ## Upgrade and remove
 
 ```bash
-npm update -g agent-graph
+npm update -g @chofter/agent-graph
 ```
 
-To remove it, run `agent-graph uninstall claude-code` (and `codex`) first, so no hooks are left pointing at it, then `npm uninstall -g agent-graph`. Your logs stay in `~/.agent-graph/`.
+To remove it, run `agent-graph uninstall claude-code` (and `codex`) first, so no hooks are left pointing at it, then `npm uninstall -g @chofter/agent-graph`. Your logs stay in `~/.agent-graph/`.
 
 ## License
 

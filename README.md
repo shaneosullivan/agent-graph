@@ -22,7 +22,7 @@ Pick one:
 | macOS (Homebrew, also on Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install --cask chofter/tap/agent-graph` |
 | macOS and Linux | `curl -fsSL https://agentgraph.chofter.com/install.sh \| sh` |
 | Windows | Coming soon |
-| macOS and Linux, with Node (npm) | `npm install -g agent-graph` |
+| macOS and Linux, with Node (npm) | `npm install -g @chofter/agent-graph` |
 | From source (Rust stable) | `cargo install --path .` |
 
 Then:

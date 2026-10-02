@@ -14,7 +14,8 @@
 #   4. Packs each build as agent-graph-<target>.tar.gz and uploads it to
 #      $RELEASE_BUCKET, in releases/<version>/mac or releases/<version>/linux,
 #      then downloads it again from its public URL to check it.
-#   5. Publishes the npm packages (scripts/npm-packages.mjs): agent-graph,
+#   5. Publishes the npm packages (scripts/npm-packages.mjs):
+#      @chofter/agent-graph,
 #      and the program for each platform, @chofter/agent-graph-<os>-<cpu>.
 #   6. Writes site/release.json, which the site's downloads and /install.sh
 #      use, and commits and pushes it: the site shows the release once
@@ -33,7 +34,8 @@
 #   scripts/release.sh <version> --no-npm  without step 5: nothing's
 #                                         published to npm, and the site
 #                                         says npm's coming, unless
-#                                         agent-graph <version> is there
+#                                         @chofter/agent-graph <version>
+#                                         is there
 #   scripts/release.sh --tap-only         step 7 alone, for the release in
 #                                         site/release.json
 #
@@ -277,7 +279,7 @@ echo "✓ Notarization credentials: $NOTARY_PROFILE"
 if [ -n "$NPM" ]; then
   npm_user="$(npm whoami 2>/dev/null)" || fail "npm isn't logged in: npm login"
   npm org ls chofter "$npm_user" 2>/dev/null | grep -q "$npm_user" ||
-    fail "npm's $npm_user isn't in the chofter org, which @chofter/agent-graph-* are published under."
+    fail "npm's $npm_user isn't in the chofter org, which @chofter/agent-graph and its platform packages are published under."
   echo "✓ npm: $npm_user"
 fi
 
@@ -390,18 +392,18 @@ done
 if [ -z "$NPM" ]; then
   step "5. npm: skipped (--no-npm)"
 else
-  step "5. npm: agent-graph $VERSION"
+  step "5. npm: @chofter/agent-graph $VERSION"
   builds=()
   for target in "${MAC_TARGETS[@]}" "${LINUX_TARGETS[@]}"; do
     builds+=("$target=$out/$target/agent-graph")
   done
-  # A prerelease isn't what `npm install agent-graph` gets: npm needs it
+  # A prerelease isn't what `npm install @chofter/agent-graph` gets: npm needs it
   # tagged as something else.
   case "$VERSION" in
     *-*) npm_tag=next ;;
     *) npm_tag=latest ;;
   esac
-  # The platform packages first: agent-graph depends on them. Listed first,
+  # The platform packages first: @chofter/agent-graph depends on them. Listed first,
   # not read in the loop, so npm publish has the terminal: it asks for a
   # two-factor code only there.
   packages=()
@@ -423,8 +425,8 @@ else
     echo "✓ $name@$VERSION"
   done
 fi
-# The site offers npm once agent-graph is there, at this version.
-if [ "$(npm view "agent-graph@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+# The site offers npm once @chofter/agent-graph is there, at this version.
+if [ "$(npm view "@chofter/agent-graph@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
   on_npm=true
 else
   on_npm=false

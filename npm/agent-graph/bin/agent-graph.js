@@ -23,7 +23,7 @@ try {
     supported.includes(platform)
       ? `agent-graph: ${pkg} isn't installed. It's an optional dependency, ` +
           `so it's left out by --omit=optional or --no-optional: ` +
-          `install agent-graph again without that.`
+          `install @chofter/agent-graph again without that.`
       : `agent-graph: there's no build for ${platform} yet ` +
           `(there are for ${supported.join(", ")}). ` +
           `See https://agentgraph.chofter.com/#install`,
