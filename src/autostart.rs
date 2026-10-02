@@ -10,8 +10,18 @@
 //!   `~/.config/systemd/user/<UNIT>` (or under `$XDG_CONFIG_HOME`), enabled
 //!   and started (`systemctl --user enable --now`). Its output goes to the
 //!   journal (`journalctl --user -u <UNIT>`).
+//! - Windows: an entry in the user's Run key (`RUN_KEY`, named
+//!   `RUN_VALUE`), which Windows runs at login, and lists in Task Manager's
+//!   Startup apps. Windows has no service of its own that runs a console
+//!   program without a window and needs no administrator, so the entry runs
+//!   `watch-remote --autostarted`, which starts a copy of itself without a
+//!   window (its window only flashes) to do what launchd and systemd do
+//!   elsewhere: run `watch-remote --background`, again a minute after it
+//!   fails (`autostarted`). Its output goes to `watch-remote.log` in the
+//!   data directory, and its process is in `watch-remote.pid` there, to
+//!   stop it.
 //!
-//! Either runs `agent-graph watch-remote --background` by the path that
+//! Each runs `agent-graph watch-remote --background` by the path that
 //! outlasts upgrades (`install::lasting_exe`), and starts it again a minute
 //! after it fails (the network not being up yet at login, say). A
 //! background run never opens a browser: one that needs the user (to log in
@@ -30,6 +40,13 @@ pub const LABEL: &str = "com.chofter.agent-graph.watch-remote";
 pub const UNIT: &str = "agent-graph-watch-remote.service";
 /// How long after failing it's started again, in seconds.
 const RESTART_AFTER: u32 = 60;
+/// The user's Run key on Windows, under HKEY_CURRENT_USER.
+pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+/// The Run key's entry for it.
+pub const RUN_VALUE: &str = "AgentGraphWatchRemote";
+/// Set for the copy `--autostarted` starts without a window, which keeps
+/// `watch-remote` running (Windows).
+const SUPERVISOR_VAR: &str = "AGENT_GRAPH_AUTOSTART_SUPERVISOR";
 
 /// The arguments the service runs `agent-graph` with, for the site `url`.
 pub fn args(url: &str) -> Vec<String> {
@@ -41,8 +58,62 @@ pub fn args(url: &str) -> Vec<String> {
     args
 }
 
-/// Where the service's file goes, on this system; an error where it isn't
-/// supported yet.
+/// Whether it can be started at login on this system.
+pub fn supported() -> bool {
+    cfg!(any(target_os = "macos", target_os = "linux", windows))
+}
+
+/// What the Run key's entry runs at login (Windows): this `exe`,
+/// `--autostarted`, for the site `url`, with `home` as the data directory
+/// if it's set (the entry can't set AGENT_GRAPH_HOME).
+pub fn login_command(exe: &Path, url: &str, home: Option<&Path>) -> String {
+    let url = url.trim_end_matches('/');
+    let mut words = vec![
+        exe.to_string_lossy().into_owned(),
+        "watch-remote".to_string(),
+        "--autostarted".to_string(),
+    ];
+    if url != crate::remote::DEFAULT_URL {
+        words.push(format!("--url={url}"));
+    }
+    if let Some(home) = home {
+        words.push(format!("--data-dir={}", home.to_string_lossy()));
+    }
+    words
+        .iter()
+        .map(|w| windows_arg(w))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One word of a Windows command line, as programs split them
+/// (`CommandLineToArgvW`, and the C runtime): in double quotes, with a
+/// quote escaped by a backslash, and the backslashes before a quote (or the
+/// closing one) doubled.
+fn windows_arg(s: &str) -> String {
+    let mut out = String::from("\"");
+    let mut backslashes = 0;
+    for c in s.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(backslashes));
+                backslashes = 0;
+                out.push(c);
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(backslashes * 2));
+    out.push('"');
+    out
+}
+
+/// Where the service's file goes, on macOS or Linux; an error elsewhere.
 pub fn service_path() -> Result<PathBuf, String> {
     let home = crate::paths::user_home().ok_or("can't find your home directory")?;
     if cfg!(target_os = "macos") {
@@ -164,7 +235,9 @@ fn systemd_quote(s: &str) -> String {
 pub fn enable(root: &Path, url: &str) -> Result<(), String> {
     let url = url.trim_end_matches('/');
     // (Checked before logging in: no use logging in where it can't be set up.)
-    let path = service_path()?;
+    if !supported() {
+        return Err("starting it when you log in isn't supported on this system yet".into());
+    }
     if !crate::remote::sends_privately(url) {
         return Err(format!(
             "{url} isn't HTTPS, so your login would be sent in the clear. Use an https:// URL."
@@ -186,11 +259,34 @@ pub fn enable(root: &Path, url: &str) -> Result<(), String> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from);
     let log = root.join("watch-remote.log");
+    if cfg!(windows) {
+        win::set_run_entry(&login_command(&exe, url, home.as_deref()))?;
+        if manages_services() {
+            // (Running already, from before: stopped first, so this one's used.)
+            stop_running(root);
+            win::start_supervisor(
+                &std::env::current_exe().map_err(|e| e.to_string())?,
+                root,
+                url,
+            )?;
+        }
+        println!(
+            "It'll share your sessions live to {url}/watch whenever you log in to this computer, as {}. It's started now too.",
+            account.who()
+        );
+        println!(
+            "It's in Task Manager's Startup apps. What it says goes to {}.",
+            log.display()
+        );
+        println!("To stop it, and not start it again: agent-graph watch-remote --no-autostart");
+        return Ok(());
+    }
     let contents = if cfg!(target_os = "macos") {
         launchd_plist(&exe, &args, &log, home.as_deref())
     } else {
         systemd_unit(&exe, &args, home.as_deref())
     };
+    let path = service_path()?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     }
@@ -225,7 +321,20 @@ pub fn enable(root: &Path, url: &str) -> Result<(), String> {
 }
 
 /// Stops it, and removes it, so it isn't started at login any more.
-pub fn disable() -> Result<(), String> {
+pub fn disable(root: &Path) -> Result<(), String> {
+    if cfg!(windows) {
+        let there = win::run_entry().is_some();
+        if manages_services() {
+            stop_running(root);
+        }
+        if there {
+            win::remove_run_entry()?;
+            println!("Stopped. It won't start when you log in any more.");
+        } else {
+            println!("It wasn't set to start when you log in.");
+        }
+        return Ok(());
+    }
     let path = service_path()?;
     let there = path.exists();
     if manages_services() {
@@ -252,7 +361,116 @@ pub fn disable() -> Result<(), String> {
 
 /// Whether it's set up to start at login.
 pub fn enabled() -> bool {
+    if cfg!(windows) {
+        return win::run_entry().is_some();
+    }
     service_path().is_ok_and(|p| p.exists())
+}
+
+/// `watch-remote --autostarted`, which the Run key's entry runs at login on
+/// Windows (elsewhere it's a background run). Started with a window, it
+/// starts a copy of itself without one, and stops; that copy (the
+/// supervisor: `SUPERVISOR_VAR` is set) runs `watch-remote --background`,
+/// its output appended to the log, and again `RESTART_AFTER` seconds after
+/// it fails, until it stops by itself. Its process is in the pid file
+/// meanwhile, so `--no-autostart` (or setting it up again) can stop it.
+pub fn autostarted(root: &Path, url: &str) -> Result<(), String> {
+    if !cfg!(windows) {
+        return crate::remote::run(
+            root,
+            crate::remote::Options {
+                url: url.to_string(),
+                session: None,
+                new: false,
+                logout: false,
+                background: true,
+            },
+        );
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("can't find this executable: {e}"))?;
+    if std::env::var_os(SUPERVISOR_VAR).is_none() {
+        return win::start_supervisor(&exe, root, url);
+    }
+    let pid_file = pid_file(root);
+    let me = crate::process::lineage(std::process::id())
+        .first()
+        .map(crate::process::Process::id);
+    if let Some(me) = &me {
+        let _ = std::fs::write(&pid_file, me);
+    }
+    let log = root.join("watch-remote.log");
+    let note = |what: &str| {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+        {
+            let _ = writeln!(
+                file,
+                "{}  {what}",
+                humantime::format_rfc3339_seconds(std::time::SystemTime::now())
+            );
+        }
+    };
+    loop {
+        let output = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log)
+            .map_err(|e| format!("opening {}: {e}", log.display()))?;
+        let errors = output.try_clone().map_err(|e| e.to_string())?;
+        let mut command = Command::new(&exe);
+        command
+            .args(args(url))
+            .env("AGENT_GRAPH_HOME", root)
+            .env_remove(SUPERVISOR_VAR)
+            .stdin(std::process::Stdio::null())
+            .stdout(output)
+            .stderr(errors);
+        win::no_window(&mut command);
+        match command.status() {
+            Ok(status) if status.success() => break,
+            Ok(status) => note(&format!(
+                "watch-remote stopped ({status}): starting it again in {RESTART_AFTER} seconds."
+            )),
+            Err(e) => note(&format!(
+                "can't run {}: {e}: trying again in {RESTART_AFTER} seconds.",
+                exe.display()
+            )),
+        }
+        std::thread::sleep(std::time::Duration::from_secs(RESTART_AFTER.into()));
+    }
+    // (Unless another has taken its place.)
+    if std::fs::read_to_string(&pid_file).ok() == me {
+        let _ = std::fs::remove_file(&pid_file);
+    }
+    Ok(())
+}
+
+/// Where the supervisor's process is kept while it runs (Windows).
+fn pid_file(root: &Path) -> PathBuf {
+    root.join("watch-remote.pid")
+}
+
+/// Stops the supervisor in the pid file, and what it's running, if it's
+/// running (Windows).
+fn stop_running(root: &Path) {
+    let pid_file = pid_file(root);
+    let Ok(id) = std::fs::read_to_string(&pid_file) else {
+        return;
+    };
+    let id = id.trim();
+    // (Only that process: not another that has its pid now.)
+    if crate::process::alive(id) == Some(true) {
+        if let Some((pid, _)) = id.split_once('@') {
+            let mut command = Command::new("taskkill");
+            command.args(["/PID", pid, "/T", "/F"]);
+            win::no_window(&mut command);
+            let _ = command.output();
+        }
+    }
+    let _ = std::fs::remove_file(&pid_file);
 }
 
 /// Whether to tell launchd or systemd (not when testing: the tests only
@@ -291,6 +509,186 @@ fn run(program: &str, args: &[&str]) -> Result<(), String> {
     ))
 }
 
+/// The Run key's entry, and starting programs without a window (Windows).
+#[cfg(windows)]
+mod win {
+    use std::os::windows::process::CommandExt;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+
+    use windows_sys::Win32::Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE_FLAG_INHERIT, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW,
+    };
+
+    use super::{RUN_KEY, RUN_VALUE, SUPERVISOR_VAR};
+
+    /// The key the entry's in: the Run key, or (for the tests, which mustn't
+    /// touch it) `AGENT_GRAPH_RUN_KEY`.
+    fn key() -> Vec<u16> {
+        let key = std::env::var("AGENT_GRAPH_RUN_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())
+            .unwrap_or_else(|| RUN_KEY.to_string());
+        wide(&key)
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(Some(0)).collect()
+    }
+
+    /// What the entry runs, if there is one.
+    pub fn run_entry() -> Option<String> {
+        let (key, value) = (key(), wide(RUN_VALUE));
+        let mut size = 0u32;
+        // SAFETY: the names are NUL-terminated; with no buffer, it gives the size.
+        let found = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        if found != ERROR_SUCCESS {
+            return None;
+        }
+        let mut data = vec![0u16; (size as usize).div_ceil(2)];
+        // SAFETY: `data` holds `size` bytes.
+        let read = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                data.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if read != ERROR_SUCCESS {
+            return None;
+        }
+        let end = data.iter().position(|&c| c == 0).unwrap_or(data.len());
+        Some(String::from_utf16_lossy(&data[..end]))
+    }
+
+    /// Has the entry run `command` at login.
+    pub fn set_run_entry(command: &str) -> Result<(), String> {
+        let (key, value, data) = (key(), wide(RUN_VALUE), wide(command));
+        // SAFETY: the names and data are NUL-terminated, and the size is the data's, in bytes.
+        let set = unsafe {
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                value.as_ptr(),
+                REG_SZ,
+                data.as_ptr().cast(),
+                (data.len() * 2) as u32,
+            )
+        };
+        if set == ERROR_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!(
+                "can't add it to your Startup apps (the registry's Run key): {}",
+                std::io::Error::from_raw_os_error(set as i32)
+            ))
+        }
+    }
+
+    /// Removes the entry, if it's there.
+    pub fn remove_run_entry() -> Result<(), String> {
+        let (key, value) = (key(), wide(RUN_VALUE));
+        // SAFETY: the names are NUL-terminated.
+        let removed =
+            unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr()) };
+        if removed == ERROR_SUCCESS || removed == ERROR_FILE_NOT_FOUND {
+            Ok(())
+        } else {
+            Err(format!(
+                "can't remove it from your Startup apps (the registry's Run key): {}",
+                std::io::Error::from_raw_os_error(removed as i32)
+            ))
+        }
+    }
+
+    /// Has `command` run without a window.
+    pub fn no_window(command: &mut Command) {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    /// Starts `exe` as the supervisor (`autostarted`), without a window, and
+    /// out of the job it's in, if it can be, so it outlasts a terminal that
+    /// ends its processes when it closes.
+    pub fn start_supervisor(exe: &Path, root: &Path, url: &str) -> Result<(), String> {
+        // A child gets every handle that can be inherited, whatever it's
+        // given as its own: this one's stdout, say, a pipe whose reader
+        // (a terminal, or a tool running this) would then wait as long as
+        // the supervisor runs. So this one's aren't, from now on.
+        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: a handle this process has, or none (which is refused).
+            unsafe { SetHandleInformation(GetStdHandle(which), HANDLE_FLAG_INHERIT, 0) };
+        }
+        let start = |flags: u32| {
+            Command::new(exe)
+                .args(["watch-remote", "--autostarted"])
+                .arg(format!("--url={}", url.trim_end_matches('/')))
+                .arg("--data-dir")
+                .arg(root)
+                .env(SUPERVISOR_VAR, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(flags)
+                .spawn()
+        };
+        let flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+        start(flags | CREATE_BREAKAWAY_FROM_JOB)
+            .or_else(|_| start(flags))
+            .map(|_| ())
+            .map_err(|e| format!("can't start {}: {e}", exe.display()))
+    }
+}
+
+/// Where there's no Run key (anywhere but Windows), nothing's used.
+#[cfg(not(windows))]
+mod win {
+    use std::path::Path;
+    use std::process::Command;
+
+    const ONLY: &str = "only on Windows";
+
+    pub fn run_entry() -> Option<String> {
+        None
+    }
+
+    pub fn set_run_entry(_command: &str) -> Result<(), String> {
+        Err(ONLY.into())
+    }
+
+    pub fn remove_run_entry() -> Result<(), String> {
+        Err(ONLY.into())
+    }
+
+    pub fn no_window(_command: &mut Command) {}
+
+    pub fn start_supervisor(_exe: &Path, _root: &Path, _url: &str) -> Result<(), String> {
+        Err(ONLY.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +702,34 @@ mod tests {
         assert_eq!(
             args("https://example.test/"),
             ["watch-remote", "--background", "--url=https://example.test"]
+        );
+    }
+
+    #[test]
+    fn the_startup_entry_quotes_each_word_as_windows_splits_them() {
+        assert_eq!(
+            login_command(
+                Path::new(r"C:\Program Files\agent-graph\agent-graph.exe"),
+                crate::remote::DEFAULT_URL,
+                None
+            ),
+            r#""C:\Program Files\agent-graph\agent-graph.exe" "watch-remote" "--autostarted""#
+        );
+        assert_eq!(
+            login_command(
+                Path::new(r"C:\a.exe"),
+                "https://a.test/",
+                Some(Path::new(r"C:\my data\"))
+            ),
+            r#""C:\a.exe" "watch-remote" "--autostarted" "--url=https://a.test" "--data-dir=C:\my data\\""#,
+            "a backslash before the closing quote is doubled"
+        );
+        assert_eq!(windows_arg(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(windows_arg(r#"a\"b"#), r#""a\\\"b""#);
+        assert_eq!(
+            windows_arg(r"a\b"),
+            r#""a\b""#,
+            "elsewhere, a backslash is itself"
         );
     }
 

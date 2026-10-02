@@ -1383,6 +1383,129 @@ fn autostart_sets_up_a_service_and_no_autostart_removes_it() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("wasn't set to start"));
 }
 
+/// The user's Run key's entry, in `key` (a test's own, under
+/// HKEY_CURRENT_USER: never the real one), as `reg query` shows it.
+#[cfg(windows)]
+fn run_entry(key: &str) -> Option<String> {
+    let out = Command::new("reg")
+        .args([
+            "query",
+            &format!(r"HKCU\{key}"),
+            "/v",
+            "AgentGraphWatchRemote",
+        ])
+        .output()
+        .unwrap();
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// On Windows, `--autostart` adds an entry to the Run key (the Startup
+/// apps), which runs it `--autostarted` at login, and `--no-autostart`
+/// removes it. (In a key of the test's own, and nothing's started.)
+#[cfg(windows)]
+#[test]
+fn autostart_adds_a_startup_app_and_no_autostart_removes_it() {
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("agent graph");
+    std::fs::create_dir_all(&data).unwrap();
+    let site = "https://sharing.example";
+    let account = serde_json::json!({"site": site, "token": "agt_test", "email": "me@example.com"});
+    std::fs::write(data.join("account.json"), account.to_string()).unwrap();
+    let key = format!(
+        r"Software\agent-graph-tests\{}",
+        home.path().file_name().unwrap().to_string_lossy()
+    );
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+            .args(args)
+            .env("AGENT_GRAPH_HOME", &data)
+            .env("AGENT_GRAPH_RUN_KEY", &key)
+            .env("AGENT_GRAPH_NO_SERVICE_MANAGER", "1")
+            .env("AGENT_GRAPH_NO_BROWSER", "1")
+            .output()
+            .unwrap()
+    };
+
+    let out = run(&["watch-remote", "--autostart", &format!("--url={site}")]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("whenever you log in"), "{said}");
+    assert!(said.contains("Startup apps"), "{said}");
+    let entry = run_entry(&key).expect("the entry");
+    assert!(entry.contains("agent-graph"), "{entry}");
+    assert!(
+        entry.contains("\"watch-remote\" \"--autostarted\""),
+        "{entry}"
+    );
+    assert!(entry.contains(&format!("\"--url={site}\"")), "{entry}");
+    assert!(
+        entry.contains(&format!("\"--data-dir={}\"", data.display())),
+        "its data directory: {entry}"
+    );
+
+    let out = run(&["watch-remote", "--no-autostart"]);
+    assert!(out.status.success());
+    assert!(run_entry(&key).is_none());
+    let out = run(&["watch-remote", "--no-autostart"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("wasn't set to start"));
+    let _ = Command::new("reg")
+        .args(["delete", r"HKCU\Software\agent-graph-tests", "/f"])
+        .output();
+}
+
+/// Run at login on Windows (`--autostarted`), it starts a copy of itself
+/// without a window, and stops at once; that copy runs `watch-remote
+/// --background`, its output in the log, while its process is in the pid
+/// file. Not logged in, that stops by itself (not a failure), so the copy
+/// stops too, rather than starting it again.
+#[cfg(windows)]
+#[test]
+fn started_at_login_on_windows_it_runs_watch_remote_without_a_window() {
+    let (port, _requests) = mock_site();
+    let data = tempfile::tempdir().unwrap();
+    let started = std::time::Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_agent-graph"))
+        .args([
+            "watch-remote",
+            "--autostarted",
+            &format!("--url=http://127.0.0.1:{port}"),
+        ])
+        .arg(format!("--data-dir={}", data.path().display()))
+        .env_remove("AGENT_GRAPH_HOME")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "it doesn't wait"
+    );
+
+    let log = data.path().join("watch-remote.log");
+    let pid_file = data.path().join("watch-remote.pid");
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut said = String::new();
+    while std::time::Instant::now() < deadline {
+        said = std::fs::read_to_string(&log).unwrap_or_default();
+        if said.contains("Not logged in") && !pid_file.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(said.contains("Not logged in"), "the log: {said}");
+    assert!(!said.contains("starting it again"), "the log: {said}");
+    assert!(!pid_file.exists(), "it stopped");
+}
+
 /// Started at login but not logged in, it doesn't open a browser or fail
 /// (which would have it started again and again): it says how to log in,
 /// and stops.

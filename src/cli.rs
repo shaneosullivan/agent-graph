@@ -164,6 +164,18 @@ enum Command {
             help = help::watch_remote::opt::CHECK
         )]
         check: bool,
+        /// How `--autostart` starts it at login on Windows (see
+        /// `autostart::autostarted`). Not for people.
+        #[arg(
+            long,
+            hide = true,
+            conflicts_with_all = ["session", "new", "logout", "autostart", "no_autostart", "background", "check"]
+        )]
+        autostarted: bool,
+        /// The data directory, for `--autostarted`, which can't be given
+        /// AGENT_GRAPH_HOME by what starts it. Not for people.
+        #[arg(long, hide = true, value_name = "DIR")]
+        data_dir: Option<std::path::PathBuf>,
     },
     #[command(
         display_order = 4,
@@ -381,14 +393,20 @@ pub fn run() -> ExitCode {
             no_autostart,
             background,
             check: _,
-        } => paths::data_dir()
+            autostarted,
+            data_dir,
+        } => data_dir
+            .or_else(paths::data_dir)
             .ok_or_else(|| "can't find your home directory".to_string())
             .and_then(|root| {
+                if autostarted {
+                    return crate::autostart::autostarted(&root, &url);
+                }
                 if autostart {
                     return crate::autostart::enable(&root, &url);
                 }
                 if no_autostart {
-                    return crate::autostart::disable();
+                    return crate::autostart::disable(&root);
                 }
                 crate::remote::run(
                     &root,
@@ -759,7 +777,7 @@ fn restart_notice(installed: bool, chatgpt: bool, color: bool) -> String {
 /// already, or can't be here.
 fn offer_autostart(yes: bool) {
     let site = crate::remote::DEFAULT_URL;
-    if crate::autostart::service_path().is_err() || crate::autostart::enabled() {
+    if !crate::autostart::supported() || crate::autostart::enabled() {
         return;
     }
     let Some(root) = paths::data_dir() else {
@@ -1767,7 +1785,8 @@ mod tests {
             let mut args = BTreeSet::new();
             for arg in sub.get_arguments() {
                 let id = arg.get_id().as_str();
-                if id == "help" || id == "version" {
+                // (A hidden one is for agent-graph itself, not people.)
+                if id == "help" || id == "version" || arg.is_hide_set() {
                     continue;
                 }
                 args.insert(id);
