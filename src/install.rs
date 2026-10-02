@@ -186,12 +186,26 @@ pub fn lasting_exe() -> Result<PathBuf, String> {
     })
 }
 
-/// The hook command pointing at this executable (`lasting_exe`). Forward
-/// slashes and quotes keep it working in the shells Claude Code uses on
-/// every platform.
+/// The hook command pointing at this executable (`lasting_exe`), for
+/// `provider` on this system (`hook_command`).
 pub fn default_command(provider: &str) -> Result<String, String> {
     let exe = lasting_exe()?.to_string_lossy().replace('\\', "/");
-    Ok(format!("\"{exe}\" emit --provider {provider}"))
+    Ok(hook_command(&exe, provider, cfg!(windows)))
+}
+
+/// The hook command that runs `exe` for `provider`. Forward slashes and
+/// quotes keep it working in the shells Claude Code uses on every platform
+/// (Git Bash, on Windows). Codex runs a hook on Windows with PowerShell
+/// (`powershell -NoProfile -Command …`), which takes a line that starts with
+/// a quoted path for a string, not a command (and fails at `emit`): there,
+/// PowerShell's call operator, `&`, comes first.
+fn hook_command(exe: &str, provider: &str, windows: bool) -> String {
+    let command = format!("\"{exe}\" emit --provider {provider}");
+    if windows && provider == "codex" {
+        format!("& {command}")
+    } else {
+        command
+    }
 }
 
 /// Adds our hooks to Claude Code `settings`, replacing any earlier copy.
@@ -952,6 +966,27 @@ mod tests {
     }
 
     const CODEX_CMD: &str = "\"/usr/local/bin/agent-graph\" emit --provider codex";
+
+    #[test]
+    fn codex_on_windows_runs_the_hook_through_powershells_call_operator() {
+        let exe = "C:/Users/me/.local/bin/agent-graph.exe";
+        assert_eq!(
+            hook_command(exe, "codex", true),
+            "& \"C:/Users/me/.local/bin/agent-graph.exe\" emit --provider codex"
+        );
+        // Claude Code's run in Git Bash, where a line can't start with `&`:
+        // as everywhere else.
+        assert_eq!(
+            hook_command(exe, "claude-code", true),
+            "\"C:/Users/me/.local/bin/agent-graph.exe\" emit --provider claude-code"
+        );
+        assert_eq!(
+            hook_command("/usr/local/bin/agent-graph", "codex", false),
+            CODEX_CMD
+        );
+        // Still found again, to replace or remove.
+        assert!(hook_command(exe, "codex", true).contains(CODEX_MARKER));
+    }
 
     /// Codex's own test vector (codex-rs/config/src/fingerprint_tests.rs, as
     /// the hook discovery uses it): a command handler with no timeout,

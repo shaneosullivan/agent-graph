@@ -1631,6 +1631,69 @@ fn a_viewer_never_stops_another_program_on_its_port() {
     let _ = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
 }
 
+/// Codex on Windows runs each hook as `powershell -NoProfile -Command
+/// <command>`, which takes a command starting with a quoted path for a
+/// string: the installed command runs there, and records the event.
+#[cfg(windows)]
+#[test]
+fn codex_on_windows_runs_the_installed_hook_through_powershell() {
+    let codex = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let out = bin()
+        .args(["install", "codex", "--yes"])
+        .env("CODEX_HOME", codex.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let hooks: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(codex.path().join("hooks.json")).unwrap())
+            .unwrap();
+    let command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(command.starts_with("& \""), "{command}");
+
+    let payload = r#"{"session_id": "0199aaaa-0000-7000-8000-000000000001", "cwd": "C:/w", "hook_event_name": "SessionStart", "source": "startup"}"#;
+    let mut powershell = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &command])
+        .env("AGENT_GRAPH_HOME", data.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    powershell
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let out = powershell.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let recorded: Vec<_> = std::fs::read_dir(data.path().join("events"))
+        .unwrap()
+        .flatten()
+        .map(|f| f.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        recorded.iter().any(|f| f.starts_with("codex-")),
+        "the session's events: {recorded:?}"
+    );
+}
+
 /// `install codex` puts the hooks in Codex's hooks file and trusts them in
 /// its config.toml, keeping what's there; `uninstall codex` takes both out.
 #[test]
@@ -1645,6 +1708,8 @@ fn codex_hooks_are_installed_trusted_and_removed() {
             .arg("--yes")
             .env("CODEX_HOME", codex.path())
             .env("HOME", project.path())
+            // (Windows' home, for the $agent-graph skill: not the real one.)
+            .env("USERPROFILE", project.path())
             .current_dir(project.path())
             .output()
             .unwrap();

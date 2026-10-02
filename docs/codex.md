@@ -90,7 +90,7 @@ Labels are cut to 200 characters, and prompts, commands and outputs aren't kept,
 - **Codex cloud** (chatgpt.com/codex): supported, with `install codex --cloud` in an environment's setup script: see [codex-cloud.md](codex-cloud.md).
 - **Multi-agent v2's waits:** its `wait_agent` names no agents, so no wait is shown.
 - **The IDE extension** runs the same core, so it should fire the same hooks; untested. (The ChatGPT desktop app is tested: see Testing.)
-- Windows.
+- **Windows** is untested beyond its hooks. Codex runs each hook there as `powershell -NoProfile -Command <command>`, and PowerShell takes a line that starts with a quoted path for a string (`Unexpected token 'emit'`), so on Windows the command starts with PowerShell's call operator: `& "C:/…/agent-graph.exe" emit --provider codex` (`install::hook_command`; found with the Codex desktop app's own `codex.exe`, and tested through PowerShell on Windows CI).
 
 ## Testing
 

@@ -127,7 +127,8 @@ Needs an account on agentgraph.chofter.com (the one you use on your Mac is fine)
 
 Codex on Windows hasn't been tried at all, so anything here is new.
 
-- [ ] In PowerShell: `agent-graph install codex`, then start `codex` in `ag-test` and give it a small task.
+- [ ] In PowerShell: `agent-graph install codex`, then start `codex` in `ag-test` and give it a small task. (The Codex desktop app doesn't put `codex` on your PATH: use the Codex CLI, `npm install -g @openai/codex`, or the app itself. A task that says the workspace is read-only is Codex's sandbox setting, not agent-graph.)
+- [ ] `notepad "$env:USERPROFILE\.codex\hooks.json"`: each agent-graph command starts with `& "` (PowerShell's call operator: Codex runs hooks with PowerShell on Windows, which needs it).
 - [ ] `agent-graph tree` shows the Codex session. If it doesn't, check `%USERPROFILE%\.agent-graph\emit.log`, and whether `%USERPROFILE%\.codex\hooks.json` has agent-graph's hooks.
 
 ## 11. Clean up
