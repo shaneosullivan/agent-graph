@@ -768,6 +768,9 @@ body {
   margin: 0;
   font-size: 14px;
 }
+.site .open-source-account {
+  margin: 14px 0 0;
+}
 .site .open-source .tile {
   border-color: color-mix(in srgb, var(--good) 35%, var(--line));
 }

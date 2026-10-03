@@ -137,6 +137,12 @@ export default function Home() {
               </p>
             </div>
           </div>
+          <p className="open-source-account">
+            You don&rsquo;t have to host it yourself, though. Even easier,{" "}
+            <a href="/login">make an account here</a>, and{" "}
+            <code>agent-graph watch-remote</code> shares your agents live to it,
+            with nothing to deploy. (<a href="/faq">What it costs</a>.)
+          </p>
         </section>
 
         <section className="section">
