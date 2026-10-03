@@ -3,7 +3,9 @@ import "./site.css";
 import {Fragment} from "react";
 
 import cliHelp from "@/lib/cli-help.json";
+import {CONTACT} from "@/lib/contact";
 import {type Help, Inline} from "@/lib/help-render";
+import {link} from "@/lib/links";
 import {hasWindows, latestRelease} from "@/lib/release";
 
 import {DeletedNotice} from "./deleted-notice";
@@ -26,6 +28,7 @@ export default function Home() {
         <SiteHeader
           links={[
             {href: "#install", label: "Install"},
+            {href: "#open-source", label: "Open source"},
             {href: "#examples", label: "Examples"},
             {href: "#live", label: "Share live"},
             {href: "/docs", label: "Docs"},
@@ -45,6 +48,11 @@ export default function Home() {
           <p>
             <strong>Agent Graph</strong> solves this.
           </p>
+          <ul className="badges" aria-label="Licence and price">
+            <li>Open source</li>
+            <li>MIT licensed</li>
+            <li>Free to self-host</li>
+          </ul>
         </section>
 
         <DeletedNotice />
@@ -86,13 +94,50 @@ export default function Home() {
                 logs to this site, where you can track all your agent's work in
                 a fully secure and private manner. This is completely optional,
                 and you can of course keep all of your logs local on your
-                machine. This entire project is open source too of course, so
-                you can even fork it, deploy this site yourself to your own
-                domain, and use it for your work instead of this site.
+                machine, or <a href="#open-source">run this site yourself</a>.
               </p>
             </section>
           }
         />
+
+        <section className="section open-source" id="open-source">
+          <h2>Open source, and free</h2>
+          <p className="section-lead">
+            All of Agent Graph is open source under the MIT licence: the{" "}
+            <code>agent-graph</code> command, the viewer, and this site. Read
+            it, fork it, change it, use it at work.{" "}
+            <a {...link(CONTACT.source)}>
+              {CONTACT.source.replace("https://", "")}
+            </a>
+          </p>
+          <div className="grid3">
+            <div className="tile">
+              <h3>MIT licensed</h3>
+              <p>
+                No open-core catch and no closed parts. Every line, this site
+                included, is on GitHub to use as you like.
+              </p>
+            </div>
+            <div className="tile">
+              <h3>Free on your computer</h3>
+              <p>
+                Recording your agents and <code>agent-graph view</code> are free
+                for ever, with no account, and nothing leaves your machine.
+              </p>
+            </div>
+            <div className="tile">
+              <h3>Free to self-host</h3>
+              <p>
+                Deploy this site to your own domain, on Vercel and
+                Firebase&rsquo;s free plans, and share live from anywhere
+                without paying anything.{" "}
+                <a {...link(`${CONTACT.source}/tree/main/site`)}>
+                  Here&rsquo;s how
+                </a>
+              </p>
+            </div>
+          </div>
+        </section>
 
         <section className="section">
           <h2>Install Agent Graph</h2>

@@ -11,7 +11,8 @@ import {useEffect, useRef, useState} from "react";
  * if it is when the page loads, or when it's scrolled to. Until then it's
  * an empty frame, and nothing's fetched from YouTube. It plays muted
  * (browsers only let a muted video play by itself), and inline on a phone;
- * the viewer can turn the sound on.
+ * the viewer can turn the sound on. Being silent, it starts with its
+ * subtitles on (in English); the viewer can turn them off.
  */
 export function YouTubeVideo({
   id,
@@ -55,7 +56,9 @@ export function YouTubeVideo({
     // this (it picks the quality from the player's size and the connection),
     // but it's still a hint some browsers take.
     vq: "hd1080",
-    ...(autoplay ? {autoplay: "1", mute: "1"} : {}),
+    ...(autoplay
+      ? {autoplay: "1", mute: "1", cc_load_policy: "1", cc_lang_pref: "en"}
+      : {}),
     // (Looping one video needs it named as its own playlist.)
     ...(loop ? {loop: "1", playlist: id} : {}),
   });
