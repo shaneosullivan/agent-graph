@@ -6,9 +6,11 @@ import {createHash} from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import {createServer} from "node:http";
@@ -121,6 +123,67 @@ test(
     );
   },
 );
+
+/**
+ * A PATH with every program the system has but curl (and wget, unless
+ * `wget` is given: then a stand-in for it, which copies file:// URLs and
+ * notes that it ran in `<dir>/wget-ran`).
+ */
+function pathWithout(dir: string, wget: boolean) {
+  const bin = join(dir, "path");
+  mkdirSync(bin);
+  for (const from of ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]) {
+    for (const name of existsSync(from) ? readdirSync(from) : []) {
+      if (name !== "curl" && name !== "wget" && !existsSync(join(bin, name))) {
+        symlinkSync(join(from, name), join(bin, name));
+      }
+    }
+  }
+  if (wget) {
+    // As the script runs it: wget -q --tries=3 -O <file> <url>
+    writeFileSync(
+      join(bin, "wget"),
+      `#!/bin/sh\ntouch '${dir}/wget-ran'\ncp "$(echo "$5" | sed 's#^file://##')" "$4"\n`,
+    );
+    chmodSync(join(bin, "wget"), 0o755);
+  }
+  return bin;
+}
+
+test("without curl, the install script downloads with wget", unix, () => {
+  const dir = mkdtempSync(join(tmpdir(), "ag-release-"));
+  const into = join(dir, "bin");
+  const run = spawnSync("/bin/sh", ["-c", installScript(fakeRelease(dir))], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: pathWithout(dir, true),
+      AGENT_GRAPH_INSTALL_DIR: into,
+    },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(existsSync(join(dir, "wget-ran")));
+  assert.match(
+    run.stdout,
+    /Installed .*agent-graph \(agent-graph 9\.9\.9-beta\.1\)/,
+  );
+});
+
+test("with neither curl nor wget, the install script says so", unix, () => {
+  const dir = mkdtempSync(join(tmpdir(), "ag-release-"));
+  const into = join(dir, "bin");
+  const run = spawnSync("/bin/sh", ["-c", installScript(fakeRelease(dir))], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: pathWithout(dir, false),
+      AGENT_GRAPH_INSTALL_DIR: into,
+    },
+  });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /needs curl or wget, and this has neither/);
+  assert.ok(!existsSync(join(into, "agent-graph")));
+});
 
 test("a quote in a URL can't break out of the script", () => {
   const script = installScript({

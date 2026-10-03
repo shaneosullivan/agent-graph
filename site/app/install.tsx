@@ -1,6 +1,12 @@
 "use client";
 
-import {useEffect, useRef, useState, useSyncExternalStore} from "react";
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type {Copied, Target} from "@/lib/analytics-core";
 import {track} from "@/lib/analytics-client";
@@ -11,6 +17,7 @@ import {
   INSTALL_COMMAND,
   latestRelease,
   POWERSHELL_COMMAND,
+  WGET_INSTALL_COMMAND,
 } from "@/lib/release";
 
 import {CopyCommand} from "./copy-command";
@@ -24,6 +31,10 @@ type Command = {command: string; copied: Copied};
 
 const BREW: Command = {command: BREW_COMMAND, copied: "homebrew"};
 const SCRIPT: Command = {command: INSTALL_COMMAND, copied: "install-script"};
+const WGET_SCRIPT: Command = {
+  command: WGET_INSTALL_COMMAND,
+  copied: "install-script",
+};
 const POWERSHELL: Command = {command: POWERSHELL_COMMAND, copied: "powershell"};
 // Global, so the hooks' path to the program stays (npx's doesn't).
 const NPM: Command = {
@@ -46,7 +57,8 @@ type Way = {
   install?: Command;
   /** Said under the install command. */
   note?: string;
-  or?: {note: string} & Command;
+  /** Other ways to install it, each with what's said above it. */
+  or?: Array<{note: string} & Command>;
   /** The program itself, for each processor: counted when clicked (/admin). */
   downloads?: Array<{label: string; target: Target}>;
 };
@@ -56,7 +68,7 @@ const ways: Record<Os, Way> = {
     ? {
         label: "macOS",
         install: BREW,
-        or: {note: "Or, without Homebrew:", ...SCRIPT},
+        or: [{note: "Or, without Homebrew:", ...SCRIPT}],
         downloads: [
           {label: "Apple silicon", target: "aarch64-apple-darwin"},
           {label: "Intel", target: "x86_64-apple-darwin"},
@@ -67,7 +79,10 @@ const ways: Record<Os, Way> = {
     ? {
         label: "Linux",
         install: SCRIPT,
-        or: {note: "Or with Homebrew:", ...BREW},
+        or: [
+          {note: "No curl? With wget:", ...WGET_SCRIPT},
+          {note: "Or with Homebrew:", ...BREW},
+        ],
         downloads: [
           {label: "x86_64", target: "x86_64-unknown-linux-musl"},
           {label: "ARM64", target: "aarch64-unknown-linux-musl"},
@@ -79,7 +94,7 @@ const ways: Record<Os, Way> = {
         label: "Windows",
         install: POWERSHELL,
         note: "In PowerShell. It puts agent-graph.exe in %USERPROFILE%\\.local\\bin, and adds that to your PATH. Run it again to upgrade.",
-        ...(release?.npm ? {or: {note: "Or with Node (npm):", ...NPM}} : {}),
+        ...(release?.npm ? {or: [{note: "Or with Node (npm):", ...NPM}]} : {}),
         downloads: [
           {label: "x64", target: "x86_64-pc-windows-msvc"},
           {label: "ARM64", target: "aarch64-pc-windows-msvc"},
@@ -469,12 +484,12 @@ export function PlatformSteps({os}: {os: Os}) {
             ) : null}
             :{way.install && <Copyable {...way.install} />}
             {way.note && <span className="install-or">{way.note}</span>}
-            {way.or && (
-              <>
-                <span className="install-or">{way.or.note}</span>
-                <Copyable {...way.or} />
-              </>
-            )}
+            {way.or?.map(or => (
+              <Fragment key={or.command}>
+                <span className="install-or">{or.note}</span>
+                <Copyable {...or} />
+              </Fragment>
+            ))}
             {way.downloads && (
               <>
                 <span className="install-or">

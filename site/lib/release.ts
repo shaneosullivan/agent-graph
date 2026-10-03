@@ -50,6 +50,9 @@ export const BREW_COMMAND = [
 /** The command that installs the latest release (GET /install.sh). */
 export const INSTALL_COMMAND = `curl -fsSL ${SITE_URL}/install.sh | sh`;
 
+/** The same, with wget: some Linux (a fresh Ubuntu desktop) has no curl. */
+export const WGET_INSTALL_COMMAND = `wget -qO- ${SITE_URL}/install.sh | sh`;
+
 /** The command that installs it on Windows, in PowerShell (GET /install.ps1). */
 export const POWERSHELL_COMMAND = `irm ${SITE_URL}/install.ps1 | iex`;
 
@@ -87,6 +90,8 @@ exit 1
   return `#!/bin/sh
 # Installs agent-graph ${release.version} from ${SITE_URL}:
 #   curl -fsSL ${SITE_URL}/install.sh | sh
+# or, without curl:
+#   wget -qO- ${SITE_URL}/install.sh | sh
 # It goes in $AGENT_GRAPH_INSTALL_DIR, $XDG_BIN_HOME or ~/.local/bin.
 set -eu
 
@@ -120,12 +125,22 @@ ${cases}
     ;;
 esac
 
+# curl, or wget where there's no curl (a fresh Ubuntu desktop has only wget).
+if command -v curl >/dev/null 2>&1; then
+  fetch() { curl -fsSL --retry 3 -o "$1" "$2"; }
+elif command -v wget >/dev/null 2>&1; then
+  fetch() { wget -q --tries=3 -O "$1" "$2"; }
+else
+  echo "Installing agent-graph needs curl or wget, and this has neither." >&2
+  exit 1
+fi
+
 dir="\${AGENT_GRAPH_INSTALL_DIR:-\${XDG_BIN_HOME:-$HOME/.local/bin}}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 echo "Downloading agent-graph ${release.version} ($target)…"
-curl -fsSL --retry 3 -o "$tmp/agent-graph.tar.gz" "$url"
+fetch "$tmp/agent-graph.tar.gz" "$url"
 if command -v sha256sum >/dev/null 2>&1; then
   got="$(sha256sum "$tmp/agent-graph.tar.gz" | cut -d' ' -f1)"
 else

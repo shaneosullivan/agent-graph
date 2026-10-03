@@ -20,7 +20,7 @@ Pick one:
 | | Command |
 |---|---|
 | macOS (Homebrew, also on Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install --cask chofter/tap/agent-graph` |
-| macOS and Linux | `curl -fsSL https://agentgraph.chofter.com/install.sh \| sh` |
+| macOS and Linux | `curl -fsSL https://agentgraph.chofter.com/install.sh \| sh` (no curl? `wget -qO- https://agentgraph.chofter.com/install.sh \| sh`) |
 | Windows (in PowerShell) | `irm https://agentgraph.chofter.com/install.ps1 \| iex` |
 | macOS, Linux and Windows, with Node (npm) | `npm install -g @chofter/agent-graph` |
 | From source (Rust stable) | `cargo install --path .` |
