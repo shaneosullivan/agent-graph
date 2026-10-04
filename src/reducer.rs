@@ -10,7 +10,8 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::event::{
-    Envelope, FinishStatus, Keyframe, PLAN_MODE, Payload, SpawnKind, State, Status, TaskStatus,
+    Envelope, FinishStatus, Keyframe, PLAN_MODE, Payload, SpawnKind, State, Status, TURN_STOPPED,
+    TaskStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -115,6 +116,10 @@ pub struct Node {
     /// ends on a plan waiting for the human.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub planning: bool,
+    /// Whether its turn has just been stopped (`activity` `Turn stopped`),
+    /// until the status that ends it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped: bool,
     /// When its turn ended on a question (a `status` with `turn_end`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_at: Option<String>,
@@ -639,6 +644,7 @@ impl Reducer {
             Payload::Activity(d) => {
                 node.asking.remove("");
                 node.planning |= d.tool == PLAN_MODE;
+                node.stopped |= d.tool == TURN_STOPPED;
             }
             // Anything else it does means it isn't waiting on one with no
             // label (see `asking`).
@@ -646,8 +652,24 @@ impl Reducer {
                 node.asking.remove("");
             }
         }
-        // Any activity other than a status report means the human answered.
-        if node.state == State::InputRequired && !matches!(payload, Payload::Status(_)) {
+        // Any activity other than a status report means the human answered:
+        // not a mark (a turn's mode, or its being stopped), or another command
+        // proposed (Cursor proposes several at once, then asks about each),
+        // or the task list as a turn left it, landing with the turn's last
+        // reply that ended on a question (Cursor's hooks run in parallel).
+        let with_question = node
+            .asked_at
+            .as_deref()
+            .is_some_and(|at| within(at, &e.ts, LATE_STATUS) || within(&e.ts, at, LATE_STATUS));
+        let answers = match &payload {
+            Payload::Status(_) => false,
+            Payload::Activity(d) => !d.may_ask && d.tool != PLAN_MODE && d.tool != TURN_STOPPED,
+            Payload::TasksUpdated(_) | Payload::TaskUpserted(_) | Payload::TaskDeleted(_) => {
+                !with_question
+            }
+            _ => true,
+        };
+        if node.state == State::InputRequired && answers {
             node.state = State::Working;
             node.attention = None;
         }
@@ -1064,6 +1086,7 @@ impl Reducer {
                 last_event_at: ts.to_string(),
                 asking: BTreeMap::new(),
                 planning: false,
+                stopped: false,
                 asked_at: None,
                 headline: None,
                 open_tasks: 0,
@@ -1378,10 +1401,20 @@ impl Reducer {
     /// to start a child in the foreground has returned, whether or not the
     /// provider said so: Claude Code only reports calls that succeed. Their
     /// waits close, and they can't be paired with a later child. A subagent
-    /// such a call started, and that hasn't said it's finished, was stopped
-    /// with the turn (Cursor says nothing of one when you send a message
-    /// mid-turn, which stops it).
+    /// such a call started, and that hasn't said it's finished, finished with
+    /// the turn (Cursor's CLI never says), or, if the turn was stopped
+    /// (`activity` `Turn stopped`), was stopped with it (Cursor says nothing
+    /// of one when you send a message mid-turn, which stops it).
     fn calls_over(&mut self, id: &str, ts: &str) {
+        let stopped = self
+            .nodes
+            .get_mut(id)
+            .is_some_and(|node| std::mem::take(&mut node.stopped));
+        let ended = if stopped {
+            State::Canceled
+        } else {
+            State::Completed
+        };
         // Only calls in the foreground have waits, which stay open until
         // they return.
         for at in self.index.unreturned.remove(id).unwrap_or_default() {
@@ -1392,7 +1425,7 @@ impl Reducer {
                 .flatten();
             if let Some(child) = stopped.and_then(|c| self.nodes.get_mut(&c)) {
                 if !child.state.is_terminal() {
-                    child.state = State::Canceled;
+                    child.state = ended;
                     child.ended_at = Some(ts.to_string());
                 }
             }
@@ -1774,6 +1807,14 @@ fn runs(node: &Node, program: &str) -> bool {
             .iter()
             .any(|(provider, programs)| *provider == node.provider && programs.contains(&program))
         || (node.provider == "run" && node.title.as_deref() == Some(program))
+}
+
+/// Works out again what a node's tasks and summary say (`open_tasks`,
+/// `headline`), after something from outside the log has changed them (the
+/// local viewer's: see `timeline::Local`).
+pub fn summarize(node: &mut Node) {
+    node.open_tasks = node.tasks.iter().filter(|t| t.status.is_open()).count();
+    node.headline = headline(node);
 }
 
 fn headline(node: &Node) -> Option<String> {

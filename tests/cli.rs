@@ -2038,3 +2038,184 @@ fn emit_records_a_cursor_conversation_only_once_it_has_started() {
     assert!(text.contains("\"type\":\"session.started\""));
     assert!(text.contains("\"type\":\"status\""));
 }
+
+// ---------------------------------------------------------------------------
+// Cursor's CLI keeps each chat in a database of its own
+// (`~/.cursor/chats/<folder's hash>/<chat id>/store.db`): its metadata, as
+// hex-encoded JSON, and its todo list, as protobuf records its root names
+// (docs/cursor.md). These make one, and run hooks as the CLI would.
+
+const CLI_CHAT: &str = "8a044cae-0d39-4f1d-bbcf-0881cb1d2238";
+const CLI_SUBAGENT: &str = "027e8279-0000-4000-8000-000000000000";
+const CLI_CALL: &str = "call-e50aa-1\nfc_p3uKWXM-3LYxF7-63a0c753-aws_ue1_0";
+
+/// A protobuf field: length-delimited (`Err`) or a varint (`Ok`).
+fn proto(field: u8, value: Result<u64, &[u8]>) -> Vec<u8> {
+    let varint = |mut n: u64| {
+        let mut out = Vec::new();
+        loop {
+            let byte = (n & 0x7f) as u8;
+            n >>= 7;
+            if n == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
+    };
+    match value {
+        Ok(n) => [vec![field << 3], varint(n)].concat(),
+        Err(bytes) => [
+            vec![(field << 3) | 2],
+            varint(bytes.len() as u64),
+            bytes.to_vec(),
+        ]
+        .concat(),
+    }
+}
+
+/// A CLI chat's database, in `home`, with `meta` and the todo list `todos`
+/// (id, text, status: 1 pending, 2 in progress, 3 completed, 4 cancelled).
+fn cli_store(home: &Path, chat: &str, meta: serde_json::Value, todos: &[(&str, &str, u64)]) {
+    let dir = home
+        .join(".cursor/chats/58f42aa65db0a0223afabff192c472ae")
+        .join(chat);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = rusqlite::Connection::open(dir.join("store.db")).unwrap();
+    db.execute_batch(
+        "create table blobs (id text primary key, data blob); \
+         create table meta (key text primary key, value text);",
+    )
+    .unwrap();
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let mut root = Vec::new();
+    for (i, (id, text, status)) in todos.iter().enumerate() {
+        let record = [
+            proto(1, Err(id.as_bytes())),
+            proto(2, Err(text.as_bytes())),
+            proto(3, Ok(*status)),
+        ]
+        .concat();
+        let key = [i as u8 + 1; 32]; // (Cursor's are SHA-256s: any 32 bytes do.)
+        db.execute(
+            "insert into blobs values (?1, ?2)",
+            rusqlite::params![hex(&key), record],
+        )
+        .unwrap();
+        root.extend(proto(3, Err(&key)));
+    }
+    root.extend(proto(22, Err(b"cli")));
+    let root_id = [0xab; 32];
+    db.execute(
+        "insert into blobs values (?1, ?2)",
+        rusqlite::params![hex(&root_id), root],
+    )
+    .unwrap();
+    let mut meta = meta;
+    meta["latestRootBlobId"] = hex(&root_id).into();
+    db.execute(
+        "insert into meta values ('0', ?1)",
+        [hex(meta.to_string().as_bytes())],
+    )
+    .unwrap();
+}
+
+/// Runs a Cursor CLI hook with `payload` (its conversation `chat`), from
+/// `home`.
+fn cli_hook(home: &Path, payload: serde_json::Value) {
+    let out = emit(
+        &home.join("ag"),
+        &["--provider", "cursor"],
+        &payload.to_string(),
+        &[
+            ("HOME", home.to_str().unwrap()),
+            ("CURSOR_INVOKED_AS", "agent"),
+        ],
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "{}");
+}
+
+fn cli_graph(home: &Path) -> String {
+    let out = bin()
+        .arg("tree")
+        .arg("--all")
+        .env("AGENT_GRAPH_HOME", home.join("ag"))
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn a_cli_chats_plan_and_todo_list_come_from_its_own_database() {
+    let home = tempfile::tempdir().unwrap();
+    cli_store(
+        home.path(),
+        CLI_CHAT,
+        serde_json::json!({"agentId": CLI_CHAT, "name": "Changelog Plan", "mode": "plan", "isRunEverything": false}),
+        &[
+            ("1", "Survey the folder", 3),
+            ("2", "Write CHANGELOG.md", 1),
+            ("3", "Tag a release", 4),
+        ],
+    );
+    let hook = |name: &str| {
+        serde_json::json!({"hook_event_name": name, "conversation_id": CLI_CHAT,
+            "status": "completed", "cursor_version": "2026.10.01", "workspace_roots": ["/Users/dev/app"]})
+    };
+    cli_hook(home.path(), hook("sessionStart"));
+    cli_hook(home.path(), hook("stop"));
+    let tree = cli_graph(home.path());
+    assert!(
+        tree.contains("needs you: Plan ready for your review"),
+        "{tree}"
+    );
+    assert!(tree.contains("tasks 2/3"), "{tree}");
+}
+
+#[test]
+fn a_cli_subagents_hooks_are_the_subagents_in_its_chat() {
+    let home = tempfile::tempdir().unwrap();
+    cli_store(
+        home.path(),
+        CLI_CHAT,
+        serde_json::json!({"agentId": CLI_CHAT, "mode": "default", "isRunEverything": false}),
+        &[],
+    );
+    cli_store(
+        home.path(),
+        CLI_SUBAGENT,
+        serde_json::json!({"agentId": CLI_SUBAGENT, "mode": "default", "isRunEverything": false,
+            "subagentInfo": {"parentAgentId": CLI_CHAT, "rootParentAgentId": CLI_CHAT,
+                "toolCallId": CLI_CALL, "typeName": "explore"}}),
+        &[],
+    );
+    let common = |name: &str, conversation: &str| {
+        serde_json::json!({"hook_event_name": name, "conversation_id": conversation,
+            "cursor_version": "2026.10.01", "workspace_roots": ["/Users/dev/app"]})
+    };
+    cli_hook(home.path(), common("sessionStart", CLI_CHAT));
+    let mut task = common("preToolUse", CLI_CHAT);
+    task["tool_name"] = "Task".into();
+    task["tool_use_id"] = CLI_CALL.into();
+    task["tool_input"] =
+        serde_json::json!({"description": "Count the files", "subagent_type": "explore"});
+    cli_hook(home.path(), task);
+    // The subagent's own hook: its conversation, which says nothing else.
+    let mut shell = common("preToolUse", CLI_SUBAGENT);
+    shell["tool_name"] = "Shell".into();
+    shell["tool_use_id"] = "toolu_1".into();
+    shell["tool_input"] = serde_json::json!({"command": "ls src"});
+    cli_hook(home.path(), shell);
+    // Recorded in its chat's file, not a file of its own.
+    let events = home.path().join("ag/events");
+    assert!(!events.join(format!("cursor-{CLI_SUBAGENT}.jsonl")).exists());
+    let tree = cli_graph(home.path());
+    assert!(tree.contains("explore call-e50"), "{tree}");
+    assert!(tree.contains("Count the files"), "{tree}");
+    // A print run's end is its turn's: the subagent finished with it.
+    let mut end = common("sessionEnd", CLI_CHAT);
+    end["reason"] = "completed".into();
+    cli_hook(home.path(), end);
+    let tree = cli_graph(home.path());
+    assert!(tree.contains("[completed]  Count the files"), "{tree}");
+}

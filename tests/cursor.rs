@@ -16,7 +16,7 @@
 mod common;
 
 use agent_graph::adapter::{self, Capture};
-use agent_graph::event::{Payload, State};
+use agent_graph::event::{Payload, State, TaskStatus};
 use agent_graph::reducer::{Graph, NodeKind};
 use common::*;
 use serde_json::Value;
@@ -495,4 +495,193 @@ fn a_turn_cursor_calls_an_error_isnt_shown_as_one() {
     ));
     assert_eq!(app_node(&g).state, State::Idle);
     assert_eq!(app_node(&g).summary, None);
+}
+
+#[test]
+fn a_cli_chats_name_is_in_its_meta_json() {
+    use agent_graph::adapter::cursor::cli_title;
+    let chats = tempfile::tempdir().unwrap();
+    let id = "71159a97-8182-4380-b9d7-e817cd70427f";
+    // Under a folder for the chat's working folder.
+    let dir = chats
+        .path()
+        .join("14db98aa102fd4301b65d83d6cafbaf7")
+        .join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("meta.json"),
+        r#"{"schemaVersion":1,"hasConversation":true,"title":"Run Date Sleep","cwd":"/Users/dev/app"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        cli_title(chats.path(), id).as_deref(),
+        Some("Run Date Sleep")
+    );
+    // A print run's has no title; an id that isn't one names no file.
+    std::fs::write(dir.join("meta.json"), r#"{"schemaVersion":1}"#).unwrap();
+    assert_eq!(cli_title(chats.path(), id), None);
+    assert_eq!(cli_title(chats.path(), "../../etc"), None);
+}
+
+#[test]
+fn an_app_chats_name_is_in_the_apps_database() {
+    use agent_graph::adapter::cursor::app_titles;
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("state.vscdb");
+    // A database shaped as Cursor's, kept open by a writer in WAL mode, as
+    // Cursor keeps it: what it last wrote is still only in the -wal file.
+    let writer = rusqlite::Connection::open(&store).unwrap();
+    writer
+        .execute_batch(
+            "pragma journal_mode = wal; pragma wal_autocheckpoint = 0; \
+             create table composerHeaders (composerId text primary key, value text); \
+             insert into composerHeaders values \
+             ('1cf069c4-2f45-49dd-acdb-6fd3f95ec3ed', '{\"name\":\"Runbook execution steps\"}'), \
+             ('5d18b682-83e0-476d-a933-fd32497f2058', '{\"type\":\"head\"}');",
+        )
+        .unwrap();
+    let all = app_titles(&store, None).unwrap();
+    assert_eq!(all.len(), 1, "a chat with no name yet isn't listed");
+    assert_eq!(
+        all["1cf069c4-2f45-49dd-acdb-6fd3f95ec3ed"],
+        "Runbook execution steps"
+    );
+    let one = app_titles(&store, Some("1cf069c4-2f45-49dd-acdb-6fd3f95ec3ed")).unwrap();
+    assert_eq!(one.len(), 1);
+    assert!(
+        app_titles(&store, Some("5d18b682-83e0-476d-a933-fd32497f2058"))
+            .unwrap()
+            .is_empty()
+    );
+    // Nothing that isn't an id is looked up.
+    assert_eq!(app_titles(&store, Some("x' or '1'='1")), None);
+    // Renamed, while the writer still has it open.
+    writer
+        .execute(
+            "update composerHeaders set value = '{\"name\":\"Stress test\"}' \
+             where composerId = '1cf069c4-2f45-49dd-acdb-6fd3f95ec3ed'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        app_titles(&store, None).unwrap()["1cf069c4-2f45-49dd-acdb-6fd3f95ec3ed"],
+        "Stress test"
+    );
+}
+
+/// A database shaped as Cursor's app's (see `an_app_chats_name_is_in_the_apps_database`),
+/// with one chat whose plan is waiting and whose todo list is part done.
+fn app_store_with_a_plan(dir: &std::path::Path) -> (std::path::PathBuf, rusqlite::Connection) {
+    let store = dir.join("state.vscdb");
+    let writer = rusqlite::Connection::open(&store).unwrap();
+    writer
+        .execute_batch(
+            r#"pragma journal_mode = wal; pragma wal_autocheckpoint = 0;
+            create table composerHeaders (composerId text primary key, value text);
+            create table cursorDiskKV (key text primary key, value blob);
+            insert into composerHeaders values ('927511cd-0000-4000-8000-000000000000',
+              '{"name":"CHANGELOG.md planning","hasPendingPlan":true}');
+            insert into cursorDiskKV values ('composerData:927511cd-0000-4000-8000-000000000000',
+              '{"status":"completed","todos":[
+                {"id":"1","content":"Survey the project","status":"completed","dependencies":[]},
+                {"id":"2","content":"Write CHANGELOG.md","status":"in_progress","dependencies":[]},
+                {"id":"3","content":"Link it from README","status":"pending","dependencies":[]},
+                {"id":"4","content":"Tag a release","status":"cancelled","dependencies":[]}]}');"#,
+        )
+        .unwrap();
+    (store, writer)
+}
+
+#[test]
+fn an_app_chats_plan_and_todo_list_are_in_the_apps_database() {
+    use agent_graph::adapter::cursor::app_chat;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, writer) = app_store_with_a_plan(dir.path());
+    let chat = app_chat(&store, "927511cd-0000-4000-8000-000000000000").unwrap();
+    assert!(chat.plan_pending);
+    let tasks: Vec<_> = chat
+        .todos
+        .iter()
+        .map(|t| (t.text.as_str(), t.status))
+        .collect();
+    assert_eq!(
+        tasks,
+        [
+            ("Survey the project", TaskStatus::Completed),
+            ("Write CHANGELOG.md", TaskStatus::InProgress),
+            ("Link it from README", TaskStatus::Pending),
+            // Cancelled is done with, as far as the list goes.
+            ("Tag a release", TaskStatus::Completed),
+        ]
+    );
+    // Built: no plan waiting, as soon as Cursor saves it.
+    writer
+        .execute(
+            "update composerHeaders set value = '{\"hasPendingPlan\":false}'",
+            [],
+        )
+        .unwrap();
+    assert!(
+        !app_chat(&store, "927511cd-0000-4000-8000-000000000000")
+            .unwrap()
+            .plan_pending
+    );
+    // A chat it doesn't have (a CLI chat's): nothing.
+    assert_eq!(
+        app_chat(&store, "385fd5a6-3d88-4cc1-8ebd-a6883b0e4fbe"),
+        None
+    );
+}
+
+#[test]
+fn the_viewer_shows_what_cursor_saved_on_its_chats() {
+    use agent_graph::adapter::cursor::AppChat;
+    let mut chats = std::collections::BTreeMap::new();
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _writer) = app_store_with_a_plan(dir.path());
+    let saved =
+        agent_graph::adapter::cursor::app_chat(&store, "927511cd-0000-4000-8000-000000000000")
+            .unwrap();
+    let id = format!(
+        "cursor:{}",
+        approvals()[0]["conversation_id"].as_str().unwrap()
+    );
+    chats.insert(id.clone(), saved.clone());
+    // The turn has ended: idle, with a plan waiting.
+    let mut g = reduce(translate_as(
+        "cursor",
+        &approvals()[..12],
+        Capture::default(),
+    ));
+    agent_graph::timeline::with_cursor(&mut g, &chats);
+    let node = &g.nodes[&id];
+    assert_eq!(node.state, State::InputRequired);
+    assert_eq!(
+        node.attention.as_deref(),
+        Some(agent_graph::reducer::PLAN_READY)
+    );
+    assert_eq!(node.tasks.len(), 4);
+    assert_eq!(node.open_tasks, 2);
+    assert_eq!(
+        node.headline.as_deref(),
+        Some("Write CHANGELOG.md (+1 pending)")
+    );
+    // Still at work: not waiting on its plan yet.
+    let mut g = reduce(translate_as(
+        "cursor",
+        &approvals()[..3],
+        Capture::default(),
+    ));
+    agent_graph::timeline::with_cursor(&mut g, &chats);
+    assert_eq!(g.nodes[&id].state, State::Working);
+    // Nothing saved: as the log says.
+    chats.insert(id.clone(), AppChat::default());
+    let mut g = reduce(translate_as(
+        "cursor",
+        &approvals()[..12],
+        Capture::default(),
+    ));
+    agent_graph::timeline::with_cursor(&mut g, &chats);
+    assert_eq!(g.nodes[&id].state, State::Idle);
+    assert!(g.nodes[&id].tasks.is_empty());
 }

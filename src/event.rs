@@ -289,6 +289,12 @@ pub struct MessageSent {
 /// ends on a plan waiting for the human.
 pub const PLAN_MODE: &str = "Plan mode";
 
+/// The `activity` tool that marks a turn as stopped before it finished (by
+/// the human, say), just before the status that ends it: a subagent it
+/// started in the foreground, and that hasn't said it's finished, was
+/// stopped with it, where otherwise it's taken to have finished with it.
+pub const TURN_STOPPED: &str = "Turn stopped";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Activity {
     pub tool: String,

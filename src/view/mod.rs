@@ -321,6 +321,7 @@ impl Shared {
         api::Local {
             titles: self.titles(),
             desktop: self.desktop.lock().expect("desktop lock").sessions.clone(),
+            cursor: self.names.lock().expect("names lock").cursor_chats.clone(),
         }
     }
 

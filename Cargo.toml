@@ -12,7 +12,7 @@ homepage = "https://agentgraph.chofter.com"
 default = ["cli"]
 # Everything the command-line tool needs. Without it, the crate is just the
 # event model and reducer, which also builds for WebAssembly (see wasm/).
-cli = ["dep:clap", "dep:crossterm", "dep:resvg", "dep:ring", "dep:toml_edit", "dep:dunce", "dep:ulid", "dep:ureq", "dep:libc", "dep:windows-sys"]
+cli = ["dep:clap", "dep:crossterm", "dep:resvg", "dep:ring", "dep:toml_edit", "dep:dunce", "dep:ulid", "dep:ureq", "dep:libc", "dep:windows-sys", "dep:rusqlite"]
 
 [dependencies]
 base64 = "0.23.1"
@@ -33,6 +33,10 @@ ureq = { version = "3.4.2", optional = true }
 dunce = { version = "1.0.5", optional = true }
 # Trusting Codex hooks in its config.toml (src/install.rs), keeping the file as it was.
 toml_edit = { version = "0.25.15", default-features = false, features = ["parse", "display"], optional = true }
+# Reading Cursor's app's chats' names from its SQLite database
+# (src/adapter/cursor.rs). Bundled: SQLite compiled in, from C, as ring's
+# C is, so it's the same on every platform, with nothing to install.
+rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
 
 # Reading the process tree (src/process.rs) and handling Ctrl+C in `run`.
 [target.'cfg(unix)'.dependencies]

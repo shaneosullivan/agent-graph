@@ -14,7 +14,7 @@ test (docs/cursor-stress-test.md).
   --rule R=>S=>K    when the screen matches regex R, wait S seconds, then send
                     keys K. Each rule fires once, in turn: list them in the
                     order they should happen. Keys are text, with {enter},
-                    {esc}, {tab}, {up}, {down}, {left}, {right}, {space},
+                    {esc}, {tab}, {shift-tab}, {up}, {down}, {left}, {right}, {space},
                     {ctrl-c}, {ctrl-d}
   --say S=>TEXT     S seconds after start, type TEXT and press enter
                     (a follow-up message; repeatable)
@@ -45,6 +45,7 @@ KEYS = {
     "enter": "\r",
     "esc": "\x1b",
     "tab": "\t",
+    "shift-tab": "\x1b[Z",
     "up": "\x1b[A",
     "down": "\x1b[B",
     "right": "\x1b[C",
@@ -108,9 +109,10 @@ def main():
     quitting = None
     while True:
         now = time.time()
-        if now - start > a.timeout:
+        if now - start > a.timeout and quitting is None:
             mark(f"{a.step} timeout after {a.timeout:.0f}s")
-            break
+            os.write(fd, keys(a.quit).encode())
+            quitting = now
         r, _, _ = select.select([fd], [], [], 0.2)
         if r:
             try:
@@ -134,6 +136,9 @@ def main():
             if pattern.search(screen):
                 pending = (now + delay, send, pattern.pattern)
                 mark(f"{a.step} saw /{pattern.pattern}/: answering in {delay:.0f}s")
+        # Waiting to answer, or to type, isn't the screen being still.
+        if pending or (says and now - start < says[0][0]):
+            last_change = now
         if pending and now >= pending[0]:
             os.write(fd, pending[1].encode())
             mark(f"{a.step} answered /{pending[2]}/ with {pending[1]!r}")
@@ -149,11 +154,17 @@ def main():
             os.write(fd, keys(a.quit).encode())
             mark(f"{a.step} quitting after {a.quiet:.0f}s quiet")
             quitting = now
-        if quitting and now - quitting > 10:
-            os.kill(pid, signal.SIGTERM)
+        # Cursor's CLI ignores Ctrl+C and SIGTERM while it's busy: then it's
+        # killed (and its terminal still read meanwhile, or it can't exit).
+        if quitting and now - quitting > 5:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if quitting and os.waitpid(pid, os.WNOHANG) != (0, 0):
             break
     try:
-        os.waitpid(pid, 0)
+        os.waitpid(pid, os.WNOHANG)
     except ChildProcessError:
         pass
     if fired < len(rules):

@@ -86,6 +86,9 @@ pub struct Local {
     /// Session id → the link that shows it in its desktop app, for those an
     /// app has (see `resume::Resume::desktop`).
     pub desktop: BTreeMap<String, String>,
+    /// Session id → what Cursor's app has saved of the chat, newer than the
+    /// log: its todo list, and whether a plan is waiting for you.
+    pub cursor: BTreeMap<String, crate::adapter::cursor::AppChat>,
 }
 
 #[derive(Serialize)]
@@ -237,6 +240,34 @@ pub fn retitle(graph: &mut Graph, titles: &BTreeMap<String, String>) {
     }
 }
 
+/// Puts what Cursor's app has saved of its chats (`Local::cursor`) on them:
+/// a todo list as the chat's tasks, and an idle chat with a plan waiting for
+/// you as needing you.
+pub fn with_cursor(graph: &mut Graph, chats: &BTreeMap<String, crate::adapter::cursor::AppChat>) {
+    for (id, chat) in chats {
+        let Some(node) = graph.nodes.get_mut(id) else {
+            continue;
+        };
+        if !chat.todos.is_empty() {
+            node.tasks = chat
+                .todos
+                .iter()
+                .map(|t| crate::reducer::Task {
+                    id: t.id.clone(),
+                    text: t.text.clone(),
+                    active_text: t.active_text.clone(),
+                    status: t.status,
+                })
+                .collect();
+        }
+        if chat.plan_pending && node.state == State::Idle {
+            node.state = State::InputRequired;
+            node.attention = Some(crate::reducer::PLAN_READY.to_string());
+        }
+        crate::reducer::summarize(node);
+    }
+}
+
 /// The graph after every event up to and including `until` (or all of them,
 /// judged at `now`). When looking back, staleness is judged from that moment.
 pub fn graph_at(
@@ -294,6 +325,7 @@ pub fn graph_with(
     // session had then.
     if until.is_none() {
         retitle(&mut graph, &local.titles);
+        with_cursor(&mut graph, &local.cursor);
     }
     let sessions = graph
         .roots
