@@ -2129,6 +2129,7 @@ fn cli_hook(home: &Path, payload: serde_json::Value) {
         &payload.to_string(),
         &[
             ("HOME", home.to_str().unwrap()),
+            ("USERPROFILE", home.to_str().unwrap()),
             ("CURSOR_INVOKED_AS", "agent"),
         ],
     );
