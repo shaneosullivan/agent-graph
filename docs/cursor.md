@@ -179,7 +179,7 @@ The FAQ and the install tab should say plainly that Cursor's approvals and quest
 
 ## Cloud
 
-**Not built yet** (2026-10-04). Nothing here has been tried: it starts with step 1, a probe in a real cloud agent.
+**Not built yet** (2026-10-04). Step 1, the probe in a real cloud agent, is done (below): the repository's hooks run there, and A can be built.
 
 Cursor's cloud agents run in a VM per agent (Linux), with the repository checked out. They're set up by `.cursor/environment.json` (`install`, `start`, `terminals`, a Dockerfile or a snapshot), with secrets from Cursor's dashboard as environment variables. They're started from cursor.com/agents, the app, the phone app, Slack, GitHub, Linear or the API, and a cloud agent's subagents run on VMs of their own (Cursor's docs).
 
@@ -193,21 +193,37 @@ The local work, and its tests, settled things that change the cloud plan:
 - **Cloud subagents run on VMs of their own.** Their hooks run in their VM, from the same repository's hooks file, so they'd record and share themselves: as separate sessions unless their hooks name their parent (`parent_conversation_id`, or `subagentInfo` in a VM's CLI store). Step 1 starts one to see.
 - **`agent worker`** (Cursor's CLI: "a self-hosted Cloud Agent worker … on this machine", My Machines, with no Enterprise plan needed) runs cloud agents on a computer of your own. Those would run their hooks there: your own `~/.cursor/hooks.json`, so recorded and shared as local chats already are, if their hooks are the CLI's. A third way in (C, below), to try after A.
 
+### What the cloud probe found (2026-10-04)
+
+A cloud agent at cursor.com/agents, on a branch of a throwaway repository with the probe's `.cursor/hooks.json` committed, and a made-up secret, `AGENT_GRAPH_PROBE`, in the dashboard. Two prompts, the second using a subagent; 99 hook payloads.
+
+- **The repository's hooks run**, from `/workspace` (`CURSOR_PROJECT_DIR`), as `ubuntu`, in an x86_64 Ubuntu VM (a pod: `tini`, `pod-daemon`, Cursor's `exec-daemon`). Everything fired but `sessionStart` and `sessionEnd`: a turn starts with `beforeSubmitPrompt` and ends with `stop` (`status`), with `preToolUse`, `postToolUse`, `beforeShellExecution`, `afterShellExecution`, `afterAgentResponse`, `afterAgentThought`, `beforeReadFile`, `subagentStart` and `subagentStop` between. Each hook prints `{}`, as `emit` does.
+- **A cloud agent's `conversation_id` is its cloud id**, `bc-<uuid>`: the id Cursor's cloud API (B) uses. Payloads have `cursor_version: "1.0.0"`, and `transcript_path` and `user_email` are null.
+- **What marks the cloud:** not `CURSOR_CODE_REMOTE` (unset). Every cloud hook gets `CLOUD_AGENT_ALL_SECRET_NAMES`, `CLOUD_AGENT_INJECTED_SECRET_NAMES` and `CURSOR_AGENT_SOCKET` (`/run/cursor/api.sock`), which local hooks don't; the agent's commands get these too, and `CURSOR_CONVERSATION_ID` and `AGENT_TRANSCRIPTS`.
+- **Secrets reach the hooks themselves, with their values** (`AGENT_GRAPH_PROBE=12345` in every hook's environment), not only the agent's commands: unlike Codex's cloud, an `AGENT_GRAPH_TOKEN` secret is all sharing needs.
+- **agentgraph.chofter.com is reachable** with the default settings (`200` for `install.sh`).
+- **The VM lasts between turns** (the first turn's log was there in the second, a minute later). How long it lasts while idle isn't known.
+- **No `~/.cursor/chats`**: no CLI database, and no app's either. A cloud agent is recorded from its hooks alone: no names, todo lists, plans or questions from Cursor's databases. (`~/.cursor` has `agent-hooks`, git hooks Cursor puts in the workspace; `bin`; `projects`; and `skills-cursor`.)
+- **Every command ran outside the sandbox** (`sandbox: false`), and none was asked about: a cloud agent runs its commands itself. The hooks' 10-second guess ("may be waiting for your approval") would be wrong for every slow command, so in the cloud it's off.
+- **Subagents run in the same VM**, so the same hooks, and one install, cover them. Each has a conversation of its own (`bc-40e22588-f61e-5c3c-…`, not its `subagent_id`), whose first hook is a `beforeSubmitPrompt` (its `prompt` is its task), then its own tool calls. **Nothing in a subagent's hooks names its parent**: no `parent_tool_call_id` (which the app's subagents have), no `subagent_id`. The parent's `subagentStart` has `subagent_id`, `parent_conversation_id`, `tool_call_id` (its `Task` call) and `task`; its `subagentStop` has `subagent_id` and `status`, but no `child_conversation_id` (which the CLI's has, locally). What ties them: the parent's `subagentStart`'s `task` is the subagent's first `prompt`, word for word, and comes first.
+
 ### A. Hooks in the repository (as Claude Code's cloud)
 
 The docs say cloud agents run **command hooks from the repository's `.cursor/hooks.json`**, but not `sessionStart`, `sessionEnd` or the MCP hooks. Everything else fires. That's Claude Code's cloud again, where the hooks are committed to the repository and do nothing anywhere else:
 
-- `agent-graph install cursor --cloud` adds our hooks to the project's `.cursor/hooks.json`, to be committed. Each starts with a guard, so it does nothing but in Cursor's cloud: `CURSOR_CODE_REMOTE` (which Cursor's docs list among hooks' variables), if step 1 shows it's set there, else whatever is. So a teammate's local Cursor doesn't record twice, or at all if they haven't installed Agent Graph.
-- **The first hook to fire** in a conversation (`beforeSubmitPrompt`, or whatever step 1 shows comes first):
+- `agent-graph install cursor --cloud` adds our hooks to the project's `.cursor/hooks.json`, to be committed. Each starts with a guard, so it does nothing but in Cursor's cloud: `CLOUD_AGENT_ALL_SECRET_NAMES` is set (found by the probe). So a teammate's local Cursor doesn't record twice, or at all if they haven't installed Agent Graph.
+- **A turn's first hook** (`beforeSubmitPrompt`), the first time a conversation's seen:
   - installs `agent-graph` if it isn't there (the site's `install.sh`, from the VM, as Claude Code's cloud hook does; or `.cursor/environment.json`'s `install`, which is cached in the snapshot);
-  - records `session.started` itself, so `emit`'s start check is met (a cloud mode of `emit`: `--cloud`, or the guard's variable, says a hook may start a session);
-  - starts `watch-remote --background`, once (a pid file says whether it's running; each hook checks, so a VM paused and resumed between turns starts it again).
-- **The token:** `AGENT_GRAPH_TOKEN` as a secret in Cursor's dashboard (Cloud Agents → Secrets), which reaches the VM as an environment variable. The model can read it, as in Codex's cloud. It only shares to your account, and can be deleted from your account page.
-- **The host label:** "Cursor cloud" (`account::host_name`, beside "Claude Code cloud" and "Codex cloud").
+  - records `session.started` itself, so `emit`'s start check is met (a cloud mode of `emit`, which the guard's variable turns on, in which `beforeSubmitPrompt` may start a session);
+  - starts `watch-remote --background`, once (a pid file says whether it's running; each hook checks, so a VM paused and resumed starts it again). Its token is the `AGENT_GRAPH_TOKEN` secret, in the hook's environment.
+- **Subagents, tied by their task.** The parent's `subagentStart` records the subagent as now (`agent.spawned`, with its call), and also leaves, in the VM, a note of a hash of its `task` (not the task) and the subagent's node. A new conversation whose first `beforeSubmitPrompt`'s `prompt` hashes the same is that subagent: a note keyed by its conversation says so, and its hooks, then, are the subagent's (its commands, and its end by `subagentStop`), in its agent's events file, as the CLI's are. (A subagent whose start note hasn't landed yet, since hooks run in parallel, is waited for briefly; after that, a conversation that's no one's subagent is a session of its own.)
+- **No 10-second guess:** cloud agents run their commands without asking (none was asked about, all outside the sandbox), so commands record nothing.
+- **The token:** `AGENT_GRAPH_TOKEN` as a secret in Cursor's dashboard (Cloud Agents → Secrets), which reaches the hooks' environment. The model can read it too, as in Codex's cloud. It only shares to your account, and can be deleted from your account page.
+- **The host label:** "Cursor cloud" (`account::host_name`, beside "Claude Code cloud" and "Codex cloud", from the guard's variable).
 - **Covers** every cloud agent on that repository, wherever it was started.
-- **What it can't see**, beyond what the hooks don't say: a cloud agent's approvals (if it asks for any: cloud agents mostly run without), its questions and plans (no hooks, and no app's database), and its end (no `sessionEnd`: a cloud agent's turn ends with `stop`, and an agent that's done stays idle until the share goes quiet).
+- **What it can't see**, beyond what the hooks don't say: a cloud agent's questions and plans (no hooks, and no Cursor database in the VM), its todo list and name (no database), and its end (no `sessionEnd`: an agent that's done stays idle until the share goes quiet). B could add names and ends later: the API knows each agent by the same `bc-` id.
 
-**Step 1 for A (you, about 15 minutes).** This is at cursor.com/agents, on a throwaway branch of a repository Cursor's cloud agents can reach (a private throwaway repository on GitHub is fine: `gh repo create --private` can make one):
+**Step 1 for A (done, 2026-10-04: see "What the cloud probe found").** This is at cursor.com/agents, on a throwaway branch of a repository Cursor's cloud agents can reach (a private throwaway repository on GitHub is fine: `gh repo create --private` can make one):
 
 1. On your computer, in that repository, run `sh <this repository>/scripts/cursor-probe.sh install --project`, and commit the `.cursor/hooks.json` and `scripts/cursor-probe.sh` it writes to that branch. Push it.
 2. In Cursor's dashboard (Cloud Agents → Secrets), add `AGENT_GRAPH_PROBE` with any made-up value.
@@ -248,7 +264,7 @@ Build B only if A's step 1 shows cloud hooks don't run, or users ask for agents 
 ## Order of work
 
 1. ~~Local step 1, then the adapter, installing and the needs-you checks, with tests.~~ Done (2026-10-04), with what Cursor's own databases add: names, todo lists, plans, what an app chat's waiting on you for, CLI subagents, archived chats. Still to do locally: resuming a CLI chat (`agent --resume <id>`), un-hiding `install cursor`, and the site's "Cursor" tab and FAQ. Then a release, which also ends the stray Claude Code session that Homebrew's 0.1.7 makes of every Cursor chat.
-2. Cloud step 1 (you), then plan A: `install cursor --cloud`, a cloud mode for `emit` (the first hook starts the session), the host label, and "Cursor cloud" on the site.
+2. ~~Cloud step 1~~ (done). Plan A: `install cursor --cloud`, a cloud mode for `emit` (the first `beforeSubmitPrompt` starts the session; subagents tied by their task; no command guess), the host label, and "Cursor cloud" on the site.
 3. C, to see whether cloud agents on your own computer come for free.
 4. B, only if needed.
 
