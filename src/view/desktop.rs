@@ -284,6 +284,7 @@ fn mark_blocked(events_dir: &Path, cli: &str, needs: &str) -> bool {
             state: State::InputRequired,
             summary: Some(needs.to_string()),
             title: None,
+            turn_end: false,
         }),
     );
     let source = Source {

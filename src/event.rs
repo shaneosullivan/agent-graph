@@ -176,6 +176,12 @@ pub struct Status {
     /// The session's name, as its agent shows it, when the agent has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// How the turn ended, from its last reply (a question for you), sent
+    /// apart from the provider's own end of the turn. A plain end of the
+    /// turn (idle) landing just after it, as Cursor's `stop` can, since its
+    /// hooks run in parallel, doesn't replace it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turn_end: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -284,6 +290,11 @@ pub struct Activity {
     pub tool: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Until the node's next event, it may be waiting for the human to
+    /// approve this (a command Cursor runs outside its sandbox, which it
+    /// may ask about first: no hook says whether it has).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_ask: bool,
 }
 
 /// The whole state of a log's reducer at a point, so the log can carry on

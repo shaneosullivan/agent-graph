@@ -194,3 +194,195 @@ fn claude_codes_hooks_ignore_the_payloads_cursor_runs_them_with() {
         assert!(t.drafts.is_empty(), "{payload}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Approvals and questions, from `tests/fixtures/cursor/approvals.jsonl`: Cursor
+// set to ask before running commands (its Allowlist run mode, with nothing
+// on the list). In the app (0–11), two commands, each approved after about
+// 20 s; in the CLI (12–20), one, the same. Hooks come before Cursor asks
+// (`beforeShellExecution`), and after the command has run.
+
+fn approvals() -> Vec<Value> {
+    fixture("cursor/approvals.jsonl")
+}
+
+/// The graph after the first `n` approvals payloads (one a second), seen
+/// `waited` seconds after the last of them.
+fn approvals_after(n: usize, waited: u64, capture: Capture) -> Graph {
+    let events = translate_as("cursor", &approvals()[..n], capture);
+    agent_graph::reducer::reduce(
+        events,
+        &agent_graph::reducer::Options {
+            now: t0() + std::time::Duration::from_secs(n as u64 - 1 + waited),
+            stale_after: std::time::Duration::from_secs(30 * 60),
+        },
+    )
+}
+
+fn app_node(g: &Graph) -> &agent_graph::reducer::Node {
+    let id = format!(
+        "cursor:{}",
+        approvals()[0]["conversation_id"].as_str().unwrap()
+    );
+    &g.nodes[&id]
+}
+
+#[test]
+fn a_command_outside_the_sandbox_may_be_waiting_for_you_after_a_while() {
+    // Just started: running, as far as anyone can tell.
+    let g = approvals_after(4, 3, Capture::default());
+    assert_eq!(app_node(&g).state, State::Working);
+    // Twenty seconds on, with nothing since: probably asking, and it says
+    // it's a guess.
+    let g = approvals_after(4, 20, Capture::default());
+    assert_eq!(app_node(&g).state, State::InputRequired);
+    assert_eq!(
+        app_node(&g).attention.as_deref(),
+        Some(agent_graph::reducer::MAY_ASK)
+    );
+    // It ran: working again.
+    let g = approvals_after(5, 20, Capture::default());
+    assert_eq!(app_node(&g).state, State::Working);
+}
+
+#[test]
+fn a_page_knows_when_to_look_again_for_a_command_that_may_be_asking() {
+    // The command started at payload 3 (3 s in): shown as asking 10 s on,
+    // with nothing new, so a page showing the graph sooner looks again then.
+    let g = approvals_after(4, 3, Capture::default());
+    assert_eq!(
+        g.recheck_at,
+        Some(t0() + std::time::Duration::from_secs(3) + agent_graph::reducer::MAY_ASK_AFTER)
+    );
+    // Once it's shown as asking, or the command has run, nothing's due.
+    assert_eq!(approvals_after(4, 20, Capture::default()).recheck_at, None);
+    assert_eq!(approvals_after(5, 0, Capture::default()).recheck_at, None);
+}
+
+#[test]
+fn a_command_in_the_sandbox_never_asks() {
+    let mut before = approvals()[3].clone();
+    before["sandbox"] = true.into();
+    let mut after = approvals()[4].clone();
+    after["sandbox"] = true.into();
+    let events = translate_as("cursor", &[before, after], Capture::default());
+    assert!(events.is_empty(), "{events:?}");
+}
+
+#[test]
+fn a_command_you_didnt_allow_isnt_waiting_on_you() {
+    let mut refused = approvals()[5].clone();
+    refused["hook_event_name"] = "postToolUseFailure".into();
+    refused["failure_type"] = "permission_denied".into();
+    let mut payloads = approvals()[..4].to_vec();
+    payloads.push(refused);
+    let g = reduce(translate_as("cursor", &payloads, Capture::default()));
+    assert_eq!(app_node(&g).state, State::Working);
+}
+
+/// The app's turn (0–11), with its last reply (10) replaced by `text`, and
+/// that reply and the turn's `stop` (11) in the order given.
+fn turn_ending(text: &str, reply_first: bool, capture: Capture) -> Graph {
+    let mut payloads = approvals()[..12].to_vec();
+    payloads[10]["text"] = text.into();
+    if !reply_first {
+        payloads.swap(10, 11);
+    }
+    reduce(translate_as("cursor", &payloads, capture))
+}
+
+#[test]
+fn a_turn_ending_on_a_question_needs_you_whichever_hook_lands_first() {
+    for reply_first in [true, false] {
+        let g = turn_ending(
+            "Both ran. Shall I add them to a script?",
+            reply_first,
+            Capture::default(),
+        );
+        let node = app_node(&g);
+        assert_eq!(
+            node.state,
+            State::InputRequired,
+            "reply first: {reply_first}"
+        );
+        assert_eq!(node.attention.as_deref(), Some("Asks you a question"));
+    }
+    // Past closing formatting too.
+    let g = turn_ending("**Want me to go on?**", true, Capture::default());
+    assert_eq!(app_node(&g).state, State::InputRequired);
+}
+
+#[test]
+fn a_turn_that_doesnt_end_on_a_question_is_idle() {
+    for reply_first in [true, false] {
+        let g = turn_ending("Both ran.", reply_first, Capture::default());
+        assert_eq!(app_node(&g).state, State::Idle);
+    }
+    // The fixture's own reply.
+    let g = reduce(translate_as(
+        "cursor",
+        &approvals()[..12],
+        Capture::default(),
+    ));
+    assert_eq!(app_node(&g).state, State::Idle);
+}
+
+#[test]
+fn the_question_itself_is_kept_only_with_body_capture() {
+    let text = "Both ran.\n\nShall I add them to a script?";
+    let g = turn_ending(text, true, Capture { bodies: true });
+    assert_eq!(
+        app_node(&g).attention.as_deref(),
+        Some("Asks: Shall I add them to a script?")
+    );
+    let events = translate_as("cursor", &approvals()[10..11], Capture::default());
+    assert!(!serde_json::to_string(&events).unwrap().contains("reply"));
+}
+
+#[test]
+fn a_cli_run_waits_for_approval_and_goes_on() {
+    // (Not from the CLI's settings here: `CURSOR_INVOKED_AS` isn't set in
+    // tests, so this is the guess, as in the app.)
+    let g = approvals_after(16, 20, Capture::default());
+    let cli = format!(
+        "cursor:{}",
+        approvals()[12]["conversation_id"].as_str().unwrap()
+    );
+    assert_eq!(g.nodes[&cli].state, State::InputRequired);
+    let g = approvals_after(17, 20, Capture::default());
+    assert_eq!(g.nodes[&cli].state, State::Working);
+    let g = approvals_after(21, 0, Capture::default());
+    assert_eq!(g.nodes[&cli].state, State::Completed);
+}
+
+#[test]
+fn the_cli_asks_unless_a_rule_names_the_command() {
+    use agent_graph::adapter::cursor::asks;
+    let rules = |r: &[&str]| r.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let allow = rules(&[
+        "Shell(ls)",
+        "Shell(git)",
+        "Shell(curl:*)",
+        "Shell(npm:run *)",
+    ]);
+    let deny = rules(&["Shell(rm)"]);
+    assert_eq!(asks("ls -la", &allow, &deny), Some(false));
+    assert_eq!(asks("git status", &allow, &deny), Some(false));
+    assert_eq!(
+        asks("curl -sI https://example.com", &allow, &deny),
+        Some(false)
+    );
+    assert_eq!(asks("npm run build", &allow, &deny), Some(false));
+    assert_eq!(asks("npm install", &allow, &deny), Some(true));
+    assert_eq!(asks("date", &allow, &deny), Some(true));
+    assert_eq!(
+        asks("lsof -i", &allow, &deny),
+        Some(true),
+        "a word, not a prefix"
+    );
+    // Refused, not asked about.
+    assert_eq!(asks("rm -rf build", &allow, &deny), Some(false));
+    // Chains aren't settled by Cursor's docs: back to the guess.
+    assert_eq!(asks("date && sleep 2 && echo done", &allow, &deny), None);
+    assert_eq!(asks("ls | wc -l", &allow, &deny), None);
+}

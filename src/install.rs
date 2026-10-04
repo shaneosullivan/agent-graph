@@ -403,7 +403,12 @@ const CURSOR_HOOKS: &[(&str, Option<&str>)] = &[
     ("subagentStop", None),
     ("preToolUse", Some(CURSOR_TOOLS)),
     ("postToolUse", Some(CURSOR_TOOLS)),
-    ("postToolUseFailure", Some("^Task$")),
+    ("postToolUseFailure", Some("^(Task|Shell)$")),
+    // Commands outside the sandbox, which Cursor may ask you to approve.
+    ("beforeShellExecution", None),
+    ("afterShellExecution", None),
+    // The turn's last reply: whether it ends on a question.
+    ("afterAgentResponse", None),
 ];
 
 /// The tools the graph needs to hear about: subagents, the shell (to see

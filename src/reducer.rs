@@ -37,6 +37,11 @@ pub struct Graph {
     /// Statuses ignored as late: just after their session ended.
     #[serde(skip)]
     pub late: BTreeSet<String>,
+    /// When the graph will next change with nothing new happening (a node
+    /// that may be asking for approval is shown as asking), so a page
+    /// showing it now knows when to look again.
+    #[serde(skip)]
+    pub recheck_at: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,6 +102,13 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
     pub last_event_at: String,
+    /// When it started something it may be asking the human to approve
+    /// (`activity` with `may_ask`), until its next event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_ask_since: Option<String>,
+    /// When its turn ended on a question (a `status` with `turn_end`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked_at: Option<String>,
 
     // Derived in `finish`.
     /// One line on what's happening now: the status line, else the task in progress.
@@ -606,6 +618,11 @@ impl Reducer {
 
         let node = self.nodes.get_mut(&e.node).expect("ensured above");
         node.last_event_at = e.ts.clone();
+        // Anything else it does means it isn't waiting for an approval.
+        node.may_ask_since = match &payload {
+            Payload::Activity(d) if d.may_ask => Some(e.ts.clone()),
+            _ => None,
+        };
         // Any activity other than a status report means the human answered.
         if node.state == State::InputRequired && !matches!(payload, Payload::Status(_)) {
             node.state = State::Working;
@@ -751,10 +768,30 @@ impl Reducer {
                     }
                     return;
                 }
+                // The turn's end, landing just after its last reply said it
+                // ended on a question (Cursor's hooks run in parallel): the
+                // question stands.
+                let asked = d.state == State::Idle && {
+                    let node = &self.nodes[&e.node];
+                    node.state == State::InputRequired
+                        && node
+                            .asked_at
+                            .as_deref()
+                            // (Either way round: each hook has its own clock.)
+                            .is_some_and(|at| {
+                                within(at, &e.ts, LATE_STATUS) || within(&e.ts, at, LATE_STATUS)
+                            })
+                };
+                if asked {
+                    self.calls_over(&e.node, &e.ts);
+                    return;
+                }
                 if d.state == State::Idle || d.state.is_terminal() {
                     self.calls_over(&e.node, &e.ts);
                 }
                 let node = self.nodes.get_mut(&e.node).expect("ensured above");
+                node.asked_at =
+                    (d.turn_end && d.state == State::InputRequired).then(|| e.ts.clone());
                 node.state = d.state;
                 node.title = d.title.or(node.title.take());
                 if d.state == State::InputRequired {
@@ -987,6 +1024,8 @@ impl Reducer {
                 started_at: Some(ts.to_string()),
                 ended_at: None,
                 last_event_at: ts.to_string(),
+                may_ask_since: None,
+                asked_at: None,
                 headline: None,
                 open_tasks: 0,
                 blocked: None,
@@ -1511,7 +1550,31 @@ impl Reducer {
             .collect();
         let active = |w: &Wait| w.open && w.on.as_ref().is_none_or(|t| !finished.contains(t));
 
+        let mut recheck_at: Option<SystemTime> = None;
         for node in self.nodes.values_mut() {
+            // Started something it may ask you to approve a while ago, and
+            // nothing since: it's probably asking.
+            let asking = node.state == State::Working
+                && node.may_ask_since.as_deref().is_some_and(|since| {
+                    humantime::parse_rfc3339_weak(since)
+                        .ok()
+                        .and_then(|t| opts.now.duration_since(t).ok())
+                        .is_some_and(|waited| waited >= MAY_ASK_AFTER)
+                });
+            if asking {
+                node.state = State::InputRequired;
+                node.attention = Some(MAY_ASK.to_string());
+            } else if node.state == State::Working {
+                let at = node
+                    .may_ask_since
+                    .as_deref()
+                    .and_then(|since| humantime::parse_rfc3339_weak(since).ok())
+                    .map(|t| t + MAY_ASK_AFTER);
+                recheck_at = match (recheck_at, at) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+            }
             node.open_tasks = node.tasks.iter().filter(|t| t.status.is_open()).count();
             node.headline = headline(node);
             let quiet_for = humantime::parse_rfc3339_weak(&node.last_event_at)
@@ -1557,6 +1620,7 @@ impl Reducer {
             nodes: self.nodes,
             roots,
             late: self.late,
+            recheck_at,
         }
     }
 
@@ -1613,6 +1677,15 @@ const BACKGROUND_START: Duration = Duration::from_secs(600);
 /// in any order. Any later is activity (another process on the same
 /// conversation, say), as is a new `session.started` at any time.
 const LATE_STATUS: Duration = Duration::from_secs(2);
+
+/// How long something that may need approval (`activity` with `may_ask`)
+/// goes on, with nothing else from its node, before the node is shown as
+/// probably asking. Commands that run without asking mostly finish sooner.
+pub const MAY_ASK_AFTER: Duration = Duration::from_secs(10);
+
+/// What a node probably asking for approval shows. It says it's a guess: a
+/// slow command looks the same.
+pub const MAY_ASK: &str = "May be waiting for your approval to run a command";
 
 /// How soon it usually does.
 const FRESH_START: Duration = Duration::from_secs(60);

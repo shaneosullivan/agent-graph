@@ -17,9 +17,9 @@ use serde_json::Value;
 
 use super::{Adapter, Capture, Draft, Translation, bool_at, shell, str_at};
 use crate::event::{
-    AgentFinished, AgentSpawned, FinishStatus, Payload, SessionEnded, SessionStarted, SpawnKind,
-    SpawnRequested, SpawnReturned, State, Status, TaskItem, TaskStatus, TaskUpserted, TasksUpdated,
-    truncate_chars,
+    Activity, AgentFinished, AgentSpawned, FinishStatus, Payload, SessionEnded, SessionStarted,
+    SpawnKind, SpawnRequested, SpawnReturned, State, Status, TaskItem, TaskStatus, TaskUpserted,
+    TasksUpdated, truncate_chars,
 };
 use crate::paths::file_key;
 
@@ -161,8 +161,58 @@ impl Adapter for Cursor {
                     }),
                 ));
             }
+            // A command outside Cursor's sandbox, which Cursor may ask you
+            // to approve first (one in the sandbox never asks). No hook says
+            // whether it's asking: `beforeShellExecution` comes before it
+            // asks, and `afterShellExecution` once the command has run.
+            "beforeShellExecution" if may_ask(input) => match cli_asks(input) {
+                Some(true) => drafts.push(status(
+                    &session,
+                    State::InputRequired,
+                    Some("Waiting for your approval to run a command".to_string()),
+                )),
+                Some(false) => {}
+                None => drafts.push(Draft::new(
+                    &session,
+                    Payload::Activity(Activity {
+                        tool: "Shell".to_string(),
+                        label: None,
+                        may_ask: true,
+                    }),
+                )),
+            },
+            "afterShellExecution" if may_ask(input) && cli_asks(input) != Some(false) => {
+                drafts.push(status(&session, State::Working, None));
+            }
+            // In the sandbox, or run without asking: nothing to record.
+            "beforeShellExecution" | "afterShellExecution" => {}
+            // The turn's last reply, which comes with `stop`, before or after
+            // it: one ending on a question is the turn ending on it. The text
+            // itself is kept only with body capture.
+            "afterAgentResponse" => {
+                if let Some(text) = str_at(input, &["text"]).filter(|t| ends_on_question(t)) {
+                    let summary = match capture.bodies {
+                        true => format!("Asks: {}", truncate_chars(last_line(text), LABEL_MAX)),
+                        false => "Asks you a question".to_string(),
+                    };
+                    drafts.push(Draft::new(
+                        &session,
+                        Payload::Status(Status {
+                            state: State::InputRequired,
+                            summary: Some(summary),
+                            title: None,
+                            turn_end: true,
+                        }),
+                    ));
+                }
+            }
             "preToolUse" => pre_tool_use(input, &session, &mut drafts),
             "postToolUse" => post_tool_use(input, &session, &mut drafts),
+            // A command that failed, or that you didn't allow
+            // (`permission_denied`): it isn't waiting on you.
+            "postToolUseFailure" if tool_name(input) == "Shell" => {
+                drafts.push(status(&session, State::Working, None));
+            }
             "postToolUseFailure" => {
                 // A Task call that failed returns, so the session stops
                 // waiting on it.
@@ -331,6 +381,7 @@ fn status(node: &str, state: State, summary: Option<String>) -> Draft {
             state,
             summary,
             title: None,
+            turn_end: false,
         }),
     )
 }
@@ -340,6 +391,120 @@ fn status(node: &str, state: State, summary: Option<String>) -> Draft {
 /// chat alone.
 fn first_line(id: &str) -> &str {
     id.lines().next().unwrap_or(id).trim()
+}
+
+/// Whether a command (`beforeShellExecution`, `afterShellExecution`) is
+/// outside Cursor's sandbox, so Cursor may ask about it.
+fn may_ask(input: &Value) -> bool {
+    bool_at(input, &["sandbox"]) != Some(true)
+}
+
+/// Whether Cursor's CLI will ask you to approve a command, as far as its
+/// settings say for sure: in its Allowlist mode, a command not on the
+/// allowlist. `None` in the app (whose settings aren't in a file of
+/// Cursor's documented), and wherever its settings don't settle it.
+fn cli_asks(input: &Value) -> Option<bool> {
+    // Only the CLI's hooks have this.
+    std::env::var_os("CURSOR_INVOKED_AS")?;
+    let home = crate::paths::user_home()?;
+    let project = str_at(input, &["workspace_roots", "0"]).map(std::path::PathBuf::from);
+    let read = |path: std::path::PathBuf| {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    };
+    let global = read(home.join(".cursor").join("cli-config.json"))?;
+    let local = project.and_then(|p| read(p.join(".cursor").join("cli.json")));
+    if str_at(&global, &["approvalMode"]) != Some("allowlist") {
+        return None;
+    }
+    let rules = |key: &str| -> Vec<String> {
+        [Some(&global), local.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|c| {
+                c.pointer(&format!("/permissions/{key}"))?
+                    .as_array()
+                    .cloned()
+            })
+            .flatten()
+            .filter_map(|r| r.as_str().map(String::from))
+            .collect()
+    };
+    asks(
+        str_at(input, &["command"])?,
+        &rules("allow"),
+        &rules("deny"),
+    )
+}
+
+/// Whether the CLI asks before running `command`, given its allow and deny
+/// rules (`Shell(git)`, `Shell(curl:*)`): it does unless a rule names the
+/// command's first word (a denied command is refused, not asked about).
+/// `None` for a command that chains others (`&&`, `|`, `;`), which Cursor's
+/// docs don't say how it matches.
+pub fn asks(command: &str, allow: &[String], deny: &[String]) -> Option<bool> {
+    let command = command.trim();
+    if command.is_empty()
+        || ["&&", "||", "|", ";", "`", "$(", "\n", "&"]
+            .iter()
+            .any(|op| command.contains(op))
+    {
+        return None;
+    }
+    let (word, args) = command
+        .split_once(char::is_whitespace)
+        .map_or((command, ""), |(w, a)| (w, a.trim()));
+    let matches = |rule: &String| {
+        let Some(pattern) = rule
+            .strip_prefix("Shell(")
+            .and_then(|r| r.strip_suffix(')'))
+        else {
+            return false;
+        };
+        match pattern.split_once(':') {
+            Some((base, wanted)) => glob(base, word) && glob(wanted, args),
+            None => glob(pattern, word),
+        }
+    };
+    Some(!deny.iter().any(matches) && !allow.iter().any(matches))
+}
+
+/// Whether `text` matches `pattern`, where `*` is any run of characters.
+fn glob(pattern: &str, text: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or("");
+    let Some(mut rest) = text.strip_prefix(first) else {
+        return false;
+    };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else {
+        return rest.is_empty();
+    };
+    for part in middle {
+        match rest.find(part) {
+            Some(i) => rest = &rest[i + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(last)
+}
+
+/// Whether a reply ends on a question, past any closing formatting
+/// (`**…?**`, quotes, a bracket).
+fn ends_on_question(text: &str) -> bool {
+    text.trim_end()
+        .trim_end_matches(|c: char| "*_`\"')]”’".contains(c) || c.is_whitespace())
+        .ends_with(['?', '？'])
+}
+
+/// The last line of a reply with anything on it.
+fn last_line(text: &str) -> &str {
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
 }
 
 /// The agent a shell command starts, if it starts one.

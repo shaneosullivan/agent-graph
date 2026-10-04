@@ -179,6 +179,7 @@ fn status(node: &str, state: State, summary: Option<String>) -> Draft {
             state,
             summary,
             title: None,
+            turn_end: false,
         }),
     )
 }

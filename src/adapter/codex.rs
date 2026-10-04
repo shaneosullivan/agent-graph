@@ -87,6 +87,7 @@ impl Adapter for Codex {
                     state: State::InputRequired,
                     summary: Some("Plan ready for your review".to_string()),
                     title: title_of(session),
+                    turn_end: false,
                 }),
             )),
             // A turn that ended on a question nobody's answered (Codex's
@@ -98,6 +99,7 @@ impl Adapter for Codex {
                     state: State::InputRequired,
                     summary: open_question(session, &session_node),
                     title: title_of(session),
+                    turn_end: false,
                 }),
             )),
             // A turn that ends by asking you something in words waits for
@@ -117,6 +119,7 @@ impl Adapter for Codex {
                             .unwrap_or_else(|| "Asks you a question".to_string()),
                     ),
                     title: title_of(session),
+                    turn_end: false,
                 }),
             )),
             "Stop" | "Interrupt" => drafts.push(titled(&session_node, session, State::Idle)),
@@ -167,6 +170,7 @@ impl Adapter for Codex {
                             state: State::Working,
                             summary: None,
                             title: Some(truncate_chars(nickname, LABEL_MAX)),
+                            turn_end: false,
                         }),
                     ));
                 }
@@ -559,6 +563,7 @@ fn status(node: &str, state: State, summary: Option<String>) -> Draft {
             state,
             summary,
             title: None,
+            turn_end: false,
         }),
     )
 }
@@ -571,6 +576,7 @@ fn titled(node: &str, session: &str, state: State) -> Draft {
             state,
             summary: None,
             title: title_of(session),
+            turn_end: false,
         }),
     )
 }

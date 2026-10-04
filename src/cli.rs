@@ -1737,6 +1737,7 @@ pub(crate) fn find_session(graph: &Graph, want: &str) -> Result<String, String> 
             .collect(),
         roots: Vec::new(),
         late: Default::default(),
+        recheck_at: None,
     };
     find_node(&sessions, want)
 }

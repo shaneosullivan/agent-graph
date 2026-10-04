@@ -888,6 +888,7 @@ mod tests {
             nodes: Default::default(),
             roots: vec![],
             late: Default::default(),
+            recheck_at: None,
         };
         let mut root = node("p:s", NodeKind::Session, None);
         root.title = Some("title \u{FFFE}\u{FFFF}".into());
@@ -930,6 +931,7 @@ mod tests {
             nodes: Default::default(),
             roots: vec![],
             late: Default::default(),
+            recheck_at: None,
         };
         for n in nodes {
             match &n.parent {

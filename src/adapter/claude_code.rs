@@ -374,6 +374,7 @@ fn status(node: &str, state: State, summary: Option<String>) -> Draft {
             state,
             summary,
             title: None,
+            turn_end: false,
         }),
     )
 }
@@ -386,6 +387,7 @@ fn titled(session: &str, state: State, input: &Value, transcript: Option<&str>) 
             state,
             summary: None,
             title: session_title(input, transcript),
+            turn_end: false,
         }),
     )
 }

@@ -116,6 +116,10 @@ struct GraphResponse<'a> {
     /// request, and the history is reduced once.
     #[serde(skip_serializing_if = "Option::is_none")]
     stops: Option<Vec<Stop>>,
+    /// For the graph now, when it will next change with nothing new
+    /// happening (milliseconds since 1970), for the page to look again then.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recheck_ms: Option<u64>,
 }
 
 /// What names a node (as the page does), and how it's doing.
@@ -353,6 +357,11 @@ pub fn graph_with(
         others,
         open,
         stops,
+        recheck_ms: graph
+            .recheck_at
+            .filter(|_| until.is_none())
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64),
     }))
 }
 
@@ -780,6 +789,7 @@ mod tests {
                 state: State::InputRequired,
                 summary: Some("Allow rm -rf?".into()),
                 title: None,
+                turn_end: false,
             }),
         );
         let events: Vec<Timed> = stamp(vec![started], &source, t0)

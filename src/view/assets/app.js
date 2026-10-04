@@ -367,6 +367,17 @@ function scheduleRefresh() {
     });
 }
 
+/**
+ * Looks again at `ms` (the graph's clock), when the graph will change with
+ * nothing new happening: a session that has gone quiet in the middle of a
+ * command is then shown as probably asking for approval.
+ */
+let recheckTimer = null;
+function recheckAt(ms) {
+  clearTimeout(recheckTimer);
+  recheckTimer = ms ? setTimeout(scheduleRefresh, Math.max(0, ms - nowMs()) + 250) : null;
+}
+
 async function refresh() {
   // A new map: a step still loading lands in the old one.
   S.cache = new Map();
@@ -382,6 +393,7 @@ async function refresh() {
   // Another session was chosen meanwhile; the refresh that follows shows it.
   if (S.root !== before) return;
   S.live = live;
+  recheckAt(live.recheck_ms);
 
   const back = S.returnTo;
   S.returnTo = null;

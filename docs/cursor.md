@@ -1,6 +1,6 @@
 # Cursor support: plan
 
-**Built so far (not yet released):** the local adapter (`src/adapter/cursor.rs`), checked against a real Cursor (step 1, below), with tests on its payloads (`tests/cursor.rs`). `emit` answers Cursor's hooks with `{}`. Sessions a chat starts link to it through `CURSOR_CONVERSATION_ID`. A subagent is paired with the exact `Task` call that started it (`agent.spawned`'s `call_id`), and one still at work when its turn is stopped is canceled. `install cursor` writes the hooks, but stays hidden until it has been run for real. Not built yet: resuming a chat, the site, and the cloud.
+**Built so far (not yet released):** the local adapter (`src/adapter/cursor.rs`), checked against a real Cursor (step 1, the approvals run, and a live run, below), with tests on its payloads (`tests/cursor.rs`). `emit` answers Cursor's hooks with `{}`. Sessions a chat starts link to it through `CURSOR_CONVERSATION_ID`. A subagent is paired with the exact `Task` call that started it (`agent.spawned`'s `call_id`), and one still at work when its turn is stopped is canceled. "Needs you", as far as Cursor's hooks allow: a command outside the sandbox that's gone quiet, the CLI's allowlist, a reply ending on a question, and a refused command (see "Needing you"). `install cursor` writes the hooks, but stays hidden until it's released. Not built yet: resuming a chat, the site, and the cloud.
 
 Agent Graph records Claude Code's and Codex's sessions through their hooks. This is the plan for recording Cursor's the same way. Locally, that's the Cursor app's agent and the Cursor CLI (`cursor-agent`, also installed as `agent`). In the cloud, it's Cursor's cloud agents, which are started from cursor.com/agents, the app, the phone app, Slack, GitHub, Linear or the API.
 
@@ -79,6 +79,10 @@ Run in the app (3.23.12) and the CLI (2026.10.01), by `scripts/cursor-probe.sh`.
 - **Cursor asked for no approval**, so whether one fires a hook is still unknown. Commands ran in Cursor's sandbox (`sandbox: true`), and `claude -p` outside it (`sandbox: false`), all without asking. The near two-minute gap before `claude -p` was the plan prompt's question, waiting for you, which fired no hook. Checking approvals needs a run with Cursor set to ask before running commands. The timer in "Needing you" isn't built until then.
 - **The CLI:** an interactive `agent` sends no `sessionEnd` when you quit. `agent -p` sends `sessionStart`, its tools and `sessionEnd`, with no `beforeSubmitPrompt` and no `stop`. Its chats are kept in `~/.cursor/chats/`, and `agent --resume <chat id>` resumes one.
 
+### The approvals run (2026-10-04)
+
+Cursor set to ask before every command (Run Mode: Allowlist, with nothing on the list), in the app and the CLI. `preToolUse` and `beforeShellExecution` come **before** Cursor asks; `afterShellExecution` and `postToolUse` once you've approved and it has run, and their `duration` includes your wait (23 s for `date`). The CLI's model ran both commands as one (`date && sleep 2 && echo done`), so one approval covered them. A refusal wasn't tried. The CLI's settings are in `~/.cursor/cli-config.json` (`approvalMode`, `permissions.allow` such as `Shell(ls)`, `sandbox.mode`).
+
 ### A live run, with the real hooks (2026-10-04)
 
 `install cursor`, then `agent -p` asking for two subagents and a `claude -p`:
@@ -101,21 +105,26 @@ Node ids: `cursor:<conversation_id>` for a session, and `cursor:<conversation_id
 | `subagentStop` | `agent.finished` with its `status` (the summary only when bodies are captured) |
 | `preToolUse` `Task` | `spawn.requested` (kind agent, background as the call says) |
 | `postToolUse` `Task` | `spawn.returned` (Cursor didn't send one in step 1) |
-| `postToolUseFailure` `Task` | `agent.finished: failed` |
+| `postToolUseFailure` `Task` | `spawn.returned`, with Cursor's `failure_type` |
 | `postToolUse` todo tool | `tasks.updated`, if Cursor ever sends it (it didn't in step 1) |
 | `preToolUse` `Shell` | `spawn.requested` (kind session) when it starts an agent, from the shell parser, as for the others |
 | `postToolUse` `Shell` | `spawn.returned` for an agent launch |
+| `beforeShellExecution`, outside the sandbox | `activity` with `may_ask`, or in the CLI's Allowlist mode, `status: input_required` for a command not on the list (see below) |
+| `afterShellExecution`, outside the sandbox | `status: working` |
+| `afterAgentResponse` ending on a question | `status: input_required` with `turn_end` |
+| `postToolUseFailure` `Shell` | `status: working` |
 | `preToolUse` `AskQuestion` or `CreatePlan` | `status: input_required` (Cursor doesn't send these yet: see below) |
 
 Any hook with `parent_tool_call_id` (inside a subagent) records nothing. Labels are cut to 200 characters, and prompts, commands and outputs aren't kept unless body capture is on, as for the others. Every hook prints `{}`.
 
 ### Needing you, without an event for it
 
-This is the one real gap, and it matters most, since "needs you" is what Agent Graph is for. Agent Graph **doesn't read or follow Cursor's transcripts** for it: that would put far more in the logs than the graph needs, and much of a transcript is private (your code, prompts and the model's output). It goes only on what hooks say. That means:
+No hook says Cursor is waiting for you, and Agent Graph **doesn't read or follow Cursor's transcripts** for it: that would put far more in the logs than the graph needs, and much of a transcript is private. It goes only on what hooks say, which is more than Claude Code's and Codex's hooks say in some ways:
 
-1. **Commands waiting for approval.** (Step 1 saw none: Cursor didn't ask. Not built until a run with approvals on shows what fires.) If it shows `beforeShellExecution` fires before Cursor asks you, and `afterShellExecution` only once the command has run, then a command started and not finished is shown as "Running a command". After about 10 seconds that becomes "Running a command (it may need your approval)". The wording says it's a guess, since a slow command looks the same. It needs a clock in the reducer, as "went quiet" already has. If step 1 shows Cursor asks before `beforeShellExecution` fires, there's nothing to go on, and approvals aren't shown.
-2. **Questions and plans** fire no hooks at all, so they aren't shown. The session stays "working" until you answer and something fires again. When Cursor fixes its bug and `AskQuestion` and `CreatePlan` reach `preToolUse`, they become "Asks: <the question>" and "Plan ready for your review", as for Claude Code and Codex. The adapter handles those tool names already, so it'll work as soon as Cursor sends them.
-3. **The turn ending** (`stop`) is reliable, and shows the session as idle, which the viewer already counts as your turn.
+1. **Commands outside the sandbox** (`beforeShellExecution` with `sandbox: false`). A command in the sandbox never asks, so it records nothing. One outside it records `activity` with `may_ask`, and if nothing else comes from the chat for 10 seconds (`reducer::MAY_ASK_AFTER`), it's shown as **"May be waiting for your approval to run a command"**: a guess, since a slow command looks the same. `afterShellExecution` (it ran) or `postToolUseFailure` (it failed, or you refused it: `permission_denied`) makes it working again. The graph says when it will next change with nothing new happening (`recheck_ms` in the page's graph reply), so the page looks again then.
+2. **The CLI's allowlist.** In the CLI (its hooks have `CURSOR_INVOKED_AS`), `~/.cursor/cli-config.json` and a project's `.cursor/cli.json` say for sure: in its Allowlist mode (`approvalMode: "allowlist"`), a command whose first word no `Shell(...)` rule names is asked about, so it's **"Waiting for your approval to run a command"** at once, and one a rule names isn't recorded at all. A chain (`&&`, `|`, `;`), which Cursor's docs don't say how it matches, falls back to 1. So do the app (whose settings are in its own database, in no documented form) and the other run modes (Auto-Review's classifier decides).
+3. **A reply ending on a question.** `afterAgentResponse` has the turn's last reply. One ending on a question (past any closing formatting) makes the chat **"Asks you a question"** (the question itself only with body capture). It and `stop` come together, in either order (hooks run in parallel), so the reply's status is marked `turn_end`, and an idle landing within 2 seconds of it doesn't replace it.
+4. **Questions asked with Cursor's question tool, and plans,** fire no hooks at all, so they aren't shown. When Cursor fixes its bug and `AskQuestion` and `CreatePlan` reach `preToolUse`, they become "Asks: <the question>" and "Plan ready for your review": the adapter handles them already.
 
 The FAQ and the install tab should say plainly that Cursor's approvals and questions are shown only as far as its hooks allow.
 
@@ -197,7 +206,7 @@ Build B only if A's step 1 shows cloud hooks don't run, or users ask for agents 
 
 ## Risks
 
-- **"Needs you" is partial.** Until Cursor fixes its hooks, questions and plans aren't shown, and command approvals are at best a guess from a timer. The viewer's wording should never claim more than we know.
+- **"Needs you" is partial.** Until Cursor fixes its hooks, questions asked with its question tool and plans aren't shown, and command approvals in the app are a guess from a timer. The viewer's wording should never claim more than we know.
 - **Subagent hooks break between versions.** `postToolUse` for `Task` backs up `subagentStop`, and `stop` and `sessionEnd` end any agent left running. So a missed hook shows an agent finishing late, never one running for ever.
 - **Cursor moves fast.** Hook names and payloads have changed between 1.7, 2.x and 3.x. Fixtures should note the version they're from, and the adapter should take unknown fields and events without failing.
 - **The cloud token is readable by the model**, as in Codex's cloud (see A).

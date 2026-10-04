@@ -325,6 +325,7 @@ mod tests {
                     state: State::Idle,
                     summary: None,
                     title: None,
+                    turn_end: false,
                 }),
             )
         };
@@ -353,6 +354,7 @@ mod tests {
                 state: State::Idle,
                 summary: Some(summary),
                 title: None,
+                turn_end: false,
             }),
         );
         let source = Source {
@@ -374,6 +376,7 @@ mod tests {
                 state: State::Idle,
                 summary: None,
                 title: None,
+                turn_end: false,
             }),
         );
         let source = Source {
