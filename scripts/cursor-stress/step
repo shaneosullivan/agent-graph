@@ -1,0 +1,9 @@
+#!/bin/sh
+# Starts a drive_cli.py step in the background, so it outlasts a shell
+# command's timeout: `tools/step A2b --prompt "…" --rule '…'`. Then
+# `tools/wait A2b` until it says it's done.
+step=$1
+shift
+dir=$(cd "$(dirname "$0")" && pwd)
+nohup python3 "$dir/drive_cli.py" --step "$step" "$@" >"$dir/../drive-logs/$step.out" 2>&1 &
+echo "started $step (pid $!): tools/wait $step"

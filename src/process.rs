@@ -95,6 +95,31 @@ pub fn alive(id: &str) -> Option<bool> {
     )
 }
 
+/// The command line `pid` was started with, its arguments joined by spaces,
+/// where that can be read (Linux and macOS).
+pub fn command_line(pid: u32) -> Option<String> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let line = String::from_utf8_lossy(&raw).replace('\0', " ");
+        Some(line.trim().to_string()).filter(|l| !l.is_empty())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("ps")
+            .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !line.is_empty()).then_some(line)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 /// The agent that ran this hook (the nearest process above this one that
 /// isn't a shell), and the processes above it.
 pub fn agent_of_this_hook() -> Option<(Process, Vec<Process>)> {

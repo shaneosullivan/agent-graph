@@ -9,7 +9,9 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::event::{Envelope, FinishStatus, Keyframe, Payload, SpawnKind, State, TaskStatus};
+use crate::event::{
+    Envelope, FinishStatus, Keyframe, PLAN_MODE, Payload, SpawnKind, State, Status, TaskStatus,
+};
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -102,10 +104,17 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
     pub last_event_at: String,
-    /// When it started something it may be asking the human to approve
-    /// (`activity` with `may_ask`), until its next event.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub may_ask_since: Option<String>,
+    /// What it has started that it may be asking the human to approve
+    /// (`activity` with `may_ask`), by the activity's label, with when: each
+    /// until an activity with the same label says it's done, or the turn
+    /// ends. (One with no label, as recorded before labels, until the
+    /// node's next event of any other kind.)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub asking: BTreeMap<String, String>,
+    /// Whether its turn is one in Plan mode (`activity` `Plan mode`), which
+    /// ends on a plan waiting for the human.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub planning: bool,
     /// When its turn ended on a question (a `status` with `turn_end`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_at: Option<String>,
@@ -618,11 +627,25 @@ impl Reducer {
 
         let node = self.nodes.get_mut(&e.node).expect("ensured above");
         node.last_event_at = e.ts.clone();
-        // Anything else it does means it isn't waiting for an approval.
-        node.may_ask_since = match &payload {
-            Payload::Activity(d) if d.may_ask => Some(e.ts.clone()),
-            _ => None,
-        };
+        match &payload {
+            Payload::Activity(d) if d.may_ask => {
+                let key = d.label.clone().unwrap_or_default();
+                node.asking.insert(key, e.ts.clone());
+            }
+            Payload::Activity(d) if d.label.is_some() => {
+                node.asking.remove(d.label.as_deref().unwrap_or_default());
+                node.planning |= d.tool == PLAN_MODE;
+            }
+            Payload::Activity(d) => {
+                node.asking.remove("");
+                node.planning |= d.tool == PLAN_MODE;
+            }
+            // Anything else it does means it isn't waiting on one with no
+            // label (see `asking`).
+            _ => {
+                node.asking.remove("");
+            }
+        }
         // Any activity other than a status report means the human answered.
         if node.state == State::InputRequired && !matches!(payload, Payload::Status(_)) {
             node.state = State::Working;
@@ -688,6 +711,8 @@ impl Reducer {
                 }
             }
             Payload::SessionEnded(_) => {
+                node.asking.clear();
+                node.planning = false;
                 // A session that already said how it ended (`agent-graph run`
                 // reports a failure first) keeps that.
                 if !node.state.is_terminal() {
@@ -741,7 +766,20 @@ impl Reducer {
                 self.close_waits_on(&id, &e.ts, false);
                 self.calls_over(&id, &e.ts);
             }
-            Payload::Status(d) => {
+            Payload::Status(mut d) => {
+                // A turn in Plan mode that ends has a plan waiting.
+                if d.state == State::Idle && node.planning {
+                    d = Status {
+                        state: State::InputRequired,
+                        summary: Some(PLAN_READY.to_string()),
+                        title: d.title,
+                        turn_end: true,
+                    };
+                }
+                if d.state == State::Idle || d.state.is_terminal() || d.turn_end {
+                    node.planning = false;
+                    node.asking.clear();
+                }
                 // A status just after its session's end is a late one (a
                 // headless session's Stop and SessionEnd can land in the same
                 // millisecond, either way round), unless it says how it
@@ -1024,7 +1062,8 @@ impl Reducer {
                 started_at: Some(ts.to_string()),
                 ended_at: None,
                 last_event_at: ts.to_string(),
-                may_ask_since: None,
+                asking: BTreeMap::new(),
+                planning: false,
                 asked_at: None,
                 headline: None,
                 open_tasks: 0,
@@ -1554,22 +1593,22 @@ impl Reducer {
         for node in self.nodes.values_mut() {
             // Started something it may ask you to approve a while ago, and
             // nothing since: it's probably asking.
+            let since = node
+                .asking
+                .values()
+                .filter_map(|since| humantime::parse_rfc3339_weak(since).ok())
+                .min();
             let asking = node.state == State::Working
-                && node.may_ask_since.as_deref().is_some_and(|since| {
-                    humantime::parse_rfc3339_weak(since)
-                        .ok()
-                        .and_then(|t| opts.now.duration_since(t).ok())
-                        .is_some_and(|waited| waited >= MAY_ASK_AFTER)
+                && since.is_some_and(|since| {
+                    opts.now
+                        .duration_since(since)
+                        .is_ok_and(|waited| waited >= MAY_ASK_AFTER)
                 });
             if asking {
                 node.state = State::InputRequired;
                 node.attention = Some(MAY_ASK.to_string());
             } else if node.state == State::Working {
-                let at = node
-                    .may_ask_since
-                    .as_deref()
-                    .and_then(|since| humantime::parse_rfc3339_weak(since).ok())
-                    .map(|t| t + MAY_ASK_AFTER);
+                let at = since.map(|t| t + MAY_ASK_AFTER);
                 recheck_at = match (recheck_at, at) {
                     (Some(a), Some(b)) => Some(a.min(b)),
                     (a, b) => a.or(b),
@@ -1686,6 +1725,9 @@ pub const MAY_ASK_AFTER: Duration = Duration::from_secs(10);
 /// What a node probably asking for approval shows. It says it's a guess: a
 /// slow command looks the same.
 pub const MAY_ASK: &str = "May be waiting for your approval to run a command";
+
+/// What a node whose turn in Plan mode has ended shows.
+pub const PLAN_READY: &str = "Plan ready for your review";
 
 /// How soon it usually does.
 const FRESH_START: Duration = Duration::from_secs(60);

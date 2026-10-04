@@ -17,9 +17,9 @@ use serde_json::Value;
 
 use super::{Adapter, Capture, Draft, Translation, bool_at, shell, str_at};
 use crate::event::{
-    Activity, AgentFinished, AgentSpawned, FinishStatus, Payload, SessionEnded, SessionStarted,
-    SpawnKind, SpawnRequested, SpawnReturned, State, Status, TaskItem, TaskStatus, TaskUpserted,
-    TasksUpdated, truncate_chars,
+    Activity, AgentFinished, AgentSpawned, FinishStatus, PLAN_MODE, Payload, SessionEnded,
+    SessionStarted, SpawnKind, SpawnRequested, SpawnReturned, State, Status, TaskItem, TaskStatus,
+    TaskUpserted, TasksUpdated, truncate_chars,
 };
 use crate::paths::file_key;
 
@@ -46,6 +46,10 @@ impl Adapter for Cursor {
 
     fn adapter_id(&self) -> &'static str {
         "cursor@1"
+    }
+
+    fn needs_start(&self) -> bool {
+        true
     }
 
     fn replies_with_json(&self) -> bool {
@@ -107,12 +111,23 @@ impl Adapter for Cursor {
                     }),
                 ));
             }
-            "beforeSubmitPrompt" => drafts.push(status(&session, State::Working, None)),
-            "stop" => {
-                let summary = (str_at(input, &["status"]) == Some("error"))
-                    .then(|| "The turn ended with an error".to_string());
-                drafts.push(status(&session, State::Idle, summary));
+            "beforeSubmitPrompt" => {
+                drafts.push(status(&session, State::Working, None));
+                // A turn in Plan mode ends on a plan waiting for you.
+                if str_at(input, &["composer_mode"]) == Some("plan") {
+                    drafts.push(Draft::new(
+                        &session,
+                        Payload::Activity(Activity {
+                            tool: PLAN_MODE.to_string(),
+                            label: None,
+                            may_ask: false,
+                        }),
+                    ));
+                }
             }
+            // (Its `status` says how: Cursor's CLI calls a turn stopped with
+            // Esc an error, so it isn't shown as one.)
+            "stop" => drafts.push(status(&session, State::Idle, None)),
             "subagentStart" => {
                 let agent = str_at(input, &["subagent_id"])
                     .map(first_line)
@@ -172,17 +187,13 @@ impl Adapter for Cursor {
                     Some("Waiting for your approval to run a command".to_string()),
                 )),
                 Some(false) => {}
-                None => drafts.push(Draft::new(
-                    &session,
-                    Payload::Activity(Activity {
-                        tool: "Shell".to_string(),
-                        label: None,
-                        may_ask: true,
-                    }),
-                )),
+                None => drafts.push(command(&session, input, true)),
             },
+            // It ran (approved, or never asked about): that command, and only
+            // that one (Cursor may have others queued, still to ask about), is
+            // done with.
             "afterShellExecution" if may_ask(input) && cli_asks(input) != Some(false) => {
-                drafts.push(status(&session, State::Working, None));
+                drafts.push(command(&session, input, false));
             }
             // In the sandbox, or run without asking: nothing to record.
             "beforeShellExecution" | "afterShellExecution" => {}
@@ -211,7 +222,7 @@ impl Adapter for Cursor {
             // A command that failed, or that you didn't allow
             // (`permission_denied`): it isn't waiting on you.
             "postToolUseFailure" if tool_name(input) == "Shell" => {
-                drafts.push(status(&session, State::Working, None));
+                drafts.push(command(&session, input, false));
             }
             "postToolUseFailure" => {
                 // A Task call that failed returns, so the session stops
@@ -393,6 +404,32 @@ fn first_line(id: &str) -> &str {
     id.lines().next().unwrap_or(id).trim()
 }
 
+/// A command Cursor may be asking you about (`may_ask`), or done with: an
+/// `activity` naming it by a key from its turn and its text, the same in
+/// each of its hooks, so each one queued is tracked on its own. The text
+/// itself isn't kept.
+fn command(session: &str, input: &Value, may_ask: bool) -> Draft {
+    let text = str_at(input, &["command"])
+        .or_else(|| str_at(input, &["tool_input", "command"]))
+        .unwrap_or("");
+    let turn = str_at(input, &["generation_id"]).unwrap_or("");
+    Draft::new(
+        session,
+        Payload::Activity(Activity {
+            tool: "Shell".to_string(),
+            label: Some(format!("command {:016x}", fnv(&format!("{turn}\n{text}")))),
+            may_ask,
+        }),
+    )
+}
+
+/// FNV-1a, 64 bits: a short, stable key.
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf29ce484222325, |hash, b| {
+        (hash ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    })
+}
+
 /// Whether a command (`beforeShellExecution`, `afterShellExecution`) is
 /// outside Cursor's sandbox, so Cursor may ask about it.
 fn may_ask(input: &Value) -> bool {
@@ -406,6 +443,12 @@ fn may_ask(input: &Value) -> bool {
 fn cli_asks(input: &Value) -> Option<bool> {
     // Only the CLI's hooks have this.
     std::env::var_os("CURSOR_INVOKED_AS")?;
+    // How this run of the CLI was started can override its settings.
+    match this_run_mode()? {
+        RunMode::Settings => {}
+        RunMode::NeverAsks => return Some(false),
+        RunMode::Unknown => return None,
+    }
     let home = crate::paths::user_home()?;
     let project = str_at(input, &["workspace_roots", "0"]).map(std::path::PathBuf::from);
     let read = |path: std::path::PathBuf| {
@@ -436,6 +479,45 @@ fn cli_asks(input: &Value) -> Option<bool> {
         &rules("allow"),
         &rules("deny"),
     )
+}
+
+/// What a run of the CLI's command line says about asking.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunMode {
+    /// Nothing: its settings decide.
+    Settings,
+    /// Run Everything (`--force`, `--yolo`), or a print run (`-p`), which
+    /// refuses what it would otherwise ask about.
+    NeverAsks,
+    /// Auto-review (`--auto-review`): a classifier decides.
+    Unknown,
+}
+
+/// What the command line of the CLI running this hook says (`None` where
+/// it can't be read, as in the site's WebAssembly, which reads no hooks).
+#[cfg(feature = "cli")]
+fn this_run_mode() -> Option<RunMode> {
+    let (cli, _) = crate::process::agent_of_this_hook()?;
+    Some(run_mode(&crate::process::command_line(cli.pid)?))
+}
+
+#[cfg(not(feature = "cli"))]
+fn this_run_mode() -> Option<RunMode> {
+    None
+}
+
+/// What the CLI's command line (`agent …`, as `ps` shows it) says about
+/// whether it asks before running a command.
+pub fn run_mode(command_line: &str) -> RunMode {
+    let words: Vec<&str> = command_line.split_whitespace().collect();
+    let has = |flags: &[&str]| words.iter().any(|w| flags.contains(w));
+    if has(&["--force", "-f", "--yolo", "-p", "--print"]) {
+        RunMode::NeverAsks
+    } else if has(&["--auto-review"]) {
+        RunMode::Unknown
+    } else {
+        RunMode::Settings
+    }
 }
 
 /// Whether the CLI asks before running `command`, given its allow and deny

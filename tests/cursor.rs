@@ -386,3 +386,113 @@ fn the_cli_asks_unless_a_rule_names_the_command() {
     assert_eq!(asks("date && sleep 2 && echo done", &allow, &deny), None);
     assert_eq!(asks("ls | wc -l", &allow, &deny), None);
 }
+
+#[test]
+fn commands_queued_together_are_each_tracked_until_each_has_run() {
+    // Cursor runs `beforeShellExecution` for each command it proposes, at
+    // once, then asks about them one at a time: here `date` (3) and the
+    // second command (7) are both proposed, and `date` runs (4) while the
+    // second is still waiting for you.
+    let p = approvals();
+    let payloads = vec![
+        p[0].clone(),
+        p[1].clone(),
+        p[3].clone(),
+        p[7].clone(),
+        p[4].clone(),
+    ];
+    let events = translate_as("cursor", &payloads, Capture::default());
+    let at = |waited: u64| {
+        agent_graph::reducer::reduce(
+            events.clone(),
+            &agent_graph::reducer::Options {
+                now: t0() + std::time::Duration::from_secs(4 + waited),
+                stale_after: std::time::Duration::from_secs(30 * 60),
+            },
+        )
+    };
+    assert_eq!(app_node(&at(2)).state, State::Working);
+    let g = at(20);
+    assert_eq!(app_node(&g).state, State::InputRequired);
+    assert_eq!(
+        app_node(&g).attention.as_deref(),
+        Some(agent_graph::reducer::MAY_ASK)
+    );
+    // The second runs: nothing's waiting.
+    let mut payloads = payloads;
+    payloads.push(p[8].clone());
+    let g = reduce(translate_as("cursor", &payloads, Capture::default()));
+    assert_eq!(app_node(&g).state, State::Working);
+    // The turn's end, too, with any still pending.
+    let g = reduce(translate_as(
+        "cursor",
+        &[p[0].clone(), p[1].clone(), p[3].clone(), p[11].clone()],
+        Capture::default(),
+    ));
+    assert_eq!(app_node(&g).state, State::Idle);
+}
+
+#[test]
+fn the_clis_flags_say_whether_it_asks() {
+    use agent_graph::adapter::cursor::{RunMode, run_mode};
+    let agent = "/Users/me/.local/share/cursor-agent/versions/2026.10.01/cursor-agent";
+    assert_eq!(run_mode(&format!("{agent} --trust")), RunMode::Settings);
+    assert_eq!(
+        run_mode(&format!("{agent} --trust Run date")),
+        RunMode::Settings
+    );
+    for flag in ["--force", "-f", "--yolo", "-p", "--print"] {
+        assert_eq!(
+            run_mode(&format!("{agent} --trust {flag} Run date")),
+            RunMode::NeverAsks,
+            "{flag}"
+        );
+    }
+    assert_eq!(
+        run_mode(&format!("{agent} --auto-review")),
+        RunMode::Unknown
+    );
+}
+
+/// A turn in Plan mode: payload 1 sent in Plan mode, ending (11) with the
+/// reply (10), in either order.
+fn plan_turn(reply_first: bool) -> Graph {
+    let mut payloads = approvals()[..12].to_vec();
+    payloads[1]["composer_mode"] = "plan".into();
+    if !reply_first {
+        payloads.swap(10, 11);
+    }
+    reduce(translate_as("cursor", &payloads, Capture::default()))
+}
+
+#[test]
+fn a_turn_in_plan_mode_ends_on_a_plan_waiting_for_you() {
+    for reply_first in [true, false] {
+        let g = plan_turn(reply_first);
+        assert_eq!(app_node(&g).state, State::InputRequired, "{reply_first}");
+        assert_eq!(
+            app_node(&g).attention.as_deref(),
+            Some(agent_graph::reducer::PLAN_READY)
+        );
+    }
+    // Building it is a new turn, in Agent mode, which ends idle.
+    let mut payloads = approvals()[..12].to_vec();
+    payloads[1]["composer_mode"] = "plan".into();
+    payloads.extend(approvals()[1..12].iter().cloned());
+    let g = reduce(translate_as("cursor", &payloads, Capture::default()));
+    assert_eq!(app_node(&g).state, State::Idle);
+}
+
+#[test]
+fn a_turn_cursor_calls_an_error_isnt_shown_as_one() {
+    // The CLI says a turn stopped with Esc ended in an error.
+    let mut stop = approvals()[11].clone();
+    stop["status"] = "error".into();
+    let g = reduce(translate_as(
+        "cursor",
+        &[approvals()[0].clone(), stop],
+        Capture::default(),
+    ));
+    assert_eq!(app_node(&g).state, State::Idle);
+    assert_eq!(app_node(&g).summary, None);
+}

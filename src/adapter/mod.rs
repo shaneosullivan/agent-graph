@@ -71,6 +71,13 @@ pub trait Adapter {
     fn replies_with_json(&self) -> bool {
         false
     }
+    /// Whether a session's hooks are only recorded once it has started (its
+    /// events file exists, or this hook starts it). Cursor runs its CLI's
+    /// subagents' hooks in conversations of their own, which never start
+    /// and name nothing that ties them to their chat.
+    fn needs_start(&self) -> bool {
+        false
+    }
 }
 
 /// The provider ids the adapters record (`by_name` knows each; keep them

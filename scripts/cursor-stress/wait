@@ -1,0 +1,18 @@
+#!/bin/sh
+# Waits up to 25 seconds for step $1 to end (its "end" mark), then says
+# whether it has, with the last of its screen. Run it again until it has.
+step=$1
+ws=$(cd "$(dirname "$0")/.." && pwd)
+i=0
+while [ $i -lt 25 ]; do
+  if grep -q " $step end\$" "$ws/steps.log" 2>/dev/null; then
+    echo "$step: done"
+    grep " $step " "$ws/steps.log" | tail -8
+    exit 0
+  fi
+  sleep 1
+  i=$((i + 1))
+done
+echo "$step: still running. Last of its screen:"
+tail -c 1500 "$ws/drive-logs/$step.log" 2>/dev/null | tail -15
+exit 1

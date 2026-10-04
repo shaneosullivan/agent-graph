@@ -91,6 +91,18 @@ Cursor set to ask before every command (Run Mode: Allowlist, with nothing on the
 - **In `agent -p`, subagents fire no `subagentStart` or `subagentStop`**, only their `Task` calls' `preToolUse`. They show as requested, and the requests close when the run ends.
 - `claude -p` was refused in `-p` mode (the shell's sandbox), so linking a session a chat starts is tested only in `tests/`.
 
+### The stress test (2026-10-04)
+
+Cursor's own agent ran [cursor-stress-test.md](cursor-stress-test.md) in the app, driving the CLI from its shell: about 80 chats, CLI and app, with approvals, questions, plans, subagents, resumes, interrupts and load. What held: linking (CLI chats under the app chat that started them; Claude Code, Codex and Cursor's CLI under the chats that started them), app subagents paired with their calls (three at once, Best-of-N's three), foreground subagents canceled with a stopped turn, the CLI's allowlist, questions at a turn's end, resumed chats (five ways, one session), and six runs at once. No hook failed. What it found, and what changed:
+
+- **Commands proposed together** each fire `beforeShellExecution` at once, before Cursor asks about the first, so one finishing cleared the "may be waiting" of all. Each is now tracked on its own.
+- **The CLI's `--force`, `--yolo`, `-p` and `--auto-review`** override its settings, so commands that ran without asking were "Waiting for your approval" until they ended. The CLI's command line is now read. Switching to Run Everything within a session (Shift+Tab) still isn't seen.
+- **The CLI's subagents' hooks** come in conversations of their own, with nothing marking them as a subagent's (in the app they carry `parent_tool_call_id`). 36 became sessions stuck "working". Conversations that never started aren't recorded now. (Once, six `agent -p` runs started at once sent no `sessionStart` either, for no reason found; they're left out too.)
+- **Plan mode** shows in `beforeSubmitPrompt`'s `composer_mode`, so a Plan-mode turn now ends on "Plan ready for your review".
+- **Esc in the CLI** ends the turn with `status: error`; it's no longer shown as an error.
+
+Cursor's, which Agent Graph can't see past: a turn started by a background subagent's result fires no `beforeSubmitPrompt`, `afterAgentResponse` or `stop`; the CLI fires no `subagentStart` or `subagentStop`; a background subagent's `subagentStop` never comes (it shows working until its chat ends); a subagent waiting for approval can't be told from its chat; quitting Cursor or archiving a chat sends no `sessionEnd`; and in the CLI, refusing a command (`n`) opens a box for what to do instead, with no hook, so it stays "Waiting for your approval", which it is, in a way. In Run Everything mode, every command is outside the sandbox, so each records two small events (most of a busy chat's log); that's accepted.
+
 ### The adapter (`src/adapter/cursor.rs`)
 
 Node ids: `cursor:<conversation_id>` for a session, and `cursor:<conversation_id>/<subagent_id>` for a subagent. The file key is the conversation's, so a session's subagents share its events file.
@@ -99,8 +111,8 @@ Node ids: `cursor:<conversation_id>` for a session, and `cursor:<conversation_id
 |---|---|
 | `sessionStart` | `session.started` (`cwd` from `workspace_roots`, `transcript_path`) |
 | `sessionEnd` | `session.ended`; also `agent.finished: canceled` for its agents still running when `reason` is aborted, window_close or user_close |
-| `beforeSubmitPrompt` | `status: working` |
-| `stop` | `status: idle`; `agent.finished: failed` with Cursor's error when `status` is error |
+| `beforeSubmitPrompt` | `status: working`; in Plan mode (`composer_mode: plan`), also `activity` `Plan mode`, so the turn's end is "Plan ready for your review" |
+| `stop` | `status: idle` (an `error` isn't shown as one: the CLI says it of a turn stopped with Esc) |
 | `subagentStart` | `agent.spawned` under its parent (`parent_conversation_id`), with `subagent_type` and `task` as its purpose, cut short, and the `Task` call that started it (`tool_call_id`), so it's paired with that call exactly, not guessed |
 | `subagentStop` | `agent.finished` with its `status` (the summary only when bodies are captured) |
 | `preToolUse` `Task` | `spawn.requested` (kind agent, background as the call says) |
@@ -109,22 +121,23 @@ Node ids: `cursor:<conversation_id>` for a session, and `cursor:<conversation_id
 | `postToolUse` todo tool | `tasks.updated`, if Cursor ever sends it (it didn't in step 1) |
 | `preToolUse` `Shell` | `spawn.requested` (kind session) when it starts an agent, from the shell parser, as for the others |
 | `postToolUse` `Shell` | `spawn.returned` for an agent launch |
-| `beforeShellExecution`, outside the sandbox | `activity` with `may_ask`, or in the CLI's Allowlist mode, `status: input_required` for a command not on the list (see below) |
-| `afterShellExecution`, outside the sandbox | `status: working` |
+| `beforeShellExecution`, outside the sandbox | `activity` with `may_ask`, labelled by a key from its turn and its text, or in the CLI's Allowlist mode, `status: input_required` for a command not on the list (see below) |
+| `afterShellExecution`, outside the sandbox | `activity` with the same label, without `may_ask`: that command is done with |
 | `afterAgentResponse` ending on a question | `status: input_required` with `turn_end` |
-| `postToolUseFailure` `Shell` | `status: working` |
+| `postToolUseFailure` `Shell` | the same, for a command that failed or that you refused |
 | `preToolUse` `AskQuestion` or `CreatePlan` | `status: input_required` (Cursor doesn't send these yet: see below) |
 
-Any hook with `parent_tool_call_id` (inside a subagent) records nothing. Labels are cut to 200 characters, and prompts, commands and outputs aren't kept unless body capture is on, as for the others. Every hook prints `{}`.
+Any hook with `parent_tool_call_id` (inside an app subagent) records nothing, and nothing is recorded for a conversation until it has started (`sessionStart`: `emit` records a hook only if it starts the conversation or the conversation's events file exists), which leaves out the CLI's subagents' conversations, whose hooks carry nothing that marks them as a subagent's. Labels are cut to 200 characters, and prompts, commands and outputs aren't kept unless body capture is on, as for the others. Every hook prints `{}`.
 
 ### Needing you, without an event for it
 
 No hook says Cursor is waiting for you, and Agent Graph **doesn't read or follow Cursor's transcripts** for it: that would put far more in the logs than the graph needs, and much of a transcript is private. It goes only on what hooks say, which is more than Claude Code's and Codex's hooks say in some ways:
 
-1. **Commands outside the sandbox** (`beforeShellExecution` with `sandbox: false`). A command in the sandbox never asks, so it records nothing. One outside it records `activity` with `may_ask`, and if nothing else comes from the chat for 10 seconds (`reducer::MAY_ASK_AFTER`), it's shown as **"May be waiting for your approval to run a command"**: a guess, since a slow command looks the same. `afterShellExecution` (it ran) or `postToolUseFailure` (it failed, or you refused it: `permission_denied`) makes it working again. The graph says when it will next change with nothing new happening (`recheck_ms` in the page's graph reply), so the page looks again then.
-2. **The CLI's allowlist.** In the CLI (its hooks have `CURSOR_INVOKED_AS`), `~/.cursor/cli-config.json` and a project's `.cursor/cli.json` say for sure: in its Allowlist mode (`approvalMode: "allowlist"`), a command whose first word no `Shell(...)` rule names is asked about, so it's **"Waiting for your approval to run a command"** at once, and one a rule names isn't recorded at all. A chain (`&&`, `|`, `;`), which Cursor's docs don't say how it matches, falls back to 1. So do the app (whose settings are in its own database, in no documented form) and the other run modes (Auto-Review's classifier decides).
+1. **Commands outside the sandbox** (`beforeShellExecution` with `sandbox: false`). A command in the sandbox never asks, so it records nothing. One outside it records `activity` with `may_ask`, labelled by a key from its turn and its text. If it's still pending 10 seconds later (`reducer::MAY_ASK_AFTER`), the chat is shown as **"May be waiting for your approval to run a command"**: a guess, since a slow command looks the same. Each command is tracked on its own, since Cursor runs `beforeShellExecution` for every command it proposes at once, then asks about them one at a time: one ends with `afterShellExecution` (it ran) or `postToolUseFailure` (it failed, or you refused it), and all of them with the turn. The graph says when it will next change with nothing new happening (`recheck_ms` in the page's graph reply), so the page looks again then.
+2. **The CLI's allowlist.** In the CLI (its hooks have `CURSOR_INVOKED_AS`), unless its command line says otherwise (`--force`, `--yolo` or `-p`, which never ask; `--auto-review`, which leaves it to a classifier, so to 1), read from the process running the hook, `~/.cursor/cli-config.json` and a project's `.cursor/cli.json` say for sure: in its Allowlist mode (`approvalMode: "allowlist"`), a command whose first word no `Shell(...)` rule names is asked about, so it's **"Waiting for your approval to run a command"** at once, and one a rule names isn't recorded at all. A chain (`&&`, `|`, `;`), which Cursor's docs don't say how it matches, falls back to 1. So do the app (whose settings are in its own database, in no documented form) and the other run modes (Auto-Review's classifier decides).
 3. **A reply ending on a question.** `afterAgentResponse` has the turn's last reply. One ending on a question (past any closing formatting) makes the chat **"Asks you a question"** (the question itself only with body capture). It and `stop` come together, in either order (hooks run in parallel), so the reply's status is marked `turn_end`, and an idle landing within 2 seconds of it doesn't replace it.
-4. **Questions asked with Cursor's question tool, and plans,** fire no hooks at all, so they aren't shown. When Cursor fixes its bug and `AskQuestion` and `CreatePlan` reach `preToolUse`, they become "Asks: <the question>" and "Plan ready for your review": the adapter handles them already.
+4. **Plans.** A turn sent in Plan mode (`beforeSubmitPrompt`'s `composer_mode: plan`; Ask mode is `chat`, and `sessionStart` always says `agent`) ends on **"Plan ready for your review"**. A switch to Plan mode within a turn (the agent's own `SwitchMode`) fires no hook, so it isn't seen. The CLI's hooks carry no mode.
+5. **Questions asked with Cursor's question tool** fire no hooks at all, so they aren't shown. When Cursor fixes its bug and `AskQuestion` and `CreatePlan` reach `preToolUse`, they become "Asks: <the question>" and "Plan ready for your review": the adapter handles them already.
 
 The FAQ and the install tab should say plainly that Cursor's approvals and questions are shown only as far as its hooks allow.
 

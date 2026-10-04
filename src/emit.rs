@@ -94,6 +94,15 @@ fn run(args: &[OsString]) -> Result<(), String> {
     if translation.drafts.is_empty() {
         return Ok(());
     }
+    let dir = paths::events_dir(&root);
+    let file = dir.join(format!("{}.jsonl", translation.file_key));
+    let starts = translation
+        .drafts
+        .iter()
+        .any(|d| matches!(d.payload, Payload::SessionStarted(_)));
+    if adapter.needs_start() && !starts && !file.exists() {
+        return Ok(());
+    }
     let env_file = adapter
         .env_file_var()
         .and_then(std::env::var_os)
@@ -112,9 +121,7 @@ fn run(args: &[OsString]) -> Result<(), String> {
         out.push('\n');
     }
 
-    let dir = paths::events_dir(&root);
     store::ensure_dir(&dir).map_err(|e| format!("emit: creating {}: {e}", dir.display()))?;
-    let file = dir.join(format!("{}.jsonl", translation.file_key));
     store::append(&file, out.as_bytes())
         .map_err(|e| format!("emit: writing {}: {e}", file.display()))
 }

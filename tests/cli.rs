@@ -2001,3 +2001,40 @@ fn a_resumed_codex_session_stops_the_agents_it_left_running() {
     );
     assert_eq!(graph().nodes[&sleeper.id].state, State::Working);
 }
+
+/// Cursor runs its CLI's subagents' hooks in conversations of their own,
+/// which never start: they're left out, and a chat's are recorded once it
+/// has started (docs/cursor.md).
+#[test]
+fn emit_records_a_cursor_conversation_only_once_it_has_started() {
+    let home = tempfile::tempdir().unwrap();
+    let payloads = fixture("cursor/session.jsonl");
+    let file = home
+        .path()
+        .join("events/cursor-516781fb-4582-42b3-b4f4-8a294572e5f6.jsonl");
+    // A prompt (and so, a status) in a conversation that hasn't started.
+    let out = emit(
+        home.path(),
+        &["--provider", "cursor"],
+        &payloads[1].to_string(),
+        &[],
+    );
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "{}");
+    assert!(
+        !file.exists(),
+        "a conversation that never started isn't recorded"
+    );
+    // Once it has started, its hooks are.
+    for payload in &payloads[..2] {
+        emit(
+            home.path(),
+            &["--provider", "cursor"],
+            &payload.to_string(),
+            &[],
+        );
+    }
+    let text = read(&file);
+    assert!(text.contains("\"type\":\"session.started\""));
+    assert!(text.contains("\"type\":\"status\""));
+}

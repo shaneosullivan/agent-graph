@@ -285,6 +285,10 @@ pub struct MessageSent {
     pub body: Option<String>,
 }
 
+/// The `activity` tool that marks a turn in Plan mode (Cursor's), which
+/// ends on a plan waiting for the human.
+pub const PLAN_MODE: &str = "Plan mode";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Activity {
     pub tool: String,
