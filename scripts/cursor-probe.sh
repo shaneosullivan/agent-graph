@@ -42,6 +42,7 @@ install)
     file="$root/.cursor/hooks.json"
     # Project hooks run from the project's root.
     command="sh scripts/cursor-probe.sh hook"
+    mkdir -p "$root/scripts"
     [ -f "$root/scripts/cursor-probe.sh" ] || cp "$0" "$root/scripts/cursor-probe.sh"
   else
     file="$HOME/.cursor/hooks.json"
