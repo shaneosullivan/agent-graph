@@ -21,7 +21,7 @@ import {join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {test} from "node:test";
 
-const {installScript, latestRelease, powerShellScript, hasWindows} =
+const {installScript, latestRelease, powerShellScript, hasWindows, hasCursor} =
   await import("../lib/release.ts");
 
 const TARGETS = [
@@ -352,3 +352,25 @@ test(
     }
   },
 );
+
+test("Cursor is offered from the first release that has it", () => {
+  const at = (version: string) => ({
+    version,
+    commit: "c",
+    date: "d",
+    files: {},
+  });
+  for (const version of ["0.1.19", "0.1.9", "0.0.30", "", "x.y.z"]) {
+    assert.equal(hasCursor(at(version)), false, version);
+  }
+  for (const version of [
+    "0.1.20",
+    "0.1.21",
+    "0.2.0",
+    "1.0.0",
+    "0.1.20-beta.1",
+  ]) {
+    assert.equal(hasCursor(at(version)), true, version);
+  }
+  assert.equal(hasCursor(null), false);
+});

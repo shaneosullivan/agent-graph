@@ -201,6 +201,12 @@ impl Names {
         changed | (self.cursor_chats.len() != before)
     }
 
+    /// Which of Cursor's chats are its CLI's: those whose `meta.json` the
+    /// CLI keeps.
+    pub fn cursor_cli(&self) -> std::collections::BTreeSet<String> {
+        self.cursor_meta.keys().cloned().collect()
+    }
+
     /// Works out which sessions to watch: Claude Code's, with a transcript,
     /// that haven't ended since they last started, and Codex's.
     fn watch(&mut self, events: &[Timed]) {

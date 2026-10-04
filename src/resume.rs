@@ -1,6 +1,6 @@
 //! Reopening a session in the agent that ran it: for Claude Code,
 //! `claude --resume <id>` in the session's folder; for Codex, `codex resume
-//! <id>`.
+//! <id>`; for a chat in Cursor's CLI, `agent --resume <id>`.
 //!
 //! Only the local viewer offers this (see `timeline::Environment`), and
 //! `view::open` runs the command in a new terminal window. Everything here is
@@ -68,6 +68,26 @@ pub fn resume(node: &Node) -> Option<Resume> {
         }
         _ => None,
     }
+}
+
+/// How to reopen `node`, a chat in Cursor's CLI (which only the viewer can
+/// tell: by the CLI's own record of it, see `view::names`), in the CLI:
+/// `agent --resume <id>`, in its folder. Not while a turn of it is running:
+/// the CLI has no copy of a chat to open instead, as Claude Code and Codex
+/// have, and two of it at work on one chat would muddle it.
+pub fn cursor_cli(node: &Node) -> Option<Resume> {
+    if node.kind != NodeKind::Session || node.state == crate::event::State::Working {
+        return None;
+    }
+    let id = session_id(&node.id, "cursor:")?;
+    Some(Resume {
+        app: "Cursor CLI",
+        program: "agent",
+        args: vec!["--resume".to_string(), id.to_string()],
+        cwd: node.cwd.clone().filter(|c| !c.is_empty())?,
+        copy: false,
+        desktop: None,
+    })
 }
 
 /// Opening a session its desktop app has, by the app's `link` for it

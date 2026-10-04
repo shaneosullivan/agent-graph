@@ -322,10 +322,15 @@ impl Shared {
     }
 
     fn local(&self) -> api::Local {
+        let (cursor, cursor_cli) = {
+            let names = self.names.lock().expect("names lock");
+            (names.cursor_chats.clone(), names.cursor_cli())
+        };
         api::Local {
             titles: self.titles(),
             desktop: self.desktop.lock().expect("desktop lock").sessions.clone(),
-            cursor: self.names.lock().expect("names lock").cursor_chats.clone(),
+            cursor,
+            cursor_cli,
         }
     }
 
@@ -531,7 +536,15 @@ fn open_session(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::
         .ok()
         .map(|(graph, _, _)| graph);
     let node = graph.as_ref().and_then(|g| g.nodes.get(id));
-    let found = node.and_then(resume::resume);
+    let cursor_cli = shared.names.lock().expect("names lock").cursor_cli();
+    let found = node.and_then(|n| {
+        resume::resume(n).or_else(|| {
+            cursor_cli
+                .contains(&n.id)
+                .then(|| resume::cursor_cli(n))
+                .flatten()
+        })
+    });
     let transcript = transcript_of(&events, id);
     let command = found.as_ref().map(open::command_line);
     // The app shows a session it has without its folder, which an older

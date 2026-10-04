@@ -41,6 +41,8 @@ export const COPIED = [
   "claude-code-cloud",
   "codex",
   "codex-cloud",
+  "cursor",
+  "cursor-cloud",
   "npm",
   "powershell",
 ] as const;

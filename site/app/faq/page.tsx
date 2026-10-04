@@ -5,7 +5,7 @@ import type {Metadata} from "next";
 import {billingConfig} from "@/lib/billing";
 import {CONTACT} from "@/lib/contact";
 import {link} from "@/lib/links";
-import {hasWindows, latestRelease} from "@/lib/release";
+import {hasCursor, hasWindows, latestRelease} from "@/lib/release";
 
 import {InfoPage} from "../info-page";
 
@@ -88,11 +88,24 @@ export default function Faq() {
         <p>
           <strong>macOS</strong> (Apple silicon and Intel),{" "}
           <strong>Linux</strong> (x86_64 and ARM64) and <strong>Windows</strong>{" "}
-          (x64 and ARM64), with <strong>Claude Code</strong> and{" "}
-          <strong>Codex</strong>: it records their sessions, and the agents they
-          start, on your computer and in their clouds (claude.ai/code and
-          chatgpt.com/codex). <a href="/#install">Install it</a> with Homebrew,
-          npm, the install script, or on Windows, PowerShell.
+          (x64 and ARM64), with{" "}
+          {hasCursor(latestRelease()) ? (
+            <>
+              <strong>Claude Code</strong>, <strong>Codex</strong> and{" "}
+              <strong>Cursor</strong>: it records their sessions, and the agents
+              they start, on your computer and in their clouds (claude.ai/code,
+              chatgpt.com/codex and Cursor&rsquo;s cloud agents).
+            </>
+          ) : (
+            <>
+              <strong>Claude Code</strong> and <strong>Codex</strong>: it
+              records their sessions, and the agents they start, on your
+              computer and in their clouds (claude.ai/code and
+              chatgpt.com/codex).
+            </>
+          )}{" "}
+          <a href="/#install">Install it</a> with Homebrew, npm, the install
+          script, or on Windows, PowerShell.
         </p>
       ) : (
         <p>

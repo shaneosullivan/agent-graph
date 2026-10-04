@@ -54,6 +54,8 @@ const COPIED_LABEL: Record<Copied, string> = {
   "claude-code-cloud": "Claude Code cloud setup command copied",
   codex: "Codex setup command copied",
   "codex-cloud": "Codex cloud setup script copied",
+  cursor: "Cursor setup command copied",
+  "cursor-cloud": "Cursor cloud setup command copied",
   npm: "npm command copied",
   powershell: "PowerShell install command copied",
 };

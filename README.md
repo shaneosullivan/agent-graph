@@ -9,7 +9,7 @@
 
 Records how AI coding sessions relate to each other: which session spawned which agents, who is waiting on whom, what's waiting on *you*, what looks stuck, what work is left, and what they sent each other. It works from provider hooks and writes an append-only log on your local machine. Nothing leaves it unless you choose to share.
 
-Supported so far: **Claude Code** and **Codex**. Runs on Windows, macOS and Linux.
+Supported so far: **Claude Code**, **Codex** and **Cursor**. Runs on Windows, macOS and Linux.
 
 See [docs/idea.md](docs/idea.md) for the goal and [docs/design.md](docs/design.md) for how it works.
 
@@ -48,9 +48,12 @@ For **Codex**, `agent-graph install codex` does the same:
 
 `agent-graph uninstall codex` removes all of it. [docs/codex.md](docs/codex.md) has the details.
 
+For **Cursor**, `agent-graph install cursor` adds hooks to `~/.cursor/hooks.json`, keeping everything else there, and the `/agent-graph` command. New chats are recorded from then on, in the Cursor app and its CLI (`agent`): their subagents, todo lists and names. Cursor's hooks don't say when a chat is waiting for you, so what it's waiting on (a command to approve, a question, a plan to review) comes from Cursor's own records of the chat, read while `agent-graph view` or `watch-remote` runs. `agent-graph uninstall cursor` removes it. [docs/cursor.md](docs/cursor.md) has the details.
+
 **In the cloud**, sessions are recorded and shared live, to your account at [agentgraph.chofter.com/watch](https://agentgraph.chofter.com/watch), given an API token from your account page as `AGENT_GRAPH_TOKEN` in the cloud environment's settings:
 - **Claude Code's cloud** (claude.ai/code): `agent-graph install claude-code --cloud` adds hooks to the project's `.claude/settings.json`, to commit.
 - **Codex's cloud** (chatgpt.com/codex): the environment's setup script runs the install script, then `~/.local/bin/agent-graph install codex --cloud --yes`, which adds the hooks to Codex's files in the cloud. [docs/codex-cloud.md](docs/codex-cloud.md) has the details.
+- **Cursor's cloud agents**: `agent-graph install cursor --cloud --scope project` adds hooks to the project's `.cursor/hooks.json`, to commit; the token is a secret in Cursor's dashboard (Cloud Agents → Secrets).
 
 The site's [Download section](https://agentgraph.chofter.com/#install) has the steps for each, page by page.
 
@@ -60,7 +63,7 @@ For Gemini CLI, `install` adds the same command:
 |---|---|---|
 | Gemini CLI | `agent-graph install gemini` | `~/.gemini/commands/agent-graph.toml` |
 
-Its own sessions aren't recorded yet; only Claude Code and Codex have hooks so far.
+Its own sessions aren't recorded yet; only Claude Code, Codex and Cursor have hooks so far.
 
 `agent-graph --help` gives an overview, and `agent-graph <command> --help` explains a command in full, with examples. The same text is on the web at [agentgraph.chofter.com/docs](https://agentgraph.chofter.com/docs).
 
@@ -69,7 +72,7 @@ Its own sessions aren't recorded yet; only Claude Code and Codex have hooks so f
 | Command | What it does |
 |---|---|
 | `agent-graph tail` | Live, full-screen tree in the terminal, redrawn as events arrive. `q` quits, `a` shows older sessions, `--ascii` for plain characters. |
-| `agent-graph view --open` | Live web view on port 7777 (it prints a link with a key, `http://127.0.0.1:7777/?key=…`; only that link works; a viewer already running on the port is replaced, so a newer version takes over). Has a timeline slider for stepping back through a session, saves images, and reopens a Claude Code or Codex session: in the Claude app or the ChatGPT app if that's where it ran, else in a new terminal window. |
+| `agent-graph view --open` | Live web view on port 7777 (it prints a link with a key, `http://127.0.0.1:7777/?key=…`; only that link works; a viewer already running on the port is replaced, so a newer version takes over). Has a timeline slider for stepping back through a session, saves images, and reopens a Claude Code or Codex session, or a chat in Cursor's CLI: in the Claude app or the ChatGPT app if that's where it ran, else in a new terminal window. |
 | `agent-graph snapshot` | Saves a phone-sized PNG of the current session and prints its path, ready for an agent to send you. `--out x.svg` for SVG, `--json` for the raw graph. |
 | `agent-graph tree` | One-off text tree (`--all` includes older sessions). |
 | `agent-graph watch-remote` | Shares the graph live to your account at [agentgraph.chofter.com](https://agentgraph.chofter.com), where only you can see it. See below. |

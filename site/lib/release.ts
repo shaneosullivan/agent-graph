@@ -59,6 +59,23 @@ export const POWERSHELL_COMMAND = `irm ${SITE_URL}/install.ps1 | iex`;
 /** Whether `target` is a Windows program. */
 const forWindows = (target: string) => target.endsWith("-windows-msvc");
 
+/** The first release with Cursor (`agent-graph install cursor`). */
+const FIRST_WITH_CURSOR = [0, 1, 20];
+
+/** Whether `release` records Cursor's chats. */
+export function hasCursor(release: Release | null): boolean {
+  const parts = (release?.version ?? "").split(/[.-]/).slice(0, 3).map(Number);
+  if (parts.length < 3 || parts.some(Number.isNaN)) {
+    return false;
+  }
+  for (let i = 0; i < 3; i++) {
+    if (parts[i] !== FIRST_WITH_CURSOR[i]) {
+      return parts[i] > FIRST_WITH_CURSOR[i];
+    }
+  }
+  return true;
+}
+
 /** Whether `release` has programs for Windows. */
 export function hasWindows(release: Release | null): boolean {
   return Object.keys(release?.files ?? {}).some(forWindows);

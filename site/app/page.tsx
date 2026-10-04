@@ -6,7 +6,7 @@ import cliHelp from "@/lib/cli-help.json";
 import {CONTACT} from "@/lib/contact";
 import {type Help, Inline} from "@/lib/help-render";
 import {link} from "@/lib/links";
-import {hasWindows, latestRelease} from "@/lib/release";
+import {hasCursor, hasWindows, latestRelease} from "@/lib/release";
 
 import {DeletedNotice} from "./deleted-notice";
 import {Examples} from "./examples";
@@ -151,8 +151,9 @@ export default function Home() {
             {hasWindows(latestRelease())
               ? "For macOS, Linux and Windows, on ARM and x86_64. "
               : "For macOS and Linux, on ARM and x86_64 (Windows is coming). "}
-            It records Claude Code and Codex, on your computer and in their
-            clouds.
+            {hasCursor(latestRelease())
+              ? "It records Claude Code, Codex and Cursor, on your computer and in their clouds."
+              : "It records Claude Code and Codex, on your computer and in their clouds."}
           </p>
           <Install />
         </section>

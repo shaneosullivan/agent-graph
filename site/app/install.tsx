@@ -13,6 +13,7 @@ import {track} from "@/lib/analytics-client";
 import {link} from "@/lib/links";
 import {
   BREW_COMMAND,
+  hasCursor,
   hasWindows,
   INSTALL_COMMAND,
   latestRelease,
@@ -22,7 +23,14 @@ import {
 
 import {CopyCommand} from "./copy-command";
 
-type Os = "mac" | "linux" | "windows" | "npm" | "cloud" | "codex-cloud";
+type Os =
+  | "mac"
+  | "linux"
+  | "windows"
+  | "npm"
+  | "cloud"
+  | "codex-cloud"
+  | "cursor-cloud";
 
 const release = latestRelease();
 
@@ -48,6 +56,10 @@ const SETUP: Command = {
 const SETUP_CODEX: Command = {
   command: "agent-graph install codex",
   copied: "codex",
+};
+const SETUP_CURSOR: Command = {
+  command: "agent-graph install cursor",
+  copied: "cursor",
 };
 
 type Way = {
@@ -118,6 +130,13 @@ const ways: Record<Os, Way> = {
   cloud: {label: "Claude Code cloud"},
   // Its steps are its own too (CodexCloudSteps).
   "codex-cloud": {label: "Codex cloud"},
+  // And so are its (CursorCloudSteps).
+  "cursor-cloud": hasCursor(release)
+    ? {label: "Cursor cloud"}
+    : {
+        label: "Cursor cloud",
+        soon: "Coming soon: recording and sharing Cursor's cloud agents.",
+      },
 };
 
 /**
@@ -277,6 +296,69 @@ function CodexCloudSteps() {
         needs the same settings: go back to <strong>Environments</strong>, and
         do steps 3 to 7 for each of them. You can use the same token in all of
         them. Tasks in an environment without them aren&rsquo;t recorded.
+      </li>
+    </ol>
+  );
+}
+
+/**
+ * Recording and sharing live from Cursor's cloud agents: the project's
+ * Cursor hooks (`agent-graph install cursor --cloud --scope project`),
+ * committed, install agent-graph on each cloud agent's machine and share it
+ * to the account whose API token is a secret in Cursor's dashboard.
+ */
+function CursorCloudSteps() {
+  return (
+    <ol className="card-body install-steps">
+      <li>
+        On your computer, with agent-graph installed (as for macOS or Linux), go
+        to the root folder of your copy of the GitHub repository Cursor&rsquo;s
+        cloud agents will work in, and add the cloud&rsquo;s hooks to its{" "}
+        <code>.cursor/hooks.json</code>:
+        <Copyable
+          command="agent-graph install cursor --cloud --scope project"
+          copied="cursor-cloud"
+        />
+      </li>
+      <li>
+        Still in that repository, commit the file and push it to the branch
+        cloud agents start from (usually <code>main</code>). A cloud agent works
+        in a clone from GitHub, so that&rsquo;s where it finds the hooks. On
+        your computer, and your teammates&rsquo;, they do nothing.
+        <CopyCommand
+          command={
+            'git add .cursor/hooks.json && git commit -m "Share Cursor cloud agents to Agent Graph" && git push'
+          }
+        />
+      </li>
+      <li>
+        In this site&rsquo;s{" "}
+        <a href="/account#api-tokens">account page, under API tokens</a>, make a
+        token, and copy it (it starts with <code>agt_</code>).
+      </li>
+      <li>
+        At <a {...link("https://cursor.com/dashboard")}>cursor.com/dashboard</a>
+        , open <strong>Cloud Agents</strong>, then <strong>Secrets</strong>, and
+        add a secret named <code>AGENT_GRAPH_TOKEN</code>, with the token as its
+        value:
+        <CopyCommand command="AGENT_GRAPH_TOKEN" />
+        <span className="install-or">
+          Nothing else needs setting up there: the hooks install agent-graph
+          themselves, with no install or start script.
+        </span>
+      </li>
+      <li>
+        Start a cloud agent on that repository (at{" "}
+        <a {...link("https://cursor.com/agents")}>cursor.com/agents</a>, or from
+        the Cursor app). Its first message installs agent-graph on its machine,
+        which can take a few seconds, then records the agent and its subagents
+        and shares them live: watch them at <a href="/watch">/watch</a>, where
+        they&rsquo;re labelled &ldquo;Cursor cloud&rdquo;.
+        <span className="install-or">
+          A cloud agent can read the token, as it can any secret, but it can
+          only share to your account; delete it on your account page to stop it
+          working.
+        </span>
       </li>
     </ol>
   );
@@ -469,6 +551,8 @@ export function PlatformSteps({os}: {os: Os}) {
         <CloudSteps />
       ) : os === "codex-cloud" ? (
         <CodexCloudSteps />
+      ) : os === "cursor-cloud" && !way.soon ? (
+        <CursorCloudSteps />
       ) : way.soon ? (
         <p className="card-body install-soon">{way.soon}</p>
       ) : (
@@ -522,6 +606,14 @@ export function PlatformSteps({os}: {os: Os}) {
               Using Codex? Record its sessions too:
             </span>
             <Copyable {...SETUP_CODEX} />
+            {hasCursor(release) && (
+              <>
+                <span className="install-or">
+                  Using Cursor? Record its chats, in the app and its CLI:
+                </span>
+                <Copyable {...SETUP_CURSOR} />
+              </>
+            )}
           </li>
         </ol>
       )}

@@ -19,7 +19,7 @@ export type Watching =
       agents: Array<string>;
       /** How many computers they're running on (not in a cloud). */
       computers: number;
-      /** The clouds they're running in ("Claude Code cloud", "Codex cloud"). */
+      /** The clouds they're running in ("Claude Code cloud", "Codex cloud", "Cursor cloud"). */
       clouds: Array<string>;
     }
   | {watching: false};
@@ -31,13 +31,14 @@ const OVER = new Set(["completed", "failed", "canceled"]);
 const AGENTS: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
 };
 
 /**
  * The names `watch-remote` gives as its host in a coding agent's cloud
  * (the CLI's `account::host_name`), rather than the computer's.
  */
-const CLOUDS = ["Claude Code cloud", "Codex cloud"];
+const CLOUDS = ["Claude Code cloud", "Codex cloud", "Cursor cloud"];
 
 /**
  * What `running` (the account's shares whose `watch-remote` is running

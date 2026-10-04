@@ -1,6 +1,6 @@
 # Cursor support: plan
 
-**Built so far (not yet released):** the local adapter (`src/adapter/cursor.rs`), checked against a real Cursor (step 1, the approvals run, and a live run, below), with tests on its payloads (`tests/cursor.rs`). `emit` answers Cursor's hooks with `{}`. Sessions a chat starts link to it through `CURSOR_CONVERSATION_ID`. A subagent is paired with the exact `Task` call that started it (`agent.spawned`'s `call_id`), and one still at work when its turn is stopped is canceled. "Needs you", as far as Cursor's hooks allow: a command outside the sandbox that's gone quiet, the CLI's allowlist, a reply ending on a question, and a refused command (see "Needing you"). `install cursor` writes the hooks, but stays hidden until it's released. Not built yet: resuming a chat, the site, and the cloud.
+**Built so far (not yet released):** the local adapter (`src/adapter/cursor.rs`), checked against a real Cursor (step 1, the approvals run, and a live run, below), with tests on its payloads (`tests/cursor.rs`). `emit` answers Cursor's hooks with `{}`. Sessions a chat starts link to it through `CURSOR_CONVERSATION_ID`. A subagent is paired with the exact `Task` call that started it (`agent.spawned`'s `call_id`), and one still at work when its turn is stopped is canceled. "Needs you", as far as Cursor's hooks allow: a command outside the sandbox that's gone quiet, the CLI's allowlist, a reply ending on a question, and a refused command (see "Needing you"). `install cursor` writes the hooks (and with `--cloud`, hooks for Cursor's cloud agents). The viewer resumes a CLI chat in the CLI. The site's Cursor lines and "Cursor cloud" tab show from the first release with Cursor.
 
 Agent Graph records Claude Code's and Codex's sessions through their hooks. This is the plan for recording Cursor's the same way. Locally, that's the Cursor app's agent and the Cursor CLI (`cursor-agent`, also installed as `agent`). In the cloud, it's Cursor's cloud agents, which are started from cursor.com/agents, the app, the phone app, Slack, GitHub, Linear or the API.
 
@@ -149,10 +149,10 @@ The FAQ and the install tab should say plainly that Cursor's approvals and quest
 
 ### Installing (`agent-graph install cursor`)
 
-`install cursor` already exists, hidden, and installs only the `/agent-graph` skill. It will:
+`install cursor` (built, and no longer hidden):
 
-- write the hooks to `~/.cursor/hooks.json` (with `--scope project`, `.cursor/hooks.json`), keeping anything else there and backing it up first, as for the others. Tool hooks match only `Task` and the todo tool. Every hook is synchronous with a short timeout, since Cursor has no `async`, and `emit` takes well under 0.1 s;
-- stop being hidden, and keep installing the skill;
+- writes the hooks to `~/.cursor/hooks.json` (with `--scope project`, `.cursor/hooks.json`), keeping anything else there and backing it up first, as for the others. Tool hooks match only `Task` and the todo tool. Every hook is synchronous with a short timeout, since Cursor has no `async`, and `emit` takes well under 0.1 s;
+- installs the `/agent-graph` skill;
 - `uninstall cursor` removes all of it.
 
 ### Everything else that names a provider
@@ -209,7 +209,7 @@ A cloud agent at cursor.com/agents, on a branch of a throwaway repository with t
 
 ### A. Hooks in the repository (as Claude Code's cloud)
 
-**Built (2026-10-04)**, but for the site's tab, and not yet tried in Cursor's cloud: `agent-graph install cursor --cloud --scope project`. The hooks are `install::cursor_cloud_command`; the cloud mode is `Adapter::start` and `cloud_subagent_here` in `src/adapter/cursor.rs`, with its notes in `~/.agent-graph/cursor-cloud/`.
+**Built (2026-10-04)**, with the site's tab, but not yet tried in Cursor's cloud (the hooks install the site's latest release, so that waits for one): `agent-graph install cursor --cloud --scope project`. The hooks are `install::cursor_cloud_command`; the cloud mode is `Adapter::start` and `cloud_subagent_here` in `src/adapter/cursor.rs`, with its notes in `~/.agent-graph/cursor-cloud/`.
 
 The docs say cloud agents run **command hooks from the repository's `.cursor/hooks.json`**, but not `sessionStart`, `sessionEnd` or the MCP hooks. Everything else fires. That's Claude Code's cloud again, where the hooks are committed to the repository and do nothing anywhere else:
 
@@ -265,8 +265,8 @@ Build B only if A's step 1 shows cloud hooks don't run, or users ask for agents 
 
 ## Order of work
 
-1. ~~Local step 1, then the adapter, installing and the needs-you checks, with tests.~~ Done (2026-10-04), with what Cursor's own databases add: names, todo lists, plans, what an app chat's waiting on you for, CLI subagents, archived chats. Still to do locally: resuming a CLI chat (`agent --resume <id>`), un-hiding `install cursor`, and the site's "Cursor" tab and FAQ. Then a release, which also ends the stray Claude Code session that Homebrew's 0.1.7 makes of every Cursor chat.
-2. ~~Cloud step 1~~ (done). ~~Plan A~~ (built, 2026-10-04; to try for real in the cloud, then the site's tab): `install cursor --cloud`, a cloud mode for `emit` (the first `beforeSubmitPrompt` starts the session; subagents tied by their task; no command guess), the host label, and "Cursor cloud" on the site.
+1. ~~Local step 1, then the adapter, installing and the needs-you checks, with tests.~~ Done (2026-10-04), with what Cursor's own databases add: names, todo lists, plans, what an app chat's waiting on you for, CLI subagents, archived chats. Since done: resuming a CLI chat from the viewer (`agent --resume <id>`, between turns), `install cursor` un-hidden, with its help, and the site's Cursor lines, tab and FAQ (shown from the first release with Cursor, 0.1.20). Still to do: a release, which also ends the stray Claude Code session that Homebrew's 0.1.7 makes of every Cursor chat.
+2. ~~Cloud step 1~~ (done). ~~Plan A~~ (built, 2026-10-04, with the site's "Cursor cloud" tab; to try for real in the cloud, which needs a release: the hooks install the latest): `install cursor --cloud`, a cloud mode for `emit` (the first `beforeSubmitPrompt` starts the session; subagents tied by their task; no command guess), the host label, and "Cursor cloud" on the site.
 3. C, to see whether cloud agents on your own computer come for free.
 4. B, only if needed.
 

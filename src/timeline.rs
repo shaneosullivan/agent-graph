@@ -89,6 +89,9 @@ pub struct Local {
     /// Session id → what Cursor's app has saved of the chat, newer than the
     /// log: its todo list, and whether a plan is waiting for you.
     pub cursor: BTreeMap<String, crate::adapter::cursor::AppChat>,
+    /// Which of Cursor's chats are its CLI's, which it can reopen (see
+    /// `resume::cursor_cli`).
+    pub cursor_cli: BTreeSet<String>,
 }
 
 #[derive(Serialize)]
@@ -379,7 +382,13 @@ pub fn graph_with(
                         desktop: true,
                     }
                 } else {
-                    let r = resume::resume(n)?;
+                    let r = resume::resume(n).or_else(|| {
+                        local
+                            .cursor_cli
+                            .contains(&n.id)
+                            .then(|| resume::cursor_cli(n))
+                            .flatten()
+                    })?;
                     Open {
                         app: r.app,
                         copy: r.copy,

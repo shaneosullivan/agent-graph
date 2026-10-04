@@ -81,13 +81,15 @@
           ]
         },
         { "text": "For Codex it does the same: hooks in Codex's hooks file (~/.codex/hooks.json, or $CODEX_HOME's), with the file as it was backed up beside it (hooks.json.agent-graph.bak), and the $agent-graph command. Codex only runs a hook once it's trusted, so it also trusts Agent Graph's, in Codex's config.toml, as Codex's /hooks would (backing that file up too, as config.toml.agent-graph.bak), and turns on Codex's plan tool (update_plan, off by default) unless that file already says either way. Nothing else there changes. Codex reads its hooks only when it starts, so afterwards restart the ChatGPT app (quit it with Cmd+Q) and any Codex already running in a terminal; the install ends by saying so. Sessions in the terminal and in the ChatGPT desktop app (which runs the same Codex) are recorded: a session's plan, the subagents it starts and waits for, when it needs your approval or an answer, and sessions it starts from its shell." },
-        { "text": "In the cloud: `install claude-code --cloud` adds hooks for Claude Code's cloud (claude.ai/code) to a project's settings, to commit; `install codex --cloud`, run in a Codex cloud environment's setup script (chatgpt.com/codex), adds hooks for Codex's cloud to Codex's own files there (in /opt/codex, its home in the cloud). Either way, each cloud session is recorded and shared live, at agentgraph.chofter.com/watch, to the account whose API token the environment gives as AGENT_GRAPH_TOKEN. The site's Download section has the steps, for each." },
-        { "text": "For Gemini CLI it adds just the command for now. Its own sessions aren't recorded yet, so it shows the Claude Code and Codex sessions that are." },
+        { "text": "In the cloud: `install claude-code --cloud` adds hooks for Claude Code's cloud (claude.ai/code) to a project's settings, to commit; `install codex --cloud`, run in a Codex cloud environment's setup script (chatgpt.com/codex), adds hooks for Codex's cloud to Codex's own files there (in /opt/codex, its home in the cloud); `install cursor --cloud --scope project` adds hooks for Cursor's cloud agents to a project's .cursor/hooks.json, to commit. Each way, each cloud session is recorded and shared live, at agentgraph.chofter.com/watch, to the account whose API token the environment gives as AGENT_GRAPH_TOKEN. The site's Download section has the steps, for each." },
+        { "text": "For Cursor it does the same: hooks in Cursor's hooks file (~/.cursor/hooks.json), which record chats in the Cursor app and its CLI (`agent`), and the /agent-graph command (a skill). Cursor's hooks don't say when a chat is waiting for you, so what it's waiting on (a command to approve, a question, a plan to review) comes from Cursor's own records of the chat, read while `agent-graph view` or `watch-remote` runs." },
+        { "text": "For Gemini CLI it adds just the command for now. Its own sessions aren't recorded yet, so it shows the sessions of the agents that are." },
         { "heading": "Where the command goes (with --scope user)" },
         {
           "table": [
             ["Claude Code", "~/.claude/skills/agent-graph/SKILL.md; run it as /agent-graph"],
             ["Codex", "~/.agents/skills/agent-graph/SKILL.md; run it as $agent-graph"],
+            ["Cursor", "~/.cursor/skills/agent-graph/SKILL.md; run it as /agent-graph"],
             ["Gemini CLI", "~/.gemini/commands/agent-graph.toml; run it as /agent-graph"]
           ]
         },
@@ -95,20 +97,20 @@
         {
           "table": [
             ["user", "Every project: files in your home folder. The default."],
-            ["project", "Just this project: .claude/ (or .codex/ and .agents/, .gemini/) in this folder, which you'd usually commit. Its hooks run `agent-graph` from PATH, so everyone who uses the project needs it installed. Codex only runs a project's hooks once you've trusted the project in Codex."],
-            ["local", "Like project, but Claude Code's hooks go in .claude/settings.local.json, which isn't committed. Codex has no such file, so its hooks aren't added. (The command still goes in the project's folder: there's nowhere else. Uninstalling with --scope local leaves it if it's committed, since it's then the project's.)"]
+            ["project", "Just this project: .claude/ (or .codex/ and .agents/, .cursor/, .gemini/) in this folder, which you'd usually commit. Its hooks run `agent-graph` from PATH, so everyone who uses the project needs it installed. Codex only runs a project's hooks once you've trusted the project in Codex."],
+            ["local", "Like project, but Claude Code's hooks go in .claude/settings.local.json, which isn't committed. Codex and Cursor have no such file, so their hooks aren't added. (The command still goes in the project's folder: there's nowhere else. Uninstalling with --scope local leaves it if it's committed, since it's then the project's.)"]
           ]
         },
         { "text": "It lists what it will change and asks before writing: --yes skips the question, and --dry-run only shows the changes. Installing again changes nothing unless something is out of date. A command file of the same name that you wrote yourself is never overwritten." }
       ],
       "options": [
-        { "id": "provider", "flag": "<claude-code|codex|gemini>", "text": "The coding agent to set up." },
+        { "id": "provider", "flag": "<claude-code|codex|cursor|gemini>", "text": "The coding agent to set up." },
         { "id": "scope", "flag": "--scope <user|project|local>", "text": "Every project (user, the default), or just this one (project, or local to keep Claude Code's hooks out of version control)." },
         { "id": "dry_run", "flag": "--dry-run", "text": "Show what would change, and change nothing." },
         { "id": "yes", "flag": "-y, --yes", "text": "Don't ask before making the changes." },
-        { "id": "command", "flag": "--command <COMMAND>", "text": "The command the hooks run, which must contain `emit --provider claude-code` (or `codex`: it's how they're found again). Defaults to this executable's `emit`, or with --scope project, `agent-graph emit` from PATH." },
+        { "id": "command", "flag": "--command <COMMAND>", "text": "The command the hooks run, which must contain `emit --provider claude-code` (or `codex`, or `cursor`: it's how they're found again). Defaults to this executable's `emit`, or with --scope project, `agent-graph emit` from PATH." },
         { "id": "no_slash_command", "flag": "--no-slash-command", "text": "Don't add the /agent-graph command; just the hooks." },
-        { "id": "cloud", "flag": "--cloud", "text": "For Claude Code: add the hooks for Claude Code's cloud (claude.ai/code) to this project's settings (.claude/settings.json), to commit. They do nothing on a computer; in a cloud session they install agent-graph if it isn't there, record the session, and share it live to the account whose API token the cloud environment gives as AGENT_GRAPH_TOKEN. The environment's network access must allow agentgraph.chofter.com and firebasestorage.googleapis.com. For Codex: run in a Codex cloud environment's setup script (chatgpt.com/codex), after installing agent-graph there, with --yes. It adds the hooks to Codex's files in the cloud (/opt/codex), all run as they happen, since the cloud doesn't run hooks in the background; the session's first starts sharing it live, to the account whose API token the environment gives as AGENT_GRAPH_TOKEN. The environment's agent internet access must allow agentgraph.chofter.com, with all HTTP methods." }
+        { "id": "cloud", "flag": "--cloud", "text": "For Claude Code: add the hooks for Claude Code's cloud (claude.ai/code) to this project's settings (.claude/settings.json), to commit. They do nothing on a computer; in a cloud session they install agent-graph if it isn't there, record the session, and share it live to the account whose API token the cloud environment gives as AGENT_GRAPH_TOKEN. The environment's network access must allow agentgraph.chofter.com and firebasestorage.googleapis.com. For Codex: run in a Codex cloud environment's setup script (chatgpt.com/codex), after installing agent-graph there, with --yes. It adds the hooks to Codex's files in the cloud (/opt/codex), all run as they happen, since the cloud doesn't run hooks in the background; the session's first starts sharing it live, to the account whose API token the environment gives as AGENT_GRAPH_TOKEN. The environment's agent internet access must allow agentgraph.chofter.com, with all HTTP methods. For Cursor, with --scope project: add the hooks for Cursor's cloud agents to this project's .cursor/hooks.json, to commit. They do nothing on a computer; on a cloud agent's machine, a turn's first installs agent-graph if it isn't there and starts sharing live, to the account whose API token is a secret named AGENT_GRAPH_TOKEN in Cursor's dashboard (Cloud Agents → Secrets), and each records what it's told." }
       ],
       "examples": [
         { "command": "agent-graph install claude-code", "text": "Hooks and /agent-graph for every project." },
@@ -116,8 +118,10 @@
         { "command": "agent-graph install claude-code --scope project", "text": "Just this project, in .claude/ (usually committed)." },
         { "command": "agent-graph install claude-code --cloud", "text": "Record and share this project's sessions in Claude Code's cloud (claude.ai/code): commit .claude/settings.json, and give the cloud environment an API token." },
         { "command": "agent-graph install codex --cloud --yes", "text": "In a Codex cloud environment's setup script (chatgpt.com/codex), after the install script: record and share its tasks, given an API token in the environment's variables." },
+        { "command": "agent-graph install cursor --cloud --scope project", "text": "Record and share this project's Cursor cloud agents: commit .cursor/hooks.json, and add an API token as a secret in Cursor's dashboard." },
         { "command": "agent-graph install claude-code --no-slash-command", "text": "Just the hooks." },
         { "command": "agent-graph install codex", "text": "Record Codex's sessions too, and add $agent-graph to it. (`gemini` adds just the command.)" },
+        { "command": "agent-graph install cursor", "text": "Record Cursor's chats, in its app and its CLI, and add /agent-graph to it." },
         { "command": "agent-graph install claude-code --command \"/opt/bin/agent-graph emit --provider claude-code\"", "text": "Register a different path for the hooks. They use this executable by default." }
       ]
     },
@@ -126,11 +130,11 @@
       "summary": "Remove what `install` added",
       "description": [
         { "text": "Remove what `install` added: Agent Graph's hooks from the agent's settings, and the /agent-graph command if Agent Graph wrote it." },
-        { "text": "Everything else in the settings file is kept, and so is the backup `install` made of it before it had the hooks (settings.json.agent-graph.bak). A settings file left with nothing in it (`{}`) is removed too, unless there's a backup beside it, and so is a .claude, .agents or .gemini folder left empty. A command file you wrote yourself is left alone. Use the same --scope you installed with." },
+        { "text": "Everything else in the settings file is kept, and so is the backup `install` made of it before it had the hooks (settings.json.agent-graph.bak). A settings file left with nothing in it (`{}`) is removed too, unless there's a backup beside it, and so is a .claude, .agents, .cursor or .gemini folder left empty. A command file you wrote yourself is left alone. Use the same --scope you installed with." },
         { "text": "What's already been recorded stays in ~/.agent-graph; delete that folder to remove it." }
       ],
       "options": [
-        { "id": "provider", "flag": "<claude-code|codex|gemini>", "text": "The coding agent to remove Agent Graph from." },
+        { "id": "provider", "flag": "<claude-code|codex|cursor|gemini>", "text": "The coding agent to remove Agent Graph from." },
         { "id": "scope", "flag": "--scope <user|project|local>", "text": "Where it was installed: every project (user, the default), or this one (project or local)." },
         { "id": "dry_run", "flag": "--dry-run", "text": "Show what would be removed, and remove nothing." },
         { "id": "yes", "flag": "-y, --yes", "text": "Don't ask before removing." }

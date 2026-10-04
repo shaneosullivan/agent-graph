@@ -216,9 +216,7 @@ enum Provider {
     ClaudeCode,
     Codex,
     Gemini,
-    /// Hidden until its hooks are checked against a real Cursor
-    /// (docs/cursor.md, step 1), but works, and uninstalls.
-    #[value(hide = true)]
+    /// Its app and CLI, and (with --cloud) its cloud agents.
     Cursor,
 }
 
@@ -681,8 +679,9 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                 .unwrap_or_default();
             println!(
                 "Installed. New Cursor chats, in the app and the CLI, will be recorded in {data}. \
-                 Cursor doesn't yet tell its hooks when it's waiting for you to approve a \
-                 command or answer a question, so those aren't shown."
+                 Cursor's hooks don't say when a chat is waiting for you, so what it's waiting \
+                 on comes from Cursor's own records of it, read while `agent-graph view` or \
+                 `watch-remote` runs."
             );
             offer_autostart(opts.yes);
         } else {

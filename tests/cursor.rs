@@ -126,6 +126,19 @@ fn a_cli_chat_works_and_idles_turn_by_turn() {
     assert_eq!(g.nodes[CLI].state, State::Idle);
 }
 
+/// A CLI chat reopens in the CLI, but not mid-turn (the CLI has no copy of
+/// a chat to open instead).
+#[test]
+fn a_cli_chat_reopens_in_the_cli_between_turns() {
+    use agent_graph::resume::cursor_cli;
+    assert!(cursor_cli(&after(21).nodes[CLI]).is_none(), "mid-turn");
+    let r = cursor_cli(&after(22).nodes[CLI]).expect("between turns");
+    assert_eq!(r.program, "agent");
+    let id = CLI.strip_prefix("cursor:").unwrap();
+    assert_eq!(r.args, ["--resume", id]);
+    assert!(!r.cwd.is_empty());
+}
+
 #[test]
 fn a_print_run_ends_when_it_ends() {
     let g = after(28);
