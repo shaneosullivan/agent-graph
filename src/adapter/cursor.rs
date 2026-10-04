@@ -784,6 +784,7 @@ fn protobuf_fields(message: &[u8]) -> Vec<(u64, ProtoValue<'_>)> {
     out
 }
 
+#[cfg(feature = "cli")]
 fn hex_decode(hex: &str) -> Option<Vec<u8>> {
     let hex = hex.trim();
     (hex.len() % 2 == 0)
@@ -796,6 +797,7 @@ fn hex_decode(hex: &str) -> Option<Vec<u8>> {
         .flatten()
 }
 
+#[cfg(feature = "cli")]
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
