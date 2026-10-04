@@ -303,6 +303,8 @@ impl Shared {
         // their logs (the tail then reads it, as any event).
         apps.flag_blocked(&self.events_dir);
         drop(apps);
+        // Cursor's app chats that it's archived, as ended.
+        crate::adapter::cursor::mark_archived(&self.events_dir);
         if renamed || desktop {
             self.bump();
         }

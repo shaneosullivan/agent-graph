@@ -685,3 +685,22 @@ fn the_viewer_shows_what_cursor_saved_on_its_chats() {
     assert_eq!(g.nodes[&id].state, State::Idle);
     assert!(g.nodes[&id].tasks.is_empty());
 }
+
+#[test]
+fn archived_app_chats_are_listed_from_the_apps_database() {
+    use agent_graph::adapter::cursor::archived_chats;
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("state.vscdb");
+    let db = rusqlite::Connection::open(&store).unwrap();
+    db.execute_batch(
+        "create table composerHeaders (composerId text primary key, isArchived integer, value text); \
+         insert into composerHeaders values ('6c1712be-0000-4000-8000-000000000000', 1, '{}'); \
+         insert into composerHeaders values ('1cf069c4-2f45-49dd-acdb-6fd3f95ec3ed', 0, '{}');",
+    )
+    .unwrap();
+    let archived = archived_chats(&store).unwrap();
+    assert_eq!(
+        archived.into_iter().collect::<Vec<_>>(),
+        ["6c1712be-0000-4000-8000-000000000000"]
+    );
+}

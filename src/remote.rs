@@ -344,6 +344,8 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
         if last_apps.is_none_or(|t| t.elapsed() >= APPS_EVERY) {
             last_apps = Some(Instant::now());
             apps.flag_blocked(&events);
+            // And Cursor's app chats that it's archived, as ended.
+            crate::adapter::cursor::mark_archived(&events);
         }
         // Still here, watching so many sessions: said now and then, while
         // the site can be reached (it's only for the home page, so a

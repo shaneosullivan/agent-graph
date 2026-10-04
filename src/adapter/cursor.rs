@@ -914,6 +914,91 @@ pub fn app_chat(store: &std::path::Path, conversation: &str) -> Option<AppChat> 
     })
 }
 
+/// The app chats that are archived, from Cursor's database at `store`
+/// (`composerHeaders`' `isArchived`). Cursor runs no hook when a chat's
+/// archived (nor `sessionEnd`), so this is how one's known to have ended.
+#[cfg(feature = "cli")]
+pub fn archived_chats(store: &std::path::Path) -> Option<std::collections::BTreeSet<String>> {
+    use rusqlite::{Connection, OpenFlags};
+    if !store.exists() {
+        return None;
+    }
+    let db = Connection::open_with_flags(
+        store,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    db.busy_timeout(std::time::Duration::from_millis(200))
+        .ok()?;
+    let mut statement = db
+        .prepare("select composerId from composerHeaders where isArchived = 1")
+        .ok()?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .ok()?;
+    Some(ids.flatten().collect())
+}
+
+/// Records, in the events in `events_dir`, that the app chats Cursor has
+/// archived have ended (`session.ended`, with `reason` `archived`): each
+/// once, while its log's last word on it isn't that it ended. Returns how
+/// many were marked. (Both the viewer and `watch-remote` do this, as they
+/// do the Claude app's blocked sessions, so the site shows it too.)
+#[cfg(feature = "cli")]
+pub fn mark_archived(events_dir: &std::path::Path) -> usize {
+    let Some(archived) = crate::paths::user_home()
+        .and_then(|home| app_store(&home))
+        .and_then(|store| archived_chats(&store))
+    else {
+        return 0;
+    };
+    let mut marked = 0;
+    for id in archived {
+        let file = events_dir.join(format!("{}.jsonl", file_key(PROVIDER, &id)));
+        let node = node_id(&id, None);
+        let Some(tail) = super::claude_code::read_file(&file, Some(64 * 1024)) else {
+            continue;
+        };
+        // The chat's own last event that says how it stands.
+        let ended = tail
+            .lines()
+            .rev()
+            .find_map(|line| {
+                let event: Value = serde_json::from_str(line).ok()?;
+                let kind = event.get("type")?.as_str()?.to_string();
+                (event.get("node")?.as_str()? == node
+                    && matches!(
+                        kind.as_str(),
+                        "status" | "session.started" | "session.ended"
+                    ))
+                .then_some(kind)
+            })
+            .is_none_or(|kind| kind == "session.ended");
+        if ended {
+            continue;
+        }
+        let draft = Draft::new(
+            &node,
+            Payload::SessionEnded(SessionEnded {
+                reason: Some("archived".to_string()),
+            }),
+        );
+        let source = crate::event::Source {
+            provider: PROVIDER.into(),
+            provider_version: None,
+            adapter: Some("cursor-app@1".into()),
+        };
+        let lines: String = crate::emit::stamp(vec![draft], &source, std::time::SystemTime::now())
+            .iter()
+            .map(|e| crate::emit::to_line(e) + "\n")
+            .collect();
+        if crate::store::append(&file, lines.as_bytes()).is_ok() {
+            marked += 1;
+        }
+    }
+    marked
+}
+
 /// The app chat `conversation`'s saved state, when this hook is an app's
 /// (the CLI's chats aren't in that database).
 #[cfg(feature = "cli")]
