@@ -20,6 +20,7 @@ fn bin() -> Command {
         "CODEX_SESSION_ID",
         "AGENT_GRAPH_PARENT_CURSOR",
         "CURSOR_CONVERSATION_ID",
+        "CLOUD_AGENT_ALL_SECRET_NAMES",
     ] {
         command.env_remove(var);
     }
@@ -2218,4 +2219,112 @@ fn a_cli_subagents_hooks_are_the_subagents_in_its_chat() {
     cli_hook(home.path(), end);
     let tree = cli_graph(home.path());
     assert!(tree.contains("[completed]  Count the files"), "{tree}");
+}
+
+// ---------------------------------------------------------------------------
+// Cursor's cloud runs no `sessionStart`, and a subagent's hooks, in a
+// conversation of their own, don't say whose it is: its first prompt is the
+// task its parent's `subagentStart` gave (docs/cursor.md's cloud probe).
+
+const CLOUD_CHAT: &str = "bc-7a1c2e9f-3b4d-4e5f-8a6b-1c2d3e4f5a6b";
+const CLOUD_SUBAGENT: &str = "bc-40e22588-9c1d-4b2e-a3f4-5d6e7f8a9b0c";
+
+fn cloud_hook(home: &Path, payload: serde_json::Value) {
+    let out = emit(
+        home,
+        &["--provider", "cursor"],
+        &payload.to_string(),
+        &[("CLOUD_AGENT_ALL_SECRET_NAMES", "AGENT_GRAPH_TOKEN")],
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "{}");
+}
+
+fn cloud_payload(name: &str, conversation: &str) -> serde_json::Value {
+    serde_json::json!({"hook_event_name": name, "conversation_id": conversation,
+        "cursor_version": "1.0.0", "workspace_roots": ["/workspace"],
+        "transcript_path": null, "user_email": null})
+}
+
+#[test]
+fn a_cloud_chat_starts_with_its_first_prompt_and_its_subagents_are_in_it() {
+    let home = tempfile::tempdir().unwrap();
+    let mut prompt = cloud_payload("beforeSubmitPrompt", CLOUD_CHAT);
+    prompt["prompt"] = "Count the files, with a subagent".into();
+    cloud_hook(home.path(), prompt);
+    let task = "Count the files in src/ and report the number.";
+    let mut start = cloud_payload("subagentStart", CLOUD_CHAT);
+    start["subagent_id"] = "sub-1".into();
+    start["parent_conversation_id"] = CLOUD_CHAT.into();
+    start["tool_call_id"] = "toolu_task".into();
+    start["subagent_type"] = "explore".into();
+    start["task"] = task.into();
+    cloud_hook(home.path(), start);
+    // The subagent's conversation: its prompt is its task.
+    let mut first = cloud_payload("beforeSubmitPrompt", CLOUD_SUBAGENT);
+    first["prompt"] = task.into();
+    cloud_hook(home.path(), first);
+    let mut shell = cloud_payload("beforeShellExecution", CLOUD_SUBAGENT);
+    shell["command"] = "ls src | wc -l".into();
+    shell["sandbox"] = false.into();
+    cloud_hook(home.path(), shell);
+    // The chat's own command: never asked about, in the cloud.
+    let mut shell = cloud_payload("beforeShellExecution", CLOUD_CHAT);
+    shell["command"] = "git status".into();
+    shell["sandbox"] = false.into();
+    cloud_hook(home.path(), shell);
+
+    let events = home.path().join("events");
+    let names: Vec<String> = std::fs::read_dir(&events)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        [format!("cursor-{CLOUD_CHAT}.jsonl")],
+        "one file, the chat's"
+    );
+    let text = read(events.join(&names[0]));
+    assert_eq!(
+        text.matches("\"type\":\"session.started\"").count(),
+        1,
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("\"type\":\"agent.spawned\"").count(),
+        1,
+        "{text}"
+    );
+    assert!(!text.contains("input"), "no guess that it asks: {text}");
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let started = &lines[0];
+    assert_eq!(started["data"]["cwd"], "/workspace", "{started}");
+    // The subagent's prompt is on its node, not the chat's.
+    let sub = lines.iter().find(|l| l["type"] == "agent.spawned").unwrap()["node"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(sub.starts_with(&format!("cursor:{CLOUD_CHAT}/")), "{sub}");
+    let on_sub: Vec<_> = lines.iter().filter(|l| l["node"] == sub.as_str()).collect();
+    assert!(on_sub.len() > 1, "its own hooks are recorded on it: {text}");
+
+    // Outside the cloud, a conversation that hasn't started still isn't recorded.
+    let other = tempfile::tempdir().unwrap();
+    let mut prompt = cloud_payload("beforeSubmitPrompt", CLOUD_CHAT);
+    prompt["prompt"] = "hi".into();
+    emit(
+        other.path(),
+        &["--provider", "cursor"],
+        &prompt.to_string(),
+        &[],
+    );
+    assert!(
+        !other.path().join("events").exists()
+            || std::fs::read_dir(other.path().join("events"))
+                .unwrap()
+                .next()
+                .is_none()
+    );
 }

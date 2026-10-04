@@ -101,7 +101,10 @@ fn run(args: &[OsString]) -> Result<(), String> {
         .iter()
         .any(|d| matches!(d.payload, Payload::SessionStarted(_)));
     if adapter.needs_start() && !starts && !file.exists() {
-        return Ok(());
+        match parsed.as_ref().ok().and_then(|input| adapter.start(input)) {
+            Some(start) => translation.drafts.insert(0, start),
+            None => return Ok(()),
+        }
     }
     let env_file = adapter
         .env_file_var()

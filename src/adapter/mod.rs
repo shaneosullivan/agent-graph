@@ -71,6 +71,12 @@ pub trait Adapter {
     fn replies_with_json(&self) -> bool {
         false
     }
+    /// For a hook in a conversation that hasn't started (see `needs_start`),
+    /// the start it makes, where the provider never says (Cursor's cloud
+    /// runs no `sessionStart`: a turn's first hook starts it there).
+    fn start(&self, _input: &Value) -> Option<Draft> {
+        None
+    }
     /// Whether a session's hooks are only recorded once it has started (its
     /// events file exists, or this hook starts it). Cursor runs its CLI's
     /// subagents' hooks in conversations of their own, which never start

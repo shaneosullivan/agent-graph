@@ -472,6 +472,74 @@ pub fn install_cursor(hooks_file: &mut Value, command: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// Each Cursor cloud hook starts with this: in Cursor's cloud (its cloud
+/// agents' VMs, whose hooks have `CLOUD_AGENT_ALL_SECRET_NAMES`, set even
+/// with no secrets) it carries on; anywhere else it answers `{}` (Cursor
+/// reads a hook's output as JSON) and does nothing, so the same committed
+/// hooks never record a chat a second time on a computer that records its
+/// own.
+const IN_CURSOR_CLOUD: &str =
+    "[ -n \"${CLOUD_AGENT_ALL_SECRET_NAMES+x}\" ] || { echo '{}'; exit 0; }";
+
+/// Seconds Cursor waits for a turn's first hook in its cloud, which may
+/// first download and install `agent-graph`.
+const CURSOR_CLOUD_START_TIMEOUT_SECS: u64 = 180;
+
+/// A Cursor cloud hook's command for `event`. A turn's first hook
+/// (`beforeSubmitPrompt`) installs `agent-graph` where the VM hasn't it (the
+/// site's install script), and starts sharing, detached (in a session of its
+/// own, where there's `setsid`), to the account whose API token the
+/// `AGENT_GRAPH_TOKEN` secret gives, unless it's already sharing. Every hook
+/// then records its event, once `agent-graph`'s there, and answers `{}`
+/// either way.
+fn cursor_cloud_command(event: &str, site: &str) -> String {
+    let emit =
+        format!("if [ -x {CLOUD_BIN} ]; then {CLOUD_BIN} {CURSOR_MARKER}; else echo '{{}}'; fi");
+    if event != "beforeSubmitPrompt" {
+        return format!("{IN_CURSOR_CLOUD}; {emit}");
+    }
+    let url = if site.trim_end_matches('/') == crate::remote::DEFAULT_URL {
+        String::new()
+    } else {
+        format!(" --url={site}")
+    };
+    let share = format!("{CLOUD_BIN} {CLOUD_SHARE_MARKER}{url}");
+    // (Whether it's sharing is the pid file's process being there: matching
+    // its command line would match this hook's own.)
+    format!(
+        "{IN_CURSOR_CLOUD}; [ -x {CLOUD_BIN} ] || curl -fsSL {site}/install.sh | \
+         AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh >/dev/null 2>&1; \
+         P=\"$HOME/.agent-graph/cursor-cloud-share.pid\"; \
+         if [ -x {CLOUD_BIN} ] && ! kill -0 \"$(cat \"$P\" 2>/dev/null)\" 2>/dev/null; then \
+         mkdir -p \"$HOME/.agent-graph\"; \
+         (if command -v setsid >/dev/null; then exec setsid {share}; else exec {share}; fi) \
+         </dev/null >>\"$HOME/.agent-graph/watch-remote.log\" 2>&1 & echo $! >\"$P\"; fi; {emit}"
+    )
+}
+
+/// Adds our hooks for Cursor's cloud (its cloud agents, at cursor.com/agents
+/// and wherever they're started from) to a project's Cursor hooks file,
+/// replacing any earlier copy. They're committed, and do nothing but in the
+/// cloud (see `IN_CURSOR_CLOUD`).
+pub fn install_cursor_cloud(hooks_file: &mut Value, site: &str) -> Result<(), String> {
+    install_cursor(hooks_file, &format!("agent-graph {CURSOR_MARKER}"))?;
+    let hooks = hooks_file
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .ok_or("hooks isn't an object")?;
+    for (event, list) in hooks.iter_mut() {
+        for hook in list.as_array_mut().into_iter().flatten() {
+            if is_ours_cursor(hook) {
+                hook["command"] = json!(cursor_cloud_command(event, site));
+                if event == "beforeSubmitPrompt" {
+                    hook["timeout"] = json!(CURSOR_CLOUD_START_TIMEOUT_SECS);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Removes our hooks from a Cursor hooks file, and the events and file
 /// fields only they needed. Returns how many were removed.
 pub fn uninstall_cursor(hooks_file: &mut Value) -> Result<usize, String> {
@@ -1172,6 +1240,102 @@ mod tests {
         install_cursor(&mut file, CURSOR_CMD).unwrap();
         uninstall_cursor(&mut file).unwrap();
         assert_eq!(file, json!({}));
+    }
+
+    #[test]
+    fn cursor_cloud_hooks_do_nothing_but_in_the_cloud_and_come_out_again() {
+        let mut file = json!({"version": 1, "hooks": {"stop": [{"command": "./mine.sh"}]}});
+        let theirs = file.clone();
+        install_cursor_cloud(&mut file, crate::remote::DEFAULT_URL).unwrap();
+        assert_eq!(our_cursor_events(&file).len(), CURSOR_HOOKS.len());
+        for (event, list) in file["hooks"].as_object().unwrap() {
+            for hook in list.as_array().unwrap() {
+                let command = hook["command"].as_str().unwrap();
+                if command == "./mine.sh" {
+                    continue;
+                }
+                assert!(command.starts_with(IN_CURSOR_CLOUD), "{command}");
+                assert!(command.contains(CLOUD_BIN), "{command}");
+                // Only a turn's first hook installs and shares.
+                let first = event == "beforeSubmitPrompt";
+                assert_eq!(command.contains("/install.sh"), first, "{event}");
+                assert_eq!(command.contains(CLOUD_SHARE_MARKER), first, "{event}");
+            }
+        }
+        assert_eq!(
+            file["hooks"]["beforeSubmitPrompt"][0]["timeout"],
+            CURSOR_CLOUD_START_TIMEOUT_SECS
+        );
+        // Another site's named; ours isn't.
+        let mut other = json!({});
+        install_cursor_cloud(&mut other, "https://graphs.example.com").unwrap();
+        let start = other["hooks"]["beforeSubmitPrompt"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            start.contains("--url=https://graphs.example.com"),
+            "{start}"
+        );
+        assert_eq!(uninstall_cursor(&mut file).unwrap(), CURSOR_HOOKS.len());
+        assert_eq!(file, theirs);
+    }
+
+    /// The commands themselves, run by `sh` as Cursor would, with a stand-in
+    /// for `agent-graph` that notes how it's run.
+    #[cfg(unix)]
+    #[test]
+    fn cursor_cloud_hooks_answer_json_and_share_once() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let log = home.path().join("runs.txt");
+        let run = |event: &str, cloud: bool| {
+            let mut file = json!({});
+            install_cursor_cloud(&mut file, crate::remote::DEFAULT_URL).unwrap();
+            let command = file["hooks"][event][0]["command"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let mut sh = std::process::Command::new("sh");
+            sh.arg("-c")
+                .arg(command)
+                .env("HOME", home.path())
+                .env_remove("CLOUD_AGENT_ALL_SECRET_NAMES")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped());
+            if cloud {
+                sh.env("CLOUD_AGENT_ALL_SECRET_NAMES", "AGENT_GRAPH_TOKEN");
+            }
+            let mut child = sh.spawn().unwrap();
+            child.stdin.take().unwrap().write_all(b"{}").unwrap();
+            String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+        };
+        // Outside the cloud: `{}`, and nothing run (or installed).
+        assert_eq!(run("stop", false).trim(), "{}");
+        // In the cloud, with no `agent-graph` yet (and no install, for this
+        // isn't the first hook): still `{}`.
+        assert_eq!(run("stop", true).trim(), "{}");
+        let bin = home.path().join(".local/bin/agent-graph");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\necho \"$*\" >>{}\ncase \"$1\" in watch-remote) sleep 5;; *) echo '{{}}';; esac\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(run("beforeSubmitPrompt", true).trim(), "{}");
+        assert_eq!(run("beforeSubmitPrompt", true).trim(), "{}");
+        assert_eq!(run("stop", true).trim(), "{}");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let runs = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(runs.matches(CLOUD_SHARE_MARKER).count(), 1, "{runs}");
+        assert_eq!(runs.matches(CURSOR_MARKER).count(), 3, "{runs}");
+        let pid = std::fs::read_to_string(home.path().join(".agent-graph/cursor-cloud-share.pid"))
+            .unwrap();
+        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
     }
 
     #[test]

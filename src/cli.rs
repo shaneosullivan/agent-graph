@@ -290,13 +290,15 @@ pub fn run() -> ExitCode {
             // environment's setup script.
             let codex_cloud = cloud && matches!(provider, Provider::Codex);
             if cloud
-                && (!matches!(provider, Provider::ClaudeCode | Provider::Codex)
-                    || !matches!(scope, ScopeArg::User | ScopeArg::Project)
+                && (!matches!(
+                    provider,
+                    Provider::ClaudeCode | Provider::Codex | Provider::Cursor
+                ) || !matches!(scope, ScopeArg::User | ScopeArg::Project)
                     || (codex_cloud && !matches!(scope, ScopeArg::User)))
             {
                 eprintln!(
-                    "agent-graph: --cloud is for Claude Code, in a project's settings (--scope project), \
-                     or for Codex, in its cloud environment's setup script"
+                    "agent-graph: --cloud is for Claude Code or Cursor, in a project's settings \
+                     (--scope project), or for Codex, in its cloud environment's setup script"
                 );
                 return ExitCode::FAILURE;
             }
@@ -662,6 +664,17 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
             offer_autostart(opts.yes);
             // Last, so nothing scrolls it out of sight.
             println!("\n{}", restart_notice(true, chatgpt_app(), color_out()));
+        } else if client == Client::Cursor && opts.cloud {
+            let site = crate::remote::DEFAULT_URL;
+            println!(
+                "Installed. Commit .cursor/hooks.json (the hooks do nothing but in Cursor's \
+                 cloud), then, at cursor.com/dashboard:\n\
+                 \x20 1. Cloud Agents → Secrets: AGENT_GRAPH_TOKEN=<an API token from {site}/account>\n\
+                 Cloud agents on this repository, wherever they're started, are then shared live, \
+                 at {site}/watch. (Their VMs reach the site as they are: there's nothing to allow.)"
+            );
+            // Here, on a computer, the token's not needed: it's the cloud's.
+            report_cloud_checks(site, false)?;
         } else if client == Client::Cursor && scope != Scope::Local {
             let data = paths::data_dir()
                 .map(|d| d.display().to_string())
@@ -941,7 +954,9 @@ fn cursor_hooks_change(
         None => install::default_command("cursor")?,
     };
     let mut after = before.clone();
-    if opts.add {
+    if opts.add && opts.cloud {
+        install::install_cursor_cloud(&mut after, crate::remote::DEFAULT_URL)?;
+    } else if opts.add {
         install::install_cursor(&mut after, &command)?;
     } else {
         install::uninstall_cursor(&mut after)?;
@@ -958,7 +973,20 @@ fn cursor_hooks_change(
     } else {
         format!("Cursor hooks file: {}", path.display())
     }];
-    if opts.add {
+    if opts.add && opts.cloud {
+        summary.push(format!(
+            "Adds hooks for Cursor's cloud agents: {}",
+            install::our_cursor_events(&after).join(", ")
+        ));
+        summary.push(
+            "They do nothing but in Cursor's cloud, where the first installs agent-graph \
+             and starts sharing."
+                .into(),
+        );
+        if !install::our_cursor_events(&before).is_empty() {
+            summary.push("(Replaces the Agent Graph hooks already there.)".into());
+        }
+    } else if opts.add {
         summary.push(format!("Hook command:  {command}"));
         summary.push(format!(
             "Adds hooks for: {}",

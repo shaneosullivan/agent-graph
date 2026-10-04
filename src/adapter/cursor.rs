@@ -52,6 +52,24 @@ impl Adapter for Cursor {
         true
     }
 
+    /// In Cursor's cloud, which runs no `sessionStart`, a conversation's
+    /// first prompt starts it (a cloud subagent's, tied to its parent, is in
+    /// its parent's events, which have started).
+    fn start(&self, input: &Value) -> Option<Draft> {
+        if !in_cloud() || str_at(input, &["hook_event_name"]) != Some("beforeSubmitPrompt") {
+            return None;
+        }
+        let conversation = str_at(input, &["conversation_id"])?;
+        Some(Draft::new(
+            node_id(conversation, None),
+            Payload::SessionStarted(SessionStarted {
+                cwd: str_at(input, &["workspace_roots", "0"]).map(String::from),
+                source: Some("cloud".to_string()),
+                ..Default::default()
+            }),
+        ))
+    }
+
     fn replies_with_json(&self) -> bool {
         // Cursor reads a hook's output as JSON, and on Windows its CLI
         // takes none at all for invalid JSON, which blocks the tool.
@@ -65,7 +83,8 @@ impl Adapter for Cursor {
         let hook = str_at(input, &["hook_event_name"]).unwrap_or("");
         // A CLI subagent's own conversation: its hooks are the subagent's,
         // in its chat (see `cli_subagent_here`).
-        let routed = cli_subagent_here(conversation, hook);
+        let routed = cli_subagent_here(conversation, hook)
+            .or_else(|| cloud_subagent_here(conversation, hook, input));
         let (session, key) = match &routed {
             Some(r) => (r.node.clone(), file_key(PROVIDER, &r.root)),
             None => (
@@ -93,7 +112,7 @@ impl Adapter for Cursor {
         let mut drafts = Vec::new();
         // Each of its tool calls says what it is, and what started it: the
         // CLI says nothing of a subagent's start or end.
-        if let (Some(r), "preToolUse") = (&routed, hook) {
+        if let (Some(r), "preToolUse") = (routed.as_ref().filter(|r| r.announce), hook) {
             drafts.push(
                 Draft::new(
                     &r.node,
@@ -194,8 +213,18 @@ impl Adapter for Cursor {
                             ..Default::default()
                         }),
                     )
-                    .with_parent(parent),
+                    .with_parent(&parent),
                 );
+                // In the cloud, its own conversation's hooks don't say whose
+                // it is: its first prompt is its task (see `cloud_subagent_here`).
+                if let Some(task) = str_at(input, &["task"]).filter(|_| in_cloud()) {
+                    note_cloud_subagent(
+                        task,
+                        conversation,
+                        &node_id(conversation, Some(agent)),
+                        &parent,
+                    );
+                }
             }
             "subagentStop" => {
                 let Some(agent) = str_at(input, &["subagent_id"]).map(first_line) else {
@@ -221,7 +250,8 @@ impl Adapter for Cursor {
             // to approve first (one in the sandbox never asks). No hook says
             // whether it's asking: `beforeShellExecution` comes before it
             // asks, and `afterShellExecution` once the command has run.
-            "beforeShellExecution" if may_ask(input) => match cli_asks(input) {
+            // (In the cloud, an agent runs its commands without asking.)
+            "beforeShellExecution" if may_ask(input) && !in_cloud() => match cli_asks(input) {
                 Some(true) => drafts.push(status(
                     &session,
                     State::InputRequired,
@@ -233,7 +263,9 @@ impl Adapter for Cursor {
             // It ran (approved, or never asked about): that command, and only
             // that one (Cursor may have others queued, still to ask about), is
             // done with.
-            "afterShellExecution" if may_ask(input) && cli_asked(input) != Some(false) => {
+            "afterShellExecution"
+                if may_ask(input) && !in_cloud() && cli_asked(input) != Some(false) =>
+            {
                 drafts.push(command(&session, input, false));
             }
             // In the sandbox, or run without asking: nothing to record.
@@ -496,6 +528,9 @@ struct Routed {
     parent: String,
     call_id: String,
     agent_type: Option<String>,
+    /// Whether its hooks say it's started (the CLI's, which say nothing
+    /// else of it), or its parent's `subagentStart` has (the cloud's).
+    announce: bool,
 }
 
 /// The CLI subagent whose conversation `conversation` is, from its own
@@ -526,6 +561,7 @@ fn cli_subagent_here(conversation: &str, hook: &str) -> Option<Routed> {
         parent,
         call_id: info.call_id,
         agent_type: info.agent_type,
+        announce: true,
     })
 }
 
@@ -1246,6 +1282,112 @@ pub fn todos_in(todos: &Value) -> Vec<TaskItem> {
 /// One of Cursor's chat ids (a UUID), fit to name a file or go in a query.
 fn is_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// What marks Cursor's cloud: its cloud agents' hooks, and their commands,
+/// have it (set, even with no secrets); nothing local does (found by
+/// docs/cursor.md's cloud probe).
+pub const CLOUD_VAR: &str = "CLOUD_AGENT_ALL_SECRET_NAMES";
+
+/// Whether this hook runs in Cursor's cloud.
+fn in_cloud() -> bool {
+    std::env::var_os(CLOUD_VAR).is_some()
+}
+
+/// Leaves a note, in the VM, that a cloud subagent whose task is `task` has
+/// started (a hash of it, not the task), as `node`, under `parent`, in chat
+/// `root`'s events, for its own conversation's first hook to find.
+#[cfg(feature = "cli")]
+fn note_cloud_subagent(task: &str, root: &str, node: &str, parent: &str) {
+    let Some(dir) = crate::paths::data_dir().map(|d| d.join(CLOUD_NOTES)) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let id = node.rsplit('/').next().unwrap_or(node);
+    let note = dir.join(format!("task-{:016x}-{id}.json", fnv(task.trim())));
+    let body = serde_json::json!({"root": root, "node": node, "parent": parent});
+    let tmp = note.with_extension("tmp");
+    if std::fs::write(&tmp, body.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, &note);
+    }
+}
+
+#[cfg(not(feature = "cli"))]
+fn note_cloud_subagent(_task: &str, _root: &str, _node: &str, _parent: &str) {}
+
+/// Where, in the data folder, cloud subagents' notes are kept.
+#[cfg(feature = "cli")]
+const CLOUD_NOTES: &str = "cursor-cloud";
+
+/// The cloud subagent whose conversation `conversation` is. Nothing in its
+/// hooks names its parent (found by the cloud probe), but its first hook
+/// (`beforeSubmitPrompt`) has its task as its `prompt`, word for word, which
+/// its parent's `subagentStart` noted first (`note_cloud_subagent`): the
+/// first hook claims that note, as its conversation's, and every later one
+/// reads it. Hooks run in parallel, so a first prompt with no note yet waits
+/// for one briefly, but only while another subagent has just started.
+#[cfg(feature = "cli")]
+fn cloud_subagent_here(conversation: &str, hook: &str, input: &Value) -> Option<Routed> {
+    if !in_cloud() || !is_id(conversation.trim_start_matches("bc-")) {
+        return None;
+    }
+    let dir = crate::paths::data_dir()?.join(CLOUD_NOTES);
+    let claimed = dir.join(format!("conversation-{conversation}.json"));
+    let route = |path: &std::path::Path| -> Option<Routed> {
+        let note: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        Some(Routed {
+            root: str_at(&note, &["root"])?.to_string(),
+            node: str_at(&note, &["node"])?.to_string(),
+            parent: str_at(&note, &["parent"])?.to_string(),
+            call_id: String::new(),
+            agent_type: None,
+            announce: false,
+        })
+    };
+    if let Some(routed) = route(&claimed) {
+        return Some(routed);
+    }
+    if hook != "beforeSubmitPrompt" {
+        return None;
+    }
+    let prefix = format!("task-{:016x}-", fnv(str_at(input, &["prompt"])?.trim()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+    loop {
+        let notes: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(&dir)
+            .ok()?
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("task-"))
+            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+            .collect();
+        let mut mine: Vec<_> = notes
+            .iter()
+            .filter(|(_, p)| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with(&prefix))
+            })
+            .collect();
+        mine.sort();
+        for (_, note) in mine {
+            // Claimed by moving it: another conversation with the same task
+            // finds it gone, and takes the next.
+            if std::fs::rename(note, &claimed).is_ok() {
+                return route(&claimed);
+            }
+        }
+        let started_just_now = notes.iter().any(|(at, _)| {
+            at.elapsed()
+                .is_ok_and(|age| age < std::time::Duration::from_secs(10))
+        });
+        if !started_just_now || std::time::Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[cfg(not(feature = "cli"))]
+fn cloud_subagent_here(_conversation: &str, _hook: &str, _input: &Value) -> Option<Routed> {
+    None
 }
 
 /// A command Cursor may be asking you about (`may_ask`), or done with: an

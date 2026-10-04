@@ -209,6 +209,8 @@ A cloud agent at cursor.com/agents, on a branch of a throwaway repository with t
 
 ### A. Hooks in the repository (as Claude Code's cloud)
 
+**Built (2026-10-04)**, but for the site's tab, and not yet tried in Cursor's cloud: `agent-graph install cursor --cloud --scope project`. The hooks are `install::cursor_cloud_command`; the cloud mode is `Adapter::start` and `cloud_subagent_here` in `src/adapter/cursor.rs`, with its notes in `~/.agent-graph/cursor-cloud/`.
+
 The docs say cloud agents run **command hooks from the repository's `.cursor/hooks.json`**, but not `sessionStart`, `sessionEnd` or the MCP hooks. Everything else fires. That's Claude Code's cloud again, where the hooks are committed to the repository and do nothing anywhere else:
 
 - `agent-graph install cursor --cloud` adds our hooks to the project's `.cursor/hooks.json`, to be committed. Each starts with a guard, so it does nothing but in Cursor's cloud: `CLOUD_AGENT_ALL_SECRET_NAMES` is set (found by the probe). So a teammate's local Cursor doesn't record twice, or at all if they haven't installed Agent Graph.
@@ -264,7 +266,7 @@ Build B only if A's step 1 shows cloud hooks don't run, or users ask for agents 
 ## Order of work
 
 1. ~~Local step 1, then the adapter, installing and the needs-you checks, with tests.~~ Done (2026-10-04), with what Cursor's own databases add: names, todo lists, plans, what an app chat's waiting on you for, CLI subagents, archived chats. Still to do locally: resuming a CLI chat (`agent --resume <id>`), un-hiding `install cursor`, and the site's "Cursor" tab and FAQ. Then a release, which also ends the stray Claude Code session that Homebrew's 0.1.7 makes of every Cursor chat.
-2. ~~Cloud step 1~~ (done). Plan A: `install cursor --cloud`, a cloud mode for `emit` (the first `beforeSubmitPrompt` starts the session; subagents tied by their task; no command guess), the host label, and "Cursor cloud" on the site.
+2. ~~Cloud step 1~~ (done). ~~Plan A~~ (built, 2026-10-04; to try for real in the cloud, then the site's tab): `install cursor --cloud`, a cloud mode for `emit` (the first `beforeSubmitPrompt` starts the session; subagents tied by their task; no command guess), the host label, and "Cursor cloud" on the site.
 3. C, to see whether cloud agents on your own computer come for free.
 4. B, only if needed.
 

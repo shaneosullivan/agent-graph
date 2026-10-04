@@ -308,8 +308,9 @@ fn random_secret() -> Result<String, String> {
 
 /// What to call this computer on the account page and at /watch: its host
 /// name, or, in Claude Code's cloud (whose containers are all called "vm"),
-/// "Claude Code cloud", and in Codex's (whose containers have random
-/// names), "Codex cloud".
+/// "Claude Code cloud", in Codex's (whose containers have random names),
+/// "Codex cloud", and in Cursor's (whose VMs are all called "cursor"),
+/// "Cursor cloud".
 pub fn host_name() -> String {
     if in_claude_code_cloud(std::env::var("CLAUDE_CODE_REMOTE").ok().as_deref()) {
         return CLAUDE_CODE_CLOUD.to_string();
@@ -320,6 +321,9 @@ pub fn host_name() -> String {
             .as_deref(),
     ) {
         return CODEX_CLOUD.to_string();
+    }
+    if std::env::var_os(crate::adapter::cursor::CLOUD_VAR).is_some() {
+        return CURSOR_CLOUD.to_string();
     }
     std::process::Command::new("hostname")
         .output()
@@ -333,6 +337,9 @@ pub fn host_name() -> String {
 }
 
 const CLAUDE_CODE_CLOUD: &str = "Claude Code cloud";
+
+/// Cursor's cloud agents' VMs (see `adapter::cursor::CLOUD_VAR`).
+const CURSOR_CLOUD: &str = "Cursor cloud";
 
 /// Whether CLAUDE_CODE_REMOTE says this is Claude Code's cloud.
 fn in_claude_code_cloud(remote: Option<&str>) -> bool {
