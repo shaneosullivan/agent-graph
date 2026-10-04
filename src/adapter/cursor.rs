@@ -874,7 +874,37 @@ pub fn app_titles(
 pub struct AppChat {
     pub plan_pending: bool,
     pub todos: Vec<TaskItem>,
+    /// What the chat's waiting on you for, as Cursor saved it as it asked.
+    pub waiting: Option<Waiting>,
+    /// Whether `waiting` is known (the app's database says, as the CLI's
+    /// doesn't): then the hooks' guess (`reducer::MAY_ASK`) isn't needed.
+    pub knows_waits: bool,
 }
+
+/// What an app chat's waiting on you for, from the tool calls Cursor saves
+/// as they're made (each message's `toolFormerData`): a tool call to approve
+/// (its `additionalData.reviewData.status` is `Requested`, while it's
+/// `loading`, until it's `Done`; not a plan's, which stays `Requested`), or
+/// a question (an `ask_question` that's `loading`, with no
+/// `userDecision`, until it's `completed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Waiting {
+    Approval,
+    Question,
+}
+
+impl Waiting {
+    /// What the chat shows while it's waiting.
+    pub fn summary(self) -> &'static str {
+        match self {
+            Waiting::Approval => APPROVAL_WAIT,
+            Waiting::Question => "Asks you a question",
+        }
+    }
+}
+
+/// What a chat waiting for its tool call to be approved shows.
+pub const APPROVAL_WAIT: &str = "Waiting for your approval";
 
 /// An app chat's saved state (`AppChat`), from Cursor's database at
 /// `store`. `None` if it isn't there (a CLI chat's isn't), or can't be read.
@@ -910,9 +940,58 @@ pub fn app_chat(store: &std::path::Path, conversation: &str) -> Option<AppChat> 
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .map(|t| todos_in(&t))
         .unwrap_or_default();
+    // Its messages are `bubbleId:<chat>:<message>`: this range, by the
+    // table's key, is the chat's, and only those with a tool call are read.
+    let mut waits = db
+        .prepare(
+            "select json_extract(value, '$.toolFormerData.name'), \
+             json_extract(value, '$.toolFormerData.status'), \
+             json_extract(value, '$.toolFormerData.userDecision'), \
+             json_extract(value, '$.toolFormerData.additionalData.reviewData.status') \
+             from cursorDiskKV where key >= ?1 and key < ?2 \
+             and value like '%\"toolFormerData\"%'",
+        )
+        .ok()?;
+    let rows = waits
+        .query_map(
+            [
+                format!("bubbleId:{conversation}:"),
+                format!("bubbleId:{conversation};"),
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .ok()?;
+    let mut waiting = None;
+    for (name, status, decision, review) in rows.flatten() {
+        let loading = status.as_deref() == Some("loading");
+        // (A plan's stays `Requested` once it's done: whether it's waiting
+        // to be built is `hasPendingPlan`.)
+        if review.as_deref() == Some("Requested")
+            && loading
+            && name.as_deref() != Some("create_plan")
+        {
+            waiting = Some(Waiting::Approval);
+            break;
+        }
+        if name.as_deref() == Some("ask_question")
+            && status.as_deref() == Some("loading")
+            && decision.is_none()
+        {
+            waiting = Some(Waiting::Question);
+        }
+    }
     Some(AppChat {
         plan_pending: plan == Some(1),
         todos,
+        waiting,
+        knows_waits: true,
     })
 }
 
@@ -985,20 +1064,145 @@ pub fn mark_archived(events_dir: &std::path::Path) -> usize {
                 reason: Some("archived".to_string()),
             }),
         );
-        let source = crate::event::Source {
-            provider: PROVIDER.into(),
-            provider_version: None,
-            adapter: Some("cursor-app@1".into()),
-        };
-        let lines: String = crate::emit::stamp(vec![draft], &source, std::time::SystemTime::now())
-            .iter()
-            .map(|e| crate::emit::to_line(e) + "\n")
-            .collect();
-        if crate::store::append(&file, lines.as_bytes()).is_ok() {
+        if append_app_event(&file, draft) {
             marked += 1;
         }
     }
     marked
+}
+
+/// Records, in the events in `events_dir`, what Cursor's app chats are
+/// waiting on you for (`AppChat::waiting`), as they start and stop: a
+/// `status` that needs you, then one that's working again. Only chats whose
+/// logs changed in the last half hour, and are at work. (Both the viewer
+/// and `watch-remote` do this, as they do archived chats, so the site shows
+/// it too.) Returns how many were marked.
+#[cfg(feature = "cli")]
+pub fn mark_waiting(events_dir: &std::path::Path) -> usize {
+    let Some(store) = crate::paths::user_home().and_then(|home| app_store(&home)) else {
+        return 0;
+    };
+    let Ok(entries) = std::fs::read_dir(events_dir) else {
+        return 0;
+    };
+    let recent = std::time::Duration::from_secs(30 * 60);
+    let mut marked = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name
+            .strip_prefix(&format!("{PROVIDER}-"))
+            .and_then(|n| n.strip_suffix(".jsonl"))
+        else {
+            continue;
+        };
+        let fresh = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age < recent);
+        if !fresh || !is_id(id) {
+            continue;
+        }
+        let Some(chat) = app_chat(&store, id) else {
+            continue;
+        };
+        let file = entry.path();
+        let node = node_id(id, None);
+        let Some(latest) = latest_word(&file, &node) else {
+            continue;
+        };
+        let ours = latest.adapter.as_deref() == Some(APP_ADAPTER);
+        let status = match chat.waiting {
+            // Already said, and nothing since.
+            Some(w) if ours && latest.summary.as_deref() == Some(w.summary()) => continue,
+            // Not at work: a turn that ended while asking isn't asking.
+            Some(_)
+                if matches!(latest.kind.as_str(), "session.ended")
+                    || latest.state.as_deref() == Some("idle") =>
+            {
+                continue;
+            }
+            Some(w) => (State::InputRequired, Some(w.summary().to_string())),
+            None if ours && latest.state.as_deref() == Some("input_required") => {
+                (State::Working, None)
+            }
+            None => continue,
+        };
+        let draft = Draft::new(
+            &node,
+            Payload::Status(Status {
+                state: status.0,
+                summary: status.1,
+                title: None,
+                turn_end: false,
+            }),
+        );
+        if append_app_event(&file, draft) {
+            marked += 1;
+        }
+    }
+    marked
+}
+
+/// Who wrote an event from what Cursor's app saved (not a hook).
+#[cfg(feature = "cli")]
+const APP_ADAPTER: &str = "cursor-app@1";
+
+/// Appends `draft` to the events `file`, as written from what Cursor's app
+/// saved.
+#[cfg(feature = "cli")]
+fn append_app_event(file: &std::path::Path, draft: Draft) -> bool {
+    let source = crate::event::Source {
+        provider: PROVIDER.into(),
+        provider_version: None,
+        adapter: Some(APP_ADAPTER.into()),
+    };
+    let lines: String = crate::emit::stamp(vec![draft], &source, std::time::SystemTime::now())
+        .iter()
+        .map(|e| crate::emit::to_line(e) + "\n")
+        .collect();
+    crate::store::append(file, lines.as_bytes()).is_ok()
+}
+
+/// The last event in `file` that says how `node` stands: not a task list,
+/// a mark, or a command proposed (which say nothing of whether it's waiting
+/// on you).
+#[cfg(feature = "cli")]
+struct Latest {
+    kind: String,
+    state: Option<String>,
+    summary: Option<String>,
+    adapter: Option<String>,
+}
+
+#[cfg(feature = "cli")]
+fn latest_word(file: &std::path::Path, node: &str) -> Option<Latest> {
+    let tail = super::claude_code::read_file(file, Some(64 * 1024))?;
+    tail.lines().rev().find_map(|line| {
+        let event: Value = serde_json::from_str(line).ok()?;
+        if str_at(&event, &["node"])? != node {
+            return None;
+        }
+        let kind = str_at(&event, &["type"])?;
+        let says_nothing = match kind {
+            "tasks.updated" | "task.upserted" | "task.deleted" | "unknown" => true,
+            "activity" => {
+                bool_at(&event, &["data", "may_ask"]).unwrap_or(false)
+                    || matches!(
+                        str_at(&event, &["data", "tool"]),
+                        Some(PLAN_MODE | TURN_STOPPED)
+                    )
+            }
+            _ => false,
+        };
+        (!says_nothing).then(|| Latest {
+            kind: kind.to_string(),
+            state: str_at(&event, &["data", "state"]).map(String::from),
+            summary: str_at(&event, &["data", "summary"]).map(String::from),
+            adapter: str_at(&event, &["source", "adapter"]).map(String::from),
+        })
+    })
 }
 
 /// The app chat `conversation`'s saved state, when this hook is an app's

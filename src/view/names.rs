@@ -188,8 +188,8 @@ impl Names {
             }
             let conversation = id.strip_prefix("cursor:").unwrap_or(id);
             let chat = cursor::cli_chat(&chats, conversation).map(|c| cursor::AppChat {
-                plan_pending: false,
                 todos: c.todos,
+                ..Default::default()
             });
             changed |= update(&mut self.cursor_chats, id, chat);
         }

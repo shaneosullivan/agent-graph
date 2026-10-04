@@ -346,6 +346,8 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
             apps.flag_blocked(&events);
             // And Cursor's app chats that it's archived, as ended.
             crate::adapter::cursor::mark_archived(&events);
+            // And what they're waiting on you for (an approval, an answer).
+            crate::adapter::cursor::mark_waiting(&events);
         }
         // Still here, watching so many sessions: said now and then, while
         // the site can be reached (it's only for the home page, so a

@@ -704,3 +704,133 @@ fn archived_app_chats_are_listed_from_the_apps_database() {
         ["6c1712be-0000-4000-8000-000000000000"]
     );
 }
+
+/// A tool call's message, as Cursor's app saves it (only what's read).
+fn tool_message(chat: &str, message: &str, tool: &serde_json::Value) -> (String, String) {
+    (
+        format!("bubbleId:{chat}:{message}"),
+        serde_json::json!({"type": 2, "toolFormerData": tool}).to_string(),
+    )
+}
+
+#[test]
+fn what_an_app_chat_is_waiting_on_you_for_is_in_its_saved_tool_calls() {
+    use agent_graph::adapter::cursor::{Waiting, app_chat};
+    let dir = tempfile::tempdir().unwrap();
+    let (store, writer) = app_store_with_a_plan(dir.path());
+    let chat = "927511cd-0000-4000-8000-000000000000";
+    let put = |message: &str, tool: serde_json::Value| {
+        let (key, value) = tool_message(chat, message, &tool);
+        writer
+            .execute(
+                "insert or replace into cursorDiskKV values (?1, ?2)",
+                [key, value],
+            )
+            .unwrap();
+    };
+    // Nothing waiting: a command that ran.
+    put(
+        "a",
+        serde_json::json!({"name": "run_terminal_command_v2", "status": "completed",
+            "additionalData": {"status": "success"}}),
+    );
+    // Another chat's request isn't this one's.
+    let (key, value) = tool_message(
+        "927511cd-0000-4000-8000-000000000001",
+        "z",
+        &serde_json::json!({"name": "run_terminal_command_v2", "status": "loading",
+            "additionalData": {"reviewData": {"status": "Requested"}}}),
+    );
+    writer
+        .execute("insert into cursorDiskKV values (?1, ?2)", [key, value])
+        .unwrap();
+    // A plan, made and built: its review stays `Requested`.
+    put(
+        "p",
+        serde_json::json!({"name": "create_plan", "status": "completed",
+            "additionalData": {"reviewData": {"status": "Requested", "selectedOption": "none"}}}),
+    );
+    let read = || app_chat(&store, chat).unwrap();
+    assert_eq!(read().waiting, None);
+    assert!(read().knows_waits);
+    // Asking to run a command, as Cursor saves it when it asks.
+    put(
+        "b",
+        serde_json::json!({"name": "run_terminal_command_v2", "status": "loading",
+            "additionalData": {"status": "cancelled", "blockReason": "Shell allowlist is empty",
+                "reviewData": {"status": "Requested", "selectedOption": "rejectAndTellWhatToDoDifferently",
+                    "approvalType": "user"}}}),
+    );
+    assert_eq!(read().waiting, Some(Waiting::Approval));
+    // Approved.
+    put(
+        "b",
+        serde_json::json!({"name": "run_terminal_command_v2", "status": "completed",
+            "additionalData": {"status": "success",
+                "reviewData": {"status": "Done", "selectedOption": "run", "approvalType": "user"}}}),
+    );
+    assert_eq!(read().waiting, None);
+    // A question, shown.
+    put(
+        "c",
+        serde_json::json!({"name": "ask_question", "status": "loading"}),
+    );
+    assert_eq!(read().waiting, Some(Waiting::Question));
+    // Answered.
+    put(
+        "c",
+        serde_json::json!({"name": "ask_question", "status": "completed", "userDecision": "accepted",
+            "additionalData": {"status": "submitted"}}),
+    );
+    assert_eq!(read().waiting, None);
+}
+
+#[test]
+fn the_viewer_shows_what_an_app_chat_waits_for_and_drops_the_guess() {
+    use agent_graph::adapter::cursor::{AppChat, Waiting};
+    let id = format!(
+        "cursor:{}",
+        approvals()[0]["conversation_id"].as_str().unwrap()
+    );
+    let with = |waiting: Option<Waiting>, knows_waits: bool, n: usize, waited: u64| {
+        let mut chats = std::collections::BTreeMap::new();
+        chats.insert(
+            id.clone(),
+            AppChat {
+                waiting,
+                knows_waits,
+                ..Default::default()
+            },
+        );
+        let mut g = approvals_after(n, waited, Capture::default());
+        agent_graph::timeline::with_cursor(&mut g, &chats);
+        let node = &g.nodes[&id];
+        (node.state, node.attention.clone())
+    };
+    // A command proposed (payload 3), 20 s ago, that the app's database says
+    // is waiting for approval: for sure, and said so.
+    assert_eq!(
+        with(Some(Waiting::Approval), true, 4, 20),
+        (
+            State::InputRequired,
+            Some("Waiting for your approval".to_string())
+        )
+    );
+    // That it says isn't: running, slowly, not the guess.
+    assert_eq!(with(None, true, 4, 20), (State::Working, None));
+    // Where it can't say (a CLI chat): the guess stands.
+    assert_eq!(
+        with(None, false, 4, 20),
+        (
+            State::InputRequired,
+            Some(agent_graph::reducer::MAY_ASK.to_string())
+        )
+    );
+    // A question, at work.
+    assert_eq!(
+        with(Some(Waiting::Question), true, 2, 1).1.as_deref(),
+        Some("Asks you a question")
+    );
+    // The turn's over (payload 11): a request left over isn't waiting.
+    assert_eq!(with(Some(Waiting::Approval), true, 12, 1).0, State::Idle);
+}

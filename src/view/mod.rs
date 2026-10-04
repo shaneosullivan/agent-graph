@@ -305,6 +305,8 @@ impl Shared {
         drop(apps);
         // Cursor's app chats that it's archived, as ended.
         crate::adapter::cursor::mark_archived(&self.events_dir);
+        // And what they're waiting on you for (an approval, an answer).
+        crate::adapter::cursor::mark_waiting(&self.events_dir);
         if renamed || desktop {
             self.bump();
         }

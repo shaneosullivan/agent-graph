@@ -240,9 +240,11 @@ pub fn retitle(graph: &mut Graph, titles: &BTreeMap<String, String>) {
     }
 }
 
-/// Puts what Cursor's app has saved of its chats (`Local::cursor`) on them:
-/// a todo list as the chat's tasks, and an idle chat with a plan waiting for
-/// you as needing you.
+/// Puts what Cursor has saved of its chats (`Local::cursor`) on them: a todo
+/// list as the chat's tasks; a chat at work that's waiting on you for an
+/// approval or an answer as needing you, and, where the app's database says
+/// what it's waiting for, not otherwise (not the hooks' guess); and an idle
+/// chat with a plan waiting as needing you.
 pub fn with_cursor(graph: &mut Graph, chats: &BTreeMap<String, crate::adapter::cursor::AppChat>) {
     for (id, chat) in chats {
         let Some(node) = graph.nodes.get_mut(id) else {
@@ -259,6 +261,21 @@ pub fn with_cursor(graph: &mut Graph, chats: &BTreeMap<String, crate::adapter::c
                     status: t.status,
                 })
                 .collect();
+        }
+        // (A turn that ended, or was stopped, while asking isn't asking.)
+        let at_work = matches!(node.state, State::Working | State::InputRequired);
+        match chat.waiting.filter(|_| at_work) {
+            Some(waiting) => {
+                node.state = State::InputRequired;
+                node.attention = Some(waiting.summary().to_string());
+            }
+            None if chat.knows_waits
+                && node.attention.as_deref() == Some(crate::reducer::MAY_ASK) =>
+            {
+                node.state = State::Working;
+                node.attention = None;
+            }
+            None => {}
         }
         if chat.plan_pending && node.state == State::Idle {
             node.state = State::InputRequired;
