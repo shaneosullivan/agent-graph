@@ -25,7 +25,10 @@ fn waits_the_app_saves_are_written_into_the_chats_log_as_they_start_and_stop() {
     let home = tempfile::tempdir().unwrap();
     // SAFETY: this test binary has this one test, so nothing else reads the
     // environment meanwhile.
-    unsafe { std::env::set_var("HOME", home.path()) };
+    unsafe {
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("USERPROFILE", home.path());
+    };
     let store = agent_graph::adapter::cursor::app_store(home.path()).unwrap();
     std::fs::create_dir_all(store.parent().unwrap()).unwrap();
     let db = rusqlite::Connection::open(&store).unwrap();
