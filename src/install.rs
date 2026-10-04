@@ -198,10 +198,11 @@ pub fn default_command(provider: &str) -> Result<String, String> {
 /// (Git Bash, on Windows). Codex runs a hook on Windows with PowerShell
 /// (`powershell -NoProfile -Command …`), which takes a line that starts with
 /// a quoted path for a string, not a command (and fails at `emit`): there,
-/// PowerShell's call operator, `&`, comes first.
+/// PowerShell's call operator, `&`, comes first. Cursor's CLI runs hooks
+/// with PowerShell on Windows too.
 fn hook_command(exe: &str, provider: &str, windows: bool) -> String {
     let command = format!("\"{exe}\" emit --provider {provider}");
-    if windows && provider == "codex" {
+    if windows && (provider == "codex" || provider == "cursor") {
         format!("& {command}")
     } else {
         command
@@ -382,6 +383,142 @@ fn events_with(settings: &Value, ours: fn(&Value) -> bool) -> Vec<String> {
                         .is_some_and(|hs| hs.iter().any(ours))
                 })
             })
+        })
+        .map(|(event, _)| event.clone())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Cursor (docs/cursor.md)
+
+/// The Cursor hooks Agent Graph needs, and the tools each listens for.
+/// Cursor runs every hook synchronously (it has no `async`), so each is
+/// short; `emit` takes well under 0.1 s.
+const CURSOR_HOOKS: &[(&str, Option<&str>)] = &[
+    ("sessionStart", None),
+    ("sessionEnd", None),
+    ("beforeSubmitPrompt", None),
+    ("stop", None),
+    ("subagentStart", None),
+    ("subagentStop", None),
+    ("preToolUse", Some(CURSOR_TOOLS)),
+    ("postToolUse", Some(CURSOR_TOOLS)),
+    ("postToolUseFailure", Some("^Task$")),
+];
+
+/// The tools the graph needs to hear about: subagents, the shell (to see
+/// another agent started), the todo list, and questions and plans for you
+/// (which Cursor doesn't send to hooks yet).
+const CURSOR_TOOLS: &str = "^(Task|Shell|TodoWrite|todo_write|UpdateTodos|AskQuestion|CreatePlan)$";
+
+/// Seconds Cursor waits for one of our hooks.
+const CURSOR_TIMEOUT_SECS: u64 = 5;
+
+/// Identifies our Cursor hooks, whatever path the command starts with.
+pub const CURSOR_MARKER: &str = "emit --provider cursor";
+
+/// Cursor's hooks file: `~/.cursor/hooks.json`, or a project's
+/// `.cursor/hooks.json`. Cursor has no file of a project's that isn't
+/// committed, so there's none for `Scope::Local`.
+pub fn cursor_hooks_path(scope: Scope, project_dir: &Path) -> Option<PathBuf> {
+    match scope {
+        Scope::User => Some(paths::user_home()?.join(".cursor").join("hooks.json")),
+        Scope::Project => Some(project_dir.join(".cursor").join("hooks.json")),
+        Scope::Local => None,
+    }
+}
+
+/// Adds our hooks to a Cursor hooks file, replacing any earlier copy.
+/// `command` must contain `CURSOR_MARKER`. Cursor's format is flat: each
+/// event has a list of hooks (`{"command", "timeout", "matcher"}`), with
+/// no groups.
+pub fn install_cursor(hooks_file: &mut Value, command: &str) -> Result<(), String> {
+    if !command.contains(CURSOR_MARKER) {
+        return Err(format!(
+            "the hook command must contain `{CURSOR_MARKER}`, which is how Agent Graph \
+             finds its hooks again (to replace or remove them), so nothing was changed: \
+             {command}"
+        ));
+    }
+    uninstall_cursor(hooks_file)?;
+    let file = hooks_file
+        .as_object_mut()
+        .ok_or("the hooks file isn't a JSON object")?;
+    file.entry("version").or_insert(json!(1));
+    let hooks = file
+        .entry("hooks")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or("hooks isn't an object")?;
+    for (event, matcher) in CURSOR_HOOKS {
+        let mut hook = Map::new();
+        hook.insert("command".into(), json!(command));
+        hook.insert("timeout".into(), json!(CURSOR_TIMEOUT_SECS));
+        if let Some(matcher) = matcher {
+            hook.insert("matcher".into(), json!(matcher));
+        }
+        hooks
+            .entry(*event)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| format!("hooks.{event} isn't a list"))?
+            .push(Value::Object(hook));
+    }
+    Ok(())
+}
+
+/// Removes our hooks from a Cursor hooks file, and the events and file
+/// fields only they needed. Returns how many were removed.
+pub fn uninstall_cursor(hooks_file: &mut Value) -> Result<usize, String> {
+    let Some(file) = hooks_file.as_object_mut() else {
+        return Err("the hooks file isn't a JSON object".into());
+    };
+    let Some(hooks) = file.get_mut("hooks") else {
+        return Ok(0);
+    };
+    let hooks = hooks.as_object_mut().ok_or("hooks isn't an object")?;
+    let mut removed = 0;
+    let mut emptied = Vec::new();
+    for (event, list) in hooks.iter_mut() {
+        let Some(list) = list.as_array_mut() else {
+            continue;
+        };
+        let before = list.len();
+        list.retain(|h| !is_ours_cursor(h));
+        removed += before - list.len();
+        if list.is_empty() && before > 0 {
+            emptied.push(event.clone());
+        }
+    }
+    for event in emptied {
+        hooks.shift_remove(&event);
+    }
+    if hooks.is_empty() && removed > 0 {
+        file.shift_remove("hooks");
+        // The version is only there for our hooks, if nothing else is.
+        if file.len() == 1 && file.get("version") == Some(&json!(1)) {
+            file.shift_remove("version");
+        }
+    }
+    Ok(removed)
+}
+
+fn is_ours_cursor(hook: &Value) -> bool {
+    hook.get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|c| c.contains(CURSOR_MARKER))
+}
+
+/// The events with one of our Cursor hooks.
+pub fn our_cursor_events(hooks_file: &Value) -> Vec<String> {
+    let Some(hooks) = hooks_file.get("hooks").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    hooks
+        .iter()
+        .filter(|(_, list)| {
+            list.as_array()
+                .is_some_and(|l| l.iter().any(is_ours_cursor))
         })
         .map(|(event, _)| event.clone())
         .collect()
@@ -986,6 +1123,55 @@ mod tests {
         );
         // Still found again, to replace or remove.
         assert!(hook_command(exe, "codex", true).contains(CODEX_MARKER));
+    }
+
+    #[test]
+    fn cursor_on_windows_runs_the_hook_through_powershells_call_operator_too() {
+        let exe = "C:/Users/me/.local/bin/agent-graph.exe";
+        assert_eq!(
+            hook_command(exe, "cursor", true),
+            "& \"C:/Users/me/.local/bin/agent-graph.exe\" emit --provider cursor"
+        );
+        assert!(hook_command(exe, "cursor", true).contains(CURSOR_MARKER));
+    }
+
+    const CURSOR_CMD: &str = "agent-graph emit --provider cursor";
+
+    #[test]
+    fn cursor_hooks_go_in_flat_lists_with_cursors_version() {
+        let mut file = json!({});
+        install_cursor(&mut file, CURSOR_CMD).unwrap();
+        assert_eq!(file["version"], 1);
+        let start = &file["hooks"]["sessionStart"];
+        assert_eq!(
+            start,
+            &json!([{"command": CURSOR_CMD, "timeout": CURSOR_TIMEOUT_SECS}])
+        );
+        assert_eq!(file["hooks"]["preToolUse"][0]["matcher"], CURSOR_TOOLS);
+        assert_eq!(our_cursor_events(&file).len(), CURSOR_HOOKS.len());
+        // Again: replaced, not added twice.
+        install_cursor(&mut file, CURSOR_CMD).unwrap();
+        assert_eq!(file["hooks"]["sessionStart"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cursor_hooks_come_out_again_leaving_the_users_own() {
+        let mut file = json!({"version": 1, "hooks": {"stop": [{"command": "./mine.sh"}]}});
+        let theirs = file.clone();
+        install_cursor(&mut file, CURSOR_CMD).unwrap();
+        assert_eq!(file["hooks"]["stop"].as_array().unwrap().len(), 2);
+        assert_eq!(uninstall_cursor(&mut file).unwrap(), CURSOR_HOOKS.len());
+        assert_eq!(file, theirs);
+        // Into an empty file and out again: nothing's left.
+        let mut file = json!({});
+        install_cursor(&mut file, CURSOR_CMD).unwrap();
+        uninstall_cursor(&mut file).unwrap();
+        assert_eq!(file, json!({}));
+    }
+
+    #[test]
+    fn a_cursor_hook_command_must_be_findable_again() {
+        assert!(install_cursor(&mut json!({}), "my-hook.sh").is_err());
     }
 
     /// Codex's own test vector (codex-rs/config/src/fingerprint_tests.rs, as

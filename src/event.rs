@@ -153,6 +153,11 @@ pub struct AgentSpawned {
     pub purpose: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<bool>,
+    /// The spawn request (on the agent's parent) that started it, where the
+    /// provider says so (Cursor's `subagentStart`): it's paired with that
+    /// one, not guessed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

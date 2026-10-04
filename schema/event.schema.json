@@ -113,7 +113,8 @@
       "properties": {
         "agent_type": { "type": "string" },
         "purpose": { "type": "string" },
-        "background": { "type": "boolean" }
+        "background": { "type": "boolean" },
+        "call_id": { "type": "string", "description": "The spawn request, on the agent's parent, that started it, when the provider says so." }
       }
     },
     "agent.finished": {

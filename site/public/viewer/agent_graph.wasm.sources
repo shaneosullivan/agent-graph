@@ -5,6 +5,7 @@
     "docs/cli-help.json",
     "src/adapter/claude_code.rs",
     "src/adapter/codex.rs",
+    "src/adapter/cursor.rs",
     "src/adapter/mod.rs",
     "src/adapter/shell.rs",
     "src/clock.rs",
@@ -46,5 +47,5 @@
     "[profile.release]\nlto = \"thin\"\ncodegen-units = 1\nstrip = true",
     "[profile.wasm]\ninherits = \"release\"\nopt-level = \"z\"\nlto = true\npanic = \"abort\""
   ],
-  "hash": "81edbdd2dca2da63873d3a66e30bffb6e520f2ee96453e1a9a600540702cd277"
+  "hash": "8d7af5d40dc42ed53f5eb3114fd94a3de021c2858b726c53d0e5a7ff68f3cd50"
 }

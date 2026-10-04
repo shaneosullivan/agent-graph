@@ -700,8 +700,14 @@ impl Reducer {
                 if !node.state.is_terminal() {
                     node.state = State::Working;
                 }
-                if node.spawned_by.is_none() {
-                    self.bind_by_guess(&e.node);
+                // Paired with the request it names, on its parent; else guessed.
+                let named = d.call_id.zip(node.parent.clone());
+                let id = e.node.clone();
+                if let Some((call_id, parent)) = named {
+                    self.bind(&parent, &call_id, &id);
+                }
+                if self.nodes[&id].spawned_by.is_none() {
+                    self.bind_by_guess(&id);
                 }
             }
             Payload::AgentFinished(d) => {
@@ -1608,8 +1614,11 @@ fn within(earlier: &str, later: &str, max: Duration) -> bool {
 }
 
 /// The agent CLIs the sessions of each provider (that has an adapter) run.
-const PROVIDER_PROGRAMS: &[(&str, &[&str])] =
-    &[("claude-code", &["claude"]), ("codex", &["codex"])];
+const PROVIDER_PROGRAMS: &[(&str, &[&str])] = &[
+    ("claude-code", &["claude"]),
+    ("codex", &["codex"]),
+    ("cursor", &["cursor-agent"]),
+];
 
 /// Whether session `node` surely isn't running `program`, the command a
 /// spawn request named: `node`'s provider is one whose CLIs are known, and
@@ -1627,11 +1636,15 @@ fn surely_not(node: &Node, program: &str) -> bool {
 }
 
 /// Whether session `node` is (probably) running `program`, the command a
-/// spawn request named: `claude` for a `claude-code` session, or the program
-/// `agent-graph run` was given.
+/// spawn request named: `claude` for a `claude-code` session (or any of
+/// its provider's `PROVIDER_PROGRAMS`, such as `cursor-agent` for `cursor`),
+/// or the program `agent-graph run` was given.
 fn runs(node: &Node, program: &str) -> bool {
     node.provider == program
         || node.provider.starts_with(&format!("{program}-"))
+        || PROVIDER_PROGRAMS
+            .iter()
+            .any(|(provider, programs)| *provider == node.provider && programs.contains(&program))
         || (node.provider == "run" && node.title.as_deref() == Some(program))
 }
 

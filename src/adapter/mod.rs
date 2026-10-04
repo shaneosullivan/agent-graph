@@ -6,6 +6,7 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod cursor;
 pub mod shell;
 
 use serde_json::Value;
@@ -65,16 +66,23 @@ pub trait Adapter {
     fn env_file_var(&self) -> Option<&'static str> {
         None
     }
+    /// Whether the provider reads a hook's output as JSON, so `emit` must
+    /// always answer with some (`{}`, or the variables a starting session
+    /// passes on: see `emit`). Otherwise `emit` prints nothing.
+    fn replies_with_json(&self) -> bool {
+        false
+    }
 }
 
 /// The provider ids the adapters record (`by_name` knows each; keep them
 /// in step, and add each to the reducer's `PROVIDER_PROGRAMS`).
-pub const PROVIDERS: &[&str] = &["claude-code", "codex"];
+pub const PROVIDERS: &[&str] = &["claude-code", "codex", "cursor"];
 
 pub fn by_name(name: &str) -> Option<Box<dyn Adapter>> {
     match name {
         "claude-code" | "claude" => Some(Box::new(claude_code::ClaudeCode)),
         "codex" => Some(Box::new(codex::Codex)),
+        "cursor" => Some(Box::new(cursor::Cursor)),
         _ => None,
     }
 }

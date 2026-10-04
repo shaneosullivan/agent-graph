@@ -216,8 +216,8 @@ enum Provider {
     ClaudeCode,
     Codex,
     Gemini,
-    /// Only the /agent-graph command: Cursor's sessions aren't recorded, so
-    /// it isn't offered until they are (but still works, and uninstalls).
+    /// Hidden until its hooks are checked against a real Cursor
+    /// (docs/cursor.md, step 1), but works, and uninstalls.
     #[value(hide = true)]
     Cursor,
 }
@@ -482,10 +482,20 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
             ),
             None => {}
         }
+    } else if client == Client::Cursor {
+        match cursor_hooks_change(scope, &cwd, &opts)? {
+            Some(change) => changes.push(change),
+            None if scope == Scope::Local => notes.push(
+                "Cursor has no project settings that aren't committed, so its hooks go in \
+                 your own (--scope user) or the project's (--scope project)."
+                    .into(),
+            ),
+            None => {}
+        }
     } else if opts.add {
         notes.push(format!(
-            "{} sessions aren't recorded yet: only Claude Code and Codex have hooks so far. \
-             The command shows the sessions that are.",
+            "{} sessions aren't recorded yet: only Claude Code, Codex and Cursor have hooks \
+             so far. The command shows the sessions that are.",
             slash::client_name(client)
         ));
     }
@@ -652,6 +662,16 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
             offer_autostart(opts.yes);
             // Last, so nothing scrolls it out of sight.
             println!("\n{}", restart_notice(true, chatgpt_app(), color_out()));
+        } else if client == Client::Cursor && scope != Scope::Local {
+            let data = paths::data_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default();
+            println!(
+                "Installed. New Cursor chats, in the app and the CLI, will be recorded in {data}. \
+                 Cursor doesn't yet tell its hooks when it's waiting for you to approve a \
+                 command or answer a question, so those aren't shown."
+            );
+            offer_autostart(opts.yes);
         } else {
             println!("Installed.");
         }
@@ -880,6 +900,101 @@ fn inside_project(scope: Scope, cwd: &Path, path: &Path) -> Result<(), String> {
     }
     store::refuse_links(cwd, path)
         .map_err(|e| format!("{e}; Agent Graph won't read or write through links in a project"))
+}
+
+/// The change to Cursor's hooks file for the hooks, if any.
+fn cursor_hooks_change(
+    scope: Scope,
+    cwd: &Path,
+    opts: &InstallOptions,
+) -> Result<Option<Change>, String> {
+    let Some(link) = install::cursor_hooks_path(scope, cwd) else {
+        if scope == Scope::Local {
+            return Ok(None);
+        }
+        return Err("can't find your home directory".into());
+    };
+    inside_project(scope, cwd, &link)?;
+    let is_link = std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink());
+    let path = if is_link {
+        std::fs::canonicalize(&link)
+            .map_err(|e| format!("{} is a link that can't be followed: {e}", link.display()))?
+    } else {
+        link.clone()
+    };
+    let existed = path.exists();
+    let before: Value = if existed {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        serde_json::from_str(&text).map_err(|e| {
+            format!(
+                "{} isn't valid JSON, so it wasn't changed: {e}",
+                path.display()
+            )
+        })?
+    } else {
+        serde_json::json!({})
+    };
+    let command = match &opts.hook_command {
+        Some(c) => c.clone(),
+        None if scope == Scope::Project => install::path_command("cursor"),
+        None => install::default_command("cursor")?,
+    };
+    let mut after = before.clone();
+    if opts.add {
+        install::install_cursor(&mut after, &command)?;
+    } else {
+        install::uninstall_cursor(&mut after)?;
+    }
+    if after == before {
+        return Ok(None);
+    }
+    let mut summary = vec![if is_link {
+        format!(
+            "Cursor hooks file: {} (a link to {})",
+            link.display(),
+            path.display()
+        )
+    } else {
+        format!("Cursor hooks file: {}", path.display())
+    }];
+    if opts.add {
+        summary.push(format!("Hook command:  {command}"));
+        summary.push(format!(
+            "Adds hooks for: {}",
+            install::our_cursor_events(&after).join(", ")
+        ));
+        if !install::our_cursor_events(&before).is_empty() {
+            summary.push("(Replaces the Agent Graph hooks already there.)".into());
+        }
+        if scope == Scope::Project && opts.hook_command.is_none() {
+            summary.push(
+                "Project settings are shared, so the hooks run `agent-graph` from PATH: \
+                 everyone who uses the project needs it installed."
+                    .into(),
+            );
+        }
+    } else {
+        summary.push(format!(
+            "Removes hooks for: {}",
+            install::our_cursor_events(&before).join(", ")
+        ));
+    }
+    let backup = link.with_extension("json.agent-graph.bak");
+    let remove = !opts.add
+        && !is_link
+        && after == serde_json::json!({})
+        && std::fs::symlink_metadata(&backup).is_err();
+    if remove {
+        summary.push("Removes the hooks file: nothing else is in it.".into());
+    }
+    Ok(Some(Change {
+        path,
+        contents: (!remove)
+            .then(|| serde_json::to_string_pretty(&after).expect("serializable") + "\n"),
+        summary,
+        backup: (existed && install::our_cursor_events(&before).is_empty()).then_some(backup),
+    }))
 }
 
 /// The change to Claude Code's settings for the hooks, if any.
