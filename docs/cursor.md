@@ -79,6 +79,14 @@ Run in the app (3.23.12) and the CLI (2026.10.01), by `scripts/cursor-probe.sh`.
 - **Cursor asked for no approval**, so whether one fires a hook is still unknown. Commands ran in Cursor's sandbox (`sandbox: true`), and `claude -p` outside it (`sandbox: false`), all without asking. The near two-minute gap before `claude -p` was the plan prompt's question, waiting for you, which fired no hook. Checking approvals needs a run with Cursor set to ask before running commands. The timer in "Needing you" isn't built until then.
 - **The CLI:** an interactive `agent` sends no `sessionEnd` when you quit. `agent -p` sends `sessionStart`, its tools and `sessionEnd`, with no `beforeSubmitPrompt` and no `stop`. Its chats are kept in `~/.cursor/chats/`, and `agent --resume <chat id>` resumes one.
 
+### A live run, with the real hooks (2026-10-04)
+
+`install cursor`, then `agent -p` asking for two subagents and a `claude -p`:
+
+- **Cursor runs Claude Code's hooks too** (from `~/.claude/settings.json`), with its own payloads: Claude Code's adapter made a `claude-code:<chat id>` session of the chat, from events it didn't know. It now ignores any payload with `cursor_version`. Until that's released, anyone with both installed gets a stray Claude Code session for each Cursor chat.
+- **In `agent -p`, subagents fire no `subagentStart` or `subagentStop`**, only their `Task` calls' `preToolUse`. They show as requested, and the requests close when the run ends.
+- `claude -p` was refused in `-p` mode (the shell's sandbox), so linking a session a chat starts is tested only in `tests/`.
+
 ### The adapter (`src/adapter/cursor.rs`)
 
 Node ids: `cursor:<conversation_id>` for a session, and `cursor:<conversation_id>/<subagent_id>` for a subagent. The file key is the conversation's, so a session's subagents share its events file.

@@ -181,3 +181,16 @@ fn cursor_hooks_answer_with_json() {
     assert!(!adapter::by_name("codex").unwrap().replies_with_json());
     assert!(!adapter::by_name("claude-code").unwrap().replies_with_json());
 }
+
+#[test]
+fn claude_codes_hooks_ignore_the_payloads_cursor_runs_them_with() {
+    // Cursor loads Claude Code's hooks as well as its own, and runs them
+    // with its payloads: they'd make a Claude Code session of each chat.
+    for payload in payloads() {
+        let t = adapter::by_name("claude-code")
+            .unwrap()
+            .translate(&payload, Capture::default())
+            .unwrap();
+        assert!(t.drafts.is_empty(), "{payload}");
+    }
+}

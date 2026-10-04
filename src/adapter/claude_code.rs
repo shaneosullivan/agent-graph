@@ -47,6 +47,14 @@ impl Adapter for ClaudeCode {
 
     fn translate(&self, input: &Value, capture: Capture) -> Result<Translation, String> {
         let session = str_at(input, &["session_id"]).ok_or("payload has no session_id")?;
+        // Cursor runs Claude Code's hooks too, with its own payloads (its
+        // chats are recorded by its own hooks: `install cursor`).
+        if input.get("cursor_version").is_some() {
+            return Ok(Translation {
+                file_key: file_key(PROVIDER, session),
+                drafts: Vec::new(),
+            });
+        }
         let session_node = node_id(session, None);
         let agent_id = str_at(input, &["agent_id"]);
         // The node the hook fired in: the subagent if there is one, else the session.
