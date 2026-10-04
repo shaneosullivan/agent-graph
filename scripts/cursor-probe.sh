@@ -9,6 +9,9 @@
 #   scripts/cursor-probe.sh uninstall          puts back the hooks.json there was before
 #   scripts/cursor-probe.sh hook               what each hook runs (reads stdin)
 #
+# The first hook also writes the names (only) of every variable it gets to
+# cursor-env-names.txt.
+#
 # A hook prints `{}`: Cursor reads a hook's output as JSON. On sessionStart
 # it also sets AGENT_GRAPH_PROBE_ENV for the session's commands, to see
 # whether a session's `env` reaches them.
@@ -70,6 +73,11 @@ hook)
   payload=$(tr -d '\n\r')
   printf '%s\n' "$payload" >>"$PROBE/cursor.jsonl"
   event=$(printf '%s' "$payload" | sed -n 's/.*"hook_event_name" *: *"\([^"]*\)".*/\1/p')
+  # Once: the name (not the value) of every variable a hook gets, for
+  # whatever marks where it runs (a cloud VM, say).
+  if [ ! -f "$PROBE/cursor-env-names.txt" ]; then
+    { echo "--- $at $event: every variable's name"; env | cut -d= -f1 | sort; } >"$PROBE/cursor-env-names.txt"
+  fi
   {
     echo "--- $at $event (pid $$, parent $PPID)"
     # Values only for what can't be a secret: just the name for anything

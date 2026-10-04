@@ -214,7 +214,7 @@ The docs say cloud agents run **command hooks from the repository's `.cursor/hoo
 3. At cursor.com/agents, start an agent on that branch with:
    > Run each of these shell commands, and show me all their output, without changing anything: `env | cut -d= -f1 | sort`; `echo CURSOR_CODE_REMOTE=$CURSOR_CODE_REMOTE AGENT_GRAPH_PROBE=${AGENT_GRAPH_PROBE:+set}`; `id; uname -a; echo HOME=$HOME`; `ps -eo pid,ppid,args | head -40`; `ls -la ~/.cursor ~/.cursor/chats 2>&1 | head -40`; `cat ~/.agent-graph-probe/cursor.jsonl | cut -c1-400`; `curl -sS -o /dev/null -w '%{http_code}\n' https://agentgraph.chofter.com/install.sh`.
 4. Send it a follow-up:
-   > Now use one subagent to count the files in the repository and report the count. Then show me the output of `cat ~/.agent-graph-probe/cursor-env.txt` and `cat ~/.agent-graph-probe/cursor.jsonl | cut -c1-400`.
+   > Now use one subagent to count the files in the repository and report the count. Then show me the output of `cat ~/.agent-graph-probe/cursor-env.txt ~/.agent-graph-probe/cursor-env-names.txt` and `cat ~/.agent-graph-probe/cursor.jsonl | cut -c1-400`.
 5. Paste me both answers.
 
 That shows:
