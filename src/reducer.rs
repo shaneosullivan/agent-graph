@@ -1299,13 +1299,26 @@ impl Reducer {
     /// `id`'s turn is over (it's idle) or it has ended, so every call it made
     /// to start a child in the foreground has returned, whether or not the
     /// provider said so: Claude Code only reports calls that succeed. Their
-    /// waits close, and they can't be paired with a later child.
+    /// waits close, and they can't be paired with a later child. A subagent
+    /// such a call started, and that hasn't said it's finished, was stopped
+    /// with the turn (Cursor says nothing of one when you send a message
+    /// mid-turn, which stops it).
     fn calls_over(&mut self, id: &str, ts: &str) {
         // Only calls in the foreground have waits, which stay open until
         // they return.
         for at in self.index.unreturned.remove(id).unwrap_or_default() {
             let spawn = &mut self.nodes.get_mut(id).expect("indexed").spawns[at];
             spawn.returned = true;
+            let stopped = (spawn.kind == SpawnKind::Agent && !spawn.background)
+                .then(|| spawn.child.clone())
+                .flatten();
+            if let Some(child) = stopped.and_then(|c| self.nodes.get_mut(&c)) {
+                if !child.state.is_terminal() {
+                    child.state = State::Canceled;
+                    child.ended_at = Some(ts.to_string());
+                }
+            }
+            let spawn = &mut self.nodes.get_mut(id).expect("indexed").spawns[at];
             let wait = self
                 .index
                 .call(id, &spawn.call_id)

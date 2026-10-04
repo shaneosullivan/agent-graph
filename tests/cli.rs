@@ -18,6 +18,8 @@ fn bin() -> Command {
         "CLAUDE_ENV_FILE",
         "CODEX_THREAD_ID",
         "CODEX_SESSION_ID",
+        "AGENT_GRAPH_PARENT_CURSOR",
+        "CURSOR_CONVERSATION_ID",
     ] {
         command.env_remove(var);
     }
@@ -495,7 +497,7 @@ fn a_starting_session_links_to_its_parent_and_passes_itself_on() {
     assert_eq!(
         read(&env_file),
         format!(
-            "export AGENT_GRAPH_PARENT='{node}'\nexport AGENT_GRAPH_PARENT_CODEX=''\nexport TRACEPARENT='{traceparent}'\n"
+            "export AGENT_GRAPH_PARENT='{node}'\nexport AGENT_GRAPH_PARENT_CODEX=''\nexport AGENT_GRAPH_PARENT_CURSOR=''\nexport TRACEPARENT='{traceparent}'\n"
         ),
         "sessions it starts will link back to it"
     );

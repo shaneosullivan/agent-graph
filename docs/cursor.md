@@ -1,6 +1,6 @@
 # Cursor support: plan
 
-**Built so far (not yet released):** the local adapter (`src/adapter/cursor.rs`), from Cursor's docs, with tests on payloads written from them (`tests/cursor.rs`). Also `emit` answering Cursor's hooks with JSON, and passing `AGENT_GRAPH_PARENT` on through `sessionStart`'s `env`. A subagent is paired with the exact `Task` call that started it (`agent.spawned`'s new `call_id`). `install cursor` writes the hooks, but stays hidden until step 1 has been run against a real Cursor. The probe for step 1 is `scripts/cursor-probe.sh`. Not built yet: the command-approval timer, resuming a chat, `agent` in the shell parser, the site, and the cloud.
+**Built so far (not yet released):** the local adapter (`src/adapter/cursor.rs`), checked against a real Cursor (step 1, below), with tests on its payloads (`tests/cursor.rs`). `emit` answers Cursor's hooks with `{}`. Sessions a chat starts link to it through `CURSOR_CONVERSATION_ID`. A subagent is paired with the exact `Task` call that started it (`agent.spawned`'s `call_id`), and one still at work when its turn is stopped is canceled. `install cursor` writes the hooks, but stays hidden until it has been run for real. Not built yet: resuming a chat, the site, and the cloud.
 
 Agent Graph records Claude Code's and Codex's sessions through their hooks. This is the plan for recording Cursor's the same way. Locally, that's the Cursor app's agent and the Cursor CLI (`cursor-agent`, also installed as `agent`). In the cloud, it's Cursor's cloud agents, which are started from cursor.com/agents, the app, the phone app, Slack, GitHub, Linear or the API.
 
@@ -34,7 +34,7 @@ Cursor's hooks are the same idea as Claude Code's and Codex's: a command, with J
 
 ### What Cursor doesn't give us
 
-- **No event says it needs you.** There is no `Notification` or `PermissionRequest`. Nothing fires when Cursor asks to run a command, and asking a question (`AskQuestion`) or waiting on plan approval (`CreatePlan`) fires no hooks at all. Plan mode even skips `preToolUse`. Cursor's staff [called this a bug](https://forum.cursor.com/t/cursor-cli-askquestion-tool-skips-pretooluse-and-posttooluse-hooks/161836) in May 2026, and it was still there in July.
+- **No event says it needs you.** There is no `Notification` or `PermissionRequest`, and no hook is documented for Cursor asking to run a command. Asking a question (`AskQuestion`) or waiting on plan approval (`CreatePlan`) fires no hooks at all. Plan mode even skips `preToolUse`. Cursor's staff [called this a bug](https://forum.cursor.com/t/cursor-cli-askquestion-tool-skips-pretooluse-and-posttooluse-hooks/161836) in May 2026, and it was still there in July.
 - **Subagent hooks are unreliable.** A background subagent's `subagentStop` [doesn't fire](https://forum.cursor.com/t/166681), and on 3.11.19 subagent hooks [went silent until a restart](https://forum.cursor.com/t/subagentstart-and-subagentstop-hooks-never-fire-foreground-or-background-while-beforeshellexecution-from-the-same-hooks-json-works-normally/168758).
 - **No plan or todo event is documented.** Cursor's agent keeps a todo list, so its tool probably reaches `postToolUse`; step 1 finds its name.
 
@@ -65,33 +65,47 @@ That shows:
 - whether `sessionStart`'s `env` reaches the session's commands (`AGENT_GRAPH_PROBE_ENV`);
 - how to resume a chat (`agent --resume <id>`, and whether the app has a `cursor://` link to a chat).
 
+### What step 1 found (2026-10-04)
+
+Run in the app (3.23.12) and the CLI (2026.10.01), by `scripts/cursor-probe.sh`. Where Cursor's docs and Cursor differ, Cursor wins:
+
+- **`subagentStart` and `subagentStop` both carry `subagent_id`**, which is the `Task` call's id (the same as `tool_call_id`). `subagentStop` also has `child_conversation_id`, and `agent_transcript_path` is null. No `postToolUse` came for either `Task` call.
+- **Ids can hold a newline**: `call-<uuid>-11`, then a newline, then `fc_<uuid>`. Node ids use the first line, which is unique within a chat.
+- **Hooks inside a subagent** carry the subagent's own `conversation_id` and `parent_tool_call_id` (its `Task` call), but nothing naming the chat it's in, no transcript path, and none of `sessionStart`'s `env`. A hook can't remember one hook to the next, so they're left out: a subagent shows as working from its start to its stop.
+- **`sessionStart`'s `env` reaches the later hooks, but not the commands Cursor runs.** The commands do have **`CURSOR_CONVERSATION_ID`** (and `CURSOR_AGENT`), which is how a session they start links to the chat. Hooks also get `CURSOR_PROJECT_DIR`, `CURSOR_VERSION`, `CURSOR_TRANSCRIPT_PATH` and `CURSOR_USER_EMAIL`, and in the CLI, `CURSOR_INVOKED_AS`. Nothing of Claude Code's environment leaked into Cursor's.
+- **Sending a message while a turn is running stops the turn**: `stop` with `status: aborted`, then `beforeSubmitPrompt`. A subagent still at work then hears nothing more, so the reducer cancels a foreground subagent whose call never returned when its parent's turn ends.
+- **Hooks run in parallel** (the probe's own log interleaved twice). `emit` appends safely.
+- **No hook fired for the todo list, the plan or the question.** Plan mode wrote its plan to `~/.cursor/plans/<name>.plan.md` without a hook, and no `CreatePlan` or `AskQuestion` came.
+- **Cursor asked for no approval**, so whether one fires a hook is still unknown. Commands ran in Cursor's sandbox (`sandbox: true`), and `claude -p` outside it (`sandbox: false`), all without asking. The near two-minute gap before `claude -p` was the plan prompt's question, waiting for you, which fired no hook. Checking approvals needs a run with Cursor set to ask before running commands. The timer in "Needing you" isn't built until then.
+- **The CLI:** an interactive `agent` sends no `sessionEnd` when you quit. `agent -p` sends `sessionStart`, its tools and `sessionEnd`, with no `beforeSubmitPrompt` and no `stop`. Its chats are kept in `~/.cursor/chats/`, and `agent --resume <chat id>` resumes one.
+
 ### The adapter (`src/adapter/cursor.rs`)
 
 Node ids: `cursor:<conversation_id>` for a session, and `cursor:<conversation_id>/<subagent_id>` for a subagent. The file key is the conversation's, so a session's subagents share its events file.
 
 | Hook | Events |
 |---|---|
-| `sessionStart` | `session.started` (`cwd` from `workspace_roots`, `transcript_path`, `model`), and returns `{"env": {"AGENT_GRAPH_PARENT": "cursor:<id>"}}` so sessions it starts link back |
+| `sessionStart` | `session.started` (`cwd` from `workspace_roots`, `transcript_path`) |
 | `sessionEnd` | `session.ended`; also `agent.finished: canceled` for its agents still running when `reason` is aborted, window_close or user_close |
 | `beforeSubmitPrompt` | `status: working` |
 | `stop` | `status: idle`; `agent.finished: failed` with Cursor's error when `status` is error |
 | `subagentStart` | `agent.spawned` under its parent (`parent_conversation_id`), with `subagent_type` and `task` as its purpose, cut short, and the `Task` call that started it (`tool_call_id`), so it's paired with that call exactly, not guessed |
-| `subagentStop` | `agent.finished` with its `status`. It has no `subagent_id`, so the agent is named by its transcript file's name (the path only: the file isn't read). The summary is kept only when bodies are captured |
+| `subagentStop` | `agent.finished` with its `status` (the summary only when bodies are captured) |
 | `preToolUse` `Task` | `spawn.requested` (kind agent, background as the call says) |
-| `postToolUse` `Task` | `spawn.returned`; and, for a foreground subagent, `agent.finished` too, so it ends even when `subagentStop` doesn't fire |
+| `postToolUse` `Task` | `spawn.returned` (Cursor didn't send one in step 1) |
 | `postToolUseFailure` `Task` | `agent.finished: failed` |
-| `postToolUse` todo tool | `tasks.updated` |
-| `beforeShellExecution` | `spawn.requested` (kind session) when it starts an agent, from the shell parser, as for the others |
-| `afterShellExecution` | `spawn.returned` for an agent launch; otherwise `status: working` (see below) |
+| `postToolUse` todo tool | `tasks.updated`, if Cursor ever sends it (it didn't in step 1) |
+| `preToolUse` `Shell` | `spawn.requested` (kind session) when it starts an agent, from the shell parser, as for the others |
+| `postToolUse` `Shell` | `spawn.returned` for an agent launch |
 | `preToolUse` `AskQuestion` or `CreatePlan` | `status: input_required` (Cursor doesn't send these yet: see below) |
 
-Labels are cut to 200 characters, and prompts, commands and outputs aren't kept unless body capture is on, as for the others. Every hook prints `{}`, except `sessionStart`, which prints its `env`.
+Any hook with `parent_tool_call_id` (inside a subagent) records nothing. Labels are cut to 200 characters, and prompts, commands and outputs aren't kept unless body capture is on, as for the others. Every hook prints `{}`.
 
 ### Needing you, without an event for it
 
 This is the one real gap, and it matters most, since "needs you" is what Agent Graph is for. Agent Graph **doesn't read or follow Cursor's transcripts** for it: that would put far more in the logs than the graph needs, and much of a transcript is private (your code, prompts and the model's output). It goes only on what hooks say. That means:
 
-1. **Commands waiting for approval.** If step 1 shows `beforeShellExecution` fires before Cursor asks you, and `afterShellExecution` only once the command has run, then a command started and not finished is shown as "Running a command". After about 10 seconds that becomes "Running a command (it may need your approval)". The wording says it's a guess, since a slow command looks the same. It needs a clock in the reducer, as "went quiet" already has. If step 1 shows Cursor asks before `beforeShellExecution` fires, there's nothing to go on, and approvals aren't shown.
+1. **Commands waiting for approval.** (Step 1 saw none: Cursor didn't ask. Not built until a run with approvals on shows what fires.) If it shows `beforeShellExecution` fires before Cursor asks you, and `afterShellExecution` only once the command has run, then a command started and not finished is shown as "Running a command". After about 10 seconds that becomes "Running a command (it may need your approval)". The wording says it's a guess, since a slow command looks the same. It needs a clock in the reducer, as "went quiet" already has. If step 1 shows Cursor asks before `beforeShellExecution` fires, there's nothing to go on, and approvals aren't shown.
 2. **Questions and plans** fire no hooks at all, so they aren't shown. The session stays "working" until you answer and something fires again. When Cursor fixes its bug and `AskQuestion` and `CreatePlan` reach `preToolUse`, they become "Asks: <the question>" and "Plan ready for your review", as for Claude Code and Codex. The adapter handles those tool names already, so it'll work as soon as Cursor sends them.
 3. **The turn ending** (`stop`) is reliable, and shows the session as idle, which the viewer already counts as your turn.
 
@@ -99,7 +113,7 @@ The FAQ and the install tab should say plainly that Cursor's approvals and quest
 
 ### Linking sessions
 
-- **Started from Cursor's shell.** `sessionStart`'s `env` sets `AGENT_GRAPH_PARENT` for the session's commands, which the other providers' adapters already read. If step 1 shows the commands also get a `CURSOR_*` variable naming the conversation, read that too, as `CODEX_THREAD_ID` is read for Codex. That works even in a subagent, and in the cloud, where `sessionStart` doesn't fire.
+- **Started from Cursor's shell.** Cursor's commands have `CURSOR_CONVERSATION_ID`, read as `CODEX_THREAD_ID` is for Codex: a session starting with it set is the chat's child. Sessions that pass `AGENT_GRAPH_PARENT` on also pass the `CURSOR_CONVERSATION_ID` they saw (`AGENT_GRAPH_PARENT_CURSOR`), so one further down can tell which is nearer. In a subagent's commands it's the subagent's own conversation, which nothing names, so those link to nothing. (`sessionStart`'s `env` doesn't reach commands.)
 - **Starting Cursor from Claude Code or Codex.** `cursor-agent` is already among the shell parser's agents. Add `agent`, but only with Cursor's flags (`-p`, `--resume`, `--model`), since `agent` alone is too common a name to count as Cursor.
 - The process tree links what the environment doesn't, as now.
 

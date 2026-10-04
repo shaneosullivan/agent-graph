@@ -3,13 +3,15 @@
 //! Every payload carries `conversation_id` (the chat), `generation_id` (its
 //! turn) and `hook_event_name`, in camelCase (`sessionStart`, `preToolUse`).
 //! Tool payloads carry `tool_name`, `tool_input` and `tool_use_id`.
-//! Subagents come with `subagentStart`, which names the agent
-//! (`subagent_id`), the chat that started it (`parent_conversation_id`) and
-//! the `Task` call that did (`tool_call_id`).
+//! Subagents come with `subagentStart` and `subagentStop`, which name the
+//! agent (`subagent_id`: the `Task` call that started it), and the chat
+//! that started it (`parent_conversation_id`).
 //!
-//! Written from Cursor's docs; the payloads still need checking against a
-//! real Cursor (docs/cursor.md, step 1). Transcripts are never read: only
-//! the hook payloads themselves.
+//! Checked against Cursor 3.23 and its CLI (2026.10.01). Cursor's ids can
+//! hold a newline (`call-…-11` then `fc_…`): node ids use the first line.
+//! Hooks inside a subagent carry the subagent's own conversation and
+//! `parent_tool_call_id`, but nothing naming its chat, so they're left out.
+//! Transcripts are never read: only the hook payloads themselves.
 
 use serde_json::Value;
 
@@ -58,6 +60,14 @@ impl Adapter for Cursor {
             .ok_or("payload has no conversation_id")?;
         let session = node_id(conversation, None);
         let hook = str_at(input, &["hook_event_name"]).unwrap_or("");
+        // Inside a subagent: its own conversation, which nothing ties to
+        // the chat it's in (a hook can't remember one from another).
+        if str_at(input, &["parent_tool_call_id"]).is_some() {
+            return Ok(Translation {
+                file_key: file_key(PROVIDER, conversation),
+                drafts: Vec::new(),
+            });
+        }
         let label = |path: &[&str]| str_at(input, path).map(|s| truncate_chars(s, LABEL_MAX));
         let body = |path: &[&str]| {
             capture
@@ -104,13 +114,17 @@ impl Adapter for Cursor {
                 drafts.push(status(&session, State::Idle, summary));
             }
             "subagentStart" => {
-                let agent =
-                    str_at(input, &["subagent_id"]).ok_or("subagentStart has no subagent_id")?;
+                let agent = str_at(input, &["subagent_id"])
+                    .map(first_line)
+                    .ok_or("subagentStart has no subagent_id")?;
                 // Cursor nests subagents one level at most, but the parent
                 // may be named as the subagent that started this one.
                 let parent = str_at(input, &["parent_conversation_id"])
-                    .filter(|p| *p != conversation && *p != agent)
-                    .map_or_else(|| session.clone(), |p| node_id(conversation, Some(p)));
+                    .filter(|p| *p != conversation && first_line(p) != agent)
+                    .map_or_else(
+                        || session.clone(),
+                        |p| node_id(conversation, Some(first_line(p))),
+                    );
                 drafts.push(
                     Draft::new(
                         node_id(conversation, Some(agent)),
@@ -128,12 +142,7 @@ impl Adapter for Cursor {
                 );
             }
             "subagentStop" => {
-                // It has no subagent_id: its transcript is named for it (the
-                // path is all that's used: the file isn't read).
-                let agent = str_at(input, &["subagent_id"])
-                    .map(String::from)
-                    .or_else(|| transcript_stem(str_at(input, &["agent_transcript_path"])?));
-                let Some(agent) = agent else {
+                let Some(agent) = str_at(input, &["subagent_id"]).map(first_line) else {
                     return Ok(Translation {
                         file_key: file_key(PROVIDER, conversation),
                         drafts,
@@ -145,7 +154,7 @@ impl Adapter for Cursor {
                     _ => FinishStatus::Completed,
                 };
                 drafts.push(Draft::new(
-                    node_id(conversation, Some(&agent)),
+                    node_id(conversation, Some(agent)),
                     Payload::AgentFinished(AgentFinished {
                         status,
                         summary: body(&["summary"]),
@@ -326,16 +335,11 @@ fn status(node: &str, state: State, summary: Option<String>) -> Draft {
     )
 }
 
-/// A subagent's id, from its transcript's file name
-/// (`…/subagents/<id>.jsonl`).
-fn transcript_stem(path: &str) -> Option<String> {
-    let stem = std::path::Path::new(path).file_stem()?.to_str()?;
-    let ok = !stem.is_empty()
-        && stem.len() <= 128
-        && stem
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    ok.then(|| stem.to_string())
+/// The first line of one of Cursor's ids, some of which hold a newline
+/// (`call-<uuid>-11` then `fc_<uuid>`), for a node id. It's unique in its
+/// chat alone.
+fn first_line(id: &str) -> &str {
+    id.lines().next().unwrap_or(id).trim()
 }
 
 /// The agent a shell command starts, if it starts one.

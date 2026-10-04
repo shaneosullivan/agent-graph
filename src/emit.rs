@@ -4,7 +4,7 @@
 //! - Always exit 0 and never write to stdout. In Claude Code, exit code 2
 //!   blocks the agent's action and stdout can be added to the model's context.
 //!   Errors go to `emit.log` instead. The exception is a provider that reads
-//!   a hook's output as JSON (Cursor): it always gets some, `{}` at least.
+//!   a hook's output as JSON (Cursor): it always gets `{}`.
 //! - Stay fast: parse stdin, translate, one append, exit. No network.
 //! - Never trust the input: unknown events are recorded, bad input is logged.
 //!
@@ -42,41 +42,24 @@ pub fn run_and_exit(args: &[OsString]) -> ! {
     let replies = provider_arg(args)
         .and_then(|p| adapter::by_name(&p))
         .is_some_and(|a| a.replies_with_json());
-    let passed_on = std::panic::catch_unwind(|| match run(args) {
-        Ok(passed_on) => passed_on,
-        Err(e) => {
+    let _ = std::panic::catch_unwind(|| {
+        if let Err(e) = run(args) {
             log_error(&e);
-            Vec::new()
         }
-    })
-    .unwrap_or_default();
+    });
     if replies {
         use std::io::Write;
+        // Nothing to ask of the provider. (Cursor's `sessionStart` can set
+        // variables, but only for its later hooks, not its commands: they
+        // have CURSOR_CONVERSATION_ID, which links what they start.)
         let mut out = io::stdout();
-        let _ = writeln!(out, "{}", json_reply(&passed_on));
+        let _ = writeln!(out, "{{}}");
         let _ = out.flush();
     }
     std::process::exit(0)
 }
 
-/// What `emit` answers a provider that reads hooks' output as JSON: `{}`,
-/// or, as a session starts, the variables its commands should have so
-/// sessions they start link back to it (Cursor's `sessionStart` takes
-/// `env`).
-pub fn json_reply(passed_on: &[(String, String)]) -> String {
-    if passed_on.is_empty() {
-        return "{}".to_string();
-    }
-    let env: serde_json::Map<String, Value> = passed_on
-        .iter()
-        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-        .collect();
-    serde_json::json!({ "env": env }).to_string()
-}
-
-/// Records the hook's events. Returns the variables a starting session
-/// passes on to what it starts (see `link_session`).
-fn run(args: &[OsString]) -> Result<Vec<(String, String)>, String> {
+fn run(args: &[OsString]) -> Result<(), String> {
     let provider = provider_arg(args).ok_or("emit: missing --provider")?;
     let adapter = adapter::by_name(&provider)
         .ok_or_else(|| format!("emit: unknown provider {provider:?}"))?;
@@ -109,15 +92,14 @@ fn run(args: &[OsString]) -> Result<Vec<(String, String)>, String> {
 
     let mut translation = translation?;
     if translation.drafts.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let env_file = adapter
         .env_file_var()
         .and_then(std::env::var_os)
         .filter(|f| !f.is_empty());
-    let mut passed_on = Vec::new();
     for draft in &mut translation.drafts {
-        passed_on.extend(link_session(draft, env_file.as_deref().map(Path::new)));
+        link_session(draft, env_file.as_deref().map(Path::new));
     }
     let source = Source {
         provider: adapter.provider().to_string(),
@@ -134,8 +116,7 @@ fn run(args: &[OsString]) -> Result<Vec<(String, String)>, String> {
     store::ensure_dir(&dir).map_err(|e| format!("emit: creating {}: {e}", dir.display()))?;
     let file = dir.join(format!("{}.jsonl", translation.file_key));
     store::append(&file, out.as_bytes())
-        .map_err(|e| format!("emit: writing {}: {e}", file.display()))?;
-    Ok(passed_on)
+        .map_err(|e| format!("emit: writing {}: {e}", file.display()))
 }
 
 /// For a session that's starting: links it to the session (or `agent-graph
@@ -143,12 +124,10 @@ fn run(args: &[OsString]) -> Result<Vec<(String, String)>, String> {
 /// process and the ones above it, so the reducer can link it by process when
 /// the environment didn't carry a parent. Then it passes the session's own
 /// identity on through `env_file` (the provider's file of `export` lines for
-/// its shell commands), so sessions it starts can link back to it. Returns
-/// the variables it passes on, for a provider that takes them in the hook's
-/// answer instead (Cursor).
-fn link_session(draft: &mut Draft, env_file: Option<&Path>) -> Vec<(String, String)> {
+/// its shell commands), so sessions it starts can link back to it.
+fn link_session(draft: &mut Draft, env_file: Option<&Path>) {
     let Payload::SessionStarted(started) = &mut draft.payload else {
-        return Vec::new();
+        return;
     };
     let var = |name: &str| std::env::var(name).ok();
     if draft.parent.is_none() {
@@ -163,11 +142,15 @@ fn link_session(draft: &mut Draft, env_file: Option<&Path>) -> Vec<(String, Stri
     }
     let traceparent = link::traceparent(&draft.node, var(link::TRACEPARENT_VAR).as_deref());
     draft.trace = Some(serde_json::json!({ "traceparent": traceparent }));
-    let passed_on = vec![
+    let passed_on = [
         (link::PARENT_VAR.to_string(), draft.node.clone()),
         (
             link::PARENT_CODEX_VAR.to_string(),
             link::codex_thread_here(),
+        ),
+        (
+            link::PARENT_CURSOR_VAR.to_string(),
+            link::cursor_conversation_here(),
         ),
         (link::TRACEPARENT_VAR.to_string(), traceparent),
     ];
@@ -180,7 +163,6 @@ fn link_session(draft: &mut Draft, env_file: Option<&Path>) -> Vec<(String, Stri
             log_error(&format!("emit: writing {}: {e}", file.display()));
         }
     }
-    passed_on
 }
 
 /// Quotes `s` as one word for a POSIX shell.

@@ -17,6 +17,13 @@ pub const CODEX_SESSION_VAR: &str = "CODEX_SESSION_ID";
 /// The `CODEX_THREAD_ID` a session saw when it set `AGENT_GRAPH_PARENT` (empty
 /// for none), so a session below can tell which of the two is nearer.
 pub const PARENT_CODEX_VAR: &str = "AGENT_GRAPH_PARENT_CODEX";
+/// Cursor's commands have the chat running them, as Codex's have its
+/// thread. (Not in a subagent's commands, which have the subagent's own
+/// conversation, which nothing else names: those link to nothing.)
+pub const CURSOR_CONVERSATION_VAR: &str = "CURSOR_CONVERSATION_ID";
+/// The `CURSOR_CONVERSATION_ID` a session saw when it set
+/// `AGENT_GRAPH_PARENT`, as `PARENT_CODEX_VAR` is for Codex.
+pub const PARENT_CURSOR_VAR: &str = "AGENT_GRAPH_PARENT_CURSOR";
 
 /// The environment a session starts in, as far as linking goes.
 #[derive(Debug, Default, Clone, Copy)]
@@ -25,6 +32,8 @@ pub struct Env<'a> {
     pub parent_codex: Option<&'a str>,
     pub codex_thread: Option<&'a str>,
     pub codex_session: Option<&'a str>,
+    pub parent_cursor: Option<&'a str>,
+    pub cursor_conversation: Option<&'a str>,
 }
 
 /// The session that started this one, from its environment: the Codex
@@ -43,8 +52,15 @@ pub fn parent_in(env: Env, own: &str) -> Option<String> {
                 _ => format!("codex:{thread}"),
             },
         );
-    match codex {
-        Some(codex) => parent_from(Some(&codex), own),
+    // The same for a Cursor chat, whose shell this is.
+    let cursor = env
+        .cursor_conversation
+        .map(str::trim)
+        .filter(|c| codex_id(c))
+        .filter(|c| env.parent.is_none() || env.parent_cursor.map(str::trim) != Some(*c))
+        .map(|c| format!("cursor:{c}"));
+    match codex.or(cursor) {
+        Some(nearest) => parent_from(Some(&nearest), own),
         None => parent_from(env.parent, own),
     }
 }
@@ -58,11 +74,15 @@ pub fn parent_here(own: &str) -> Option<String> {
         var(CODEX_THREAD_VAR),
         var(CODEX_SESSION_VAR),
     );
+    let (parent_cursor, cursor_conversation) =
+        (var(PARENT_CURSOR_VAR), var(CURSOR_CONVERSATION_VAR));
     let env = Env {
         parent: parent.as_deref(),
         parent_codex: parent_codex.as_deref(),
         codex_thread: codex_thread.as_deref(),
         codex_session: codex_session.as_deref(),
+        parent_cursor: parent_cursor.as_deref(),
+        cursor_conversation: cursor_conversation.as_deref(),
     };
     parent_in(env, own)
 }
@@ -71,6 +91,12 @@ pub fn parent_here(own: &str) -> Option<String> {
 /// this process starts: the Codex thread it's under, if any.
 pub fn codex_thread_here() -> String {
     std::env::var(CODEX_THREAD_VAR).unwrap_or_default()
+}
+
+/// What to set `PARENT_CURSOR_VAR` to, with `AGENT_GRAPH_PARENT`: the
+/// Cursor chat this process is under, if any.
+pub fn cursor_conversation_here() -> String {
+    std::env::var(CURSOR_CONVERSATION_VAR).unwrap_or_default()
 }
 
 /// A Codex thread id (a UUID) fit for a node id.
@@ -193,6 +219,36 @@ mod tests {
             ..Env::default()
         };
         assert_eq!(parent_in(odd, own), None);
+    }
+
+    #[test]
+    fn a_session_started_from_cursors_shell_is_the_chats_child() {
+        let own = "claude-code:me";
+        let cursor = Env {
+            cursor_conversation: Some("516781fb-4582"),
+            ..Env::default()
+        };
+        assert_eq!(
+            parent_in(cursor, own).as_deref(),
+            Some("cursor:516781fb-4582")
+        );
+        // Even if something above Cursor set AGENT_GRAPH_PARENT, unaware of it.
+        let under_claude = Env {
+            parent: Some("claude-code:x"),
+            parent_cursor: Some(""),
+            ..cursor
+        };
+        assert_eq!(
+            parent_in(under_claude, own).as_deref(),
+            Some("cursor:516781fb-4582")
+        );
+        // A Claude Code session started from the chat's shell saw the chat.
+        let below = Env {
+            parent: Some("claude-code:y"),
+            parent_cursor: Some("516781fb-4582"),
+            ..cursor
+        };
+        assert_eq!(parent_in(below, own).as_deref(), Some("claude-code:y"));
     }
 
     #[test]

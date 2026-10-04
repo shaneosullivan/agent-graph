@@ -306,7 +306,7 @@ The hook runs on the agent's critical path, possibly hundreds of times per sessi
 | **Claude Code** | Command hooks in `settings.json` or plugin `hooks/hooks.json` | stdin JSON, snake_case | `SubagentStart`/`Stop` with `agent_id`; `session_id` is the parent's | `TaskCreate`/`TaskUpdate` (legacy `TodoWrite`) via `PostToolUse` | `Notification` (permission/idle), `Stop` |
 | **Codex CLI** (built: `src/adapter/codex.rs`, [codex.md](codex.md)) | `~/.codex/hooks.json` or `[hooks]` in `config.toml`, plus project `.codex/` (trusted projects only). Each hook runs only once trusted (`hooks.state` in the user's `config.toml`), which `install codex` does | stdin JSON, snake_case; adds `turn_id`, `model` | `SubagentStart`/`Stop` with `agent_id` (the child's thread); `session_id` is the **root** thread's, even in a nested agent, whose parent is in its rollout | `update_plan` via `PostToolUse` (off unless `[tools.update_plan] enabled`) | `PermissionRequest` (no event when it's answered), `request_user_input`, `Stop`, `Interrupt` |
 | **Gemini CLI** | `hooks` in `.gemini/settings.json` | stdin JSON; `GEMINI_SESSION_ID` env var | **No subagent events.** Subagents are tools named after the agent, so we infer them from `BeforeTool`/`AfterTool` | Todo tool via `AfterTool` (verify) | `Notification` (`ToolPermission`), `AfterAgent` |
-| **Cursor** (adapter written from the docs: `src/adapter/cursor.rs`, [cursor.md](cursor.md); to check against a real Cursor) | `~/.cursor/hooks.json` or a project's `.cursor/hooks.json`, `{"version": 1, "hooks": {...}}`; the CLI runs them too. A hook must answer with JSON (`{}`) | stdin JSON; `conversation_id`, `generation_id` | `subagentStart` has `subagent_id`, `parent_conversation_id` and `tool_call_id`, the best parent data of any tool here; `subagentStop` has no id | The todo tool via `postToolUse` (its name to check) | `stop` with `status`. **No event for an approval, a question or a plan** (a known Cursor bug) |
+| **Cursor** (`src/adapter/cursor.rs`, [cursor.md](cursor.md); checked against Cursor 3.23 and its CLI) | `~/.cursor/hooks.json` or a project's `.cursor/hooks.json`, `{"version": 1, "hooks": {...}}`; the CLI runs them too. A hook must answer with JSON (`{}`) | stdin JSON; `conversation_id`, `generation_id` | `subagentStart`/`subagentStop` with `subagent_id` (the `Task` call's id) and `parent_conversation_id`. A subagent's own hooks name only its `Task` call, not the chat | None: the todo tool fires no hook | `stop` with `status`. **No event for an approval, a question or a plan** (a known Cursor bug) |
 | **Copilot CLI** | `.github/hooks/*.json`, `~/.copilot/hooks/` | stdin JSON, **camelCase** | `subagentStart`/`subagentStop` | Unknown | `notification`, `permissionRequest` |
 | **OpenCode** | JS/TS plugin (`.opencode/plugins/`) | Event stream | Sessions have `parentID` | `todo` events | `permission.asked`, `session.idle` |
 | **Amp** | Bun TS plugin (`.amp/plugins/`) | Event stream | `parentThreadID` | Unknown | Unknown |
@@ -315,7 +315,8 @@ The hook runs on the agent's critical path, possibly hundreds of times per sessi
 
 Known gaps to check by hand:
 
-- Cursor's payloads, as its docs give them, against a real Cursor ([cursor.md](cursor.md), step 1). Its CLI does fire hooks.
+- Cursor's approvals: in step 1 ([cursor.md](cursor.md)) none was seen, and none fires a hook.
+- Whether a Cursor approval fires a hook: in step 1 ([cursor.md](cursor.md)) Cursor didn't ask for one.
 - Codex hooks do fire under `codex exec` (checked with Codex 0.159.2), but untrusted ones are skipped silently.
 
 For plugin-based tools (OpenCode, Amp), the adapter is a ~50-line plugin that calls `agent-graph emit` or writes the JSONL line directly.

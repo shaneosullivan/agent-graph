@@ -68,6 +68,7 @@ pub fn run(opts: Options) -> ExitCode {
         .args(&opts.command[1..])
         .env(link::PARENT_VAR, &node)
         .env(link::PARENT_CODEX_VAR, link::codex_thread_here())
+        .env(link::PARENT_CURSOR_VAR, link::cursor_conversation_here())
         .env(link::TRACEPARENT_VAR, &traceparent);
     signals::stay_for_the_child();
     let outcome = command.spawn().and_then(|mut child| {

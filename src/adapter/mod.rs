@@ -67,8 +67,7 @@ pub trait Adapter {
         None
     }
     /// Whether the provider reads a hook's output as JSON, so `emit` must
-    /// always answer with some (`{}`, or the variables a starting session
-    /// passes on: see `emit`). Otherwise `emit` prints nothing.
+    /// always answer `{}`. Otherwise `emit` prints nothing.
     fn replies_with_json(&self) -> bool {
         false
     }
