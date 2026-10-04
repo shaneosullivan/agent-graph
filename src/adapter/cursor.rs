@@ -855,7 +855,7 @@ pub fn app_store(home: &std::path::Path) -> Option<std::path::PathBuf> {
     let user = if cfg!(target_os = "macos") {
         home.join("Library/Application Support/Cursor/User")
     } else if cfg!(windows) {
-        home.join("AppData\\Roaming\\Cursor\\User")
+        std::path::PathBuf::from(std::env::var_os("APPDATA")?).join("Cursor\\User")
     } else {
         home.join(".config/Cursor/User")
     };

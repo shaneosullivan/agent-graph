@@ -28,6 +28,8 @@ fn waits_the_app_saves_are_written_into_the_chats_log_as_they_start_and_stop() {
     unsafe {
         std::env::set_var("HOME", home.path());
         std::env::set_var("USERPROFILE", home.path());
+        // (Windows: where Cursor's own database is, never the real one.)
+        std::env::set_var("APPDATA", home.path().join("AppData/Roaming"));
     };
     let store = agent_graph::adapter::cursor::app_store(home.path()).unwrap();
     std::fs::create_dir_all(store.parent().unwrap()).unwrap();
