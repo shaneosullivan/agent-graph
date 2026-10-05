@@ -59,8 +59,8 @@
     {
       "id": "cursor-cloud-names",
       "title": "Cursor cloud agents are named by their repository",
-      "problem": "A Cursor cloud agent's machine has no Cursor database to read its name from, so Agent Graph names it by its repository, unless it can ask Cursor's API, with a Cursor API key. Then each agent shows as Cursor names it.",
-      "fix": "In Cursor's dashboard, make an API key, and add it as a secret named `CURSOR_API_KEY` (Cloud Agents → Secrets, as for `AGENT_GRAPH_TOKEN`), then start a new agent. The agent can read it, as it can any secret, and it can do whatever your Cursor API key can: leave it out if you'd rather."
+      "problem": "A Cursor cloud agent's machine has no Cursor database to read its name from. Agent Graph asks the machine's own metadata (Cursor's Agent Metadata Socket) instead, which Cursor's own cloud machines have, once Cursor has named the agent. A machine without it (one of your own, say) names its agents by their repository.",
+      "fix": "Nothing to do on Cursor's cloud machines: the name comes once Cursor has given one. Elsewhere, Cursor's API can say it, with a Cursor API key: make one in Cursor's dashboard and add it as a secret named `CURSOR_API_KEY`. The agent can read it, as it can any secret, and it can do whatever your Cursor API key can: leave it out if you'd rather."
     },
     {
       "id": "data-folder",

@@ -68,8 +68,9 @@ impl Adapter for Cursor {
         Some(Draft::new(
             node_id(conversation, None),
             Payload::SessionStarted(SessionStarted {
-                cwd: workspace
-                    .and_then(cloud_repository)
+                cwd: metadata("workspace/repo-url")
+                    .and_then(|r| repository_of(&format!("https://{r}")))
+                    .or_else(|| workspace.and_then(cloud_repository))
                     .or_else(|| workspace.map(String::from)),
                 source: Some("cloud".to_string()),
                 ..Default::default()
@@ -610,7 +611,7 @@ fn titled(session: &str, state: State, conversation: &str) -> Draft {
 #[cfg(feature = "cli")]
 pub fn title_of(conversation: &str) -> Option<String> {
     if in_cloud() {
-        return cloud_name(conversation);
+        return socket_name(conversation).or_else(|| cloud_name(conversation));
     }
     let home = crate::paths::user_home()?;
     if std::env::var_os("CURSOR_INVOKED_AS").is_some() {
@@ -623,6 +624,57 @@ pub fn title_of(conversation: &str) -> Option<String> {
 #[cfg(not(feature = "cli"))]
 pub fn title_of(_conversation: &str) -> Option<String> {
     None
+}
+
+/// A value from a Cursor cloud agent's metadata (`path` under
+/// `/v1/meta-data/`, as "agent/name"), served on its machine by the socket
+/// `CURSOR_AGENT_SOCKET` names (Cursor's Agent Metadata Socket, in preview:
+/// cursor.com/docs/cloud-agent/metadata). `None` where there's no socket,
+/// or no such value (yet: a name comes once Cursor's given one).
+#[cfg(all(unix, feature = "cli"))]
+pub fn metadata(path: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    if !in_cloud() {
+        return None;
+    }
+    let socket = std::env::var_os("CURSOR_AGENT_SOCKET")
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "/run/cursor/api.sock".into());
+    let mut stream = std::os::unix::net::UnixStream::connect(socket).ok()?;
+    let wait = Some(std::time::Duration::from_secs(2));
+    stream.set_read_timeout(wait).ok()?;
+    stream.set_write_timeout(wait).ok()?;
+    // (In one write: a server may read just the first.)
+    let request = format!(
+        "GET /v1/meta-data/{path} HTTP/1.0\r\nHost: cursor-agent\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut reply = Vec::new();
+    stream.take(64 * 1024).read_to_end(&mut reply).ok()?;
+    let reply = String::from_utf8_lossy(&reply);
+    let (head, body) = reply.split_once("\r\n\r\n")?;
+    let ok = head
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        == Some("200");
+    let value = body.trim();
+    (ok && !value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(not(all(unix, feature = "cli")))]
+pub fn metadata(_path: &str) -> Option<String> {
+    None
+}
+
+/// Cloud agent `conversation`'s name, from its machine's metadata: only if
+/// it's that machine's agent (a subagent's conversation isn't).
+#[cfg(feature = "cli")]
+fn socket_name(conversation: &str) -> Option<String> {
+    (metadata("agent/id")? == conversation).then_some(())?;
+    let name = metadata("agent/name")?;
+    Some(truncate_chars(name.lines().next()?.trim(), LABEL_MAX)).filter(|n| !n.is_empty())
 }
 
 /// The variable a Cursor API key is given as, in Cursor's cloud (a secret):
@@ -663,10 +715,11 @@ fn cloud_name(conversation: &str) -> Option<String> {
     (!name.is_empty()).then(|| truncate_chars(name, LABEL_MAX))
 }
 
-/// In Cursor's cloud, with a Cursor API key (`CURSOR_API_KEY`, a secret):
-/// asks Cursor's API (`GET /v1/agents/{id}`, whose ids are the hooks'
-/// conversations) for the names of the chats at work here, as Cursor shows
-/// them: a cloud agent's machine has no Cursor database to read them from.
+/// In Cursor's cloud: the names of the chats at work here, as Cursor shows
+/// them (a cloud agent's machine has no Cursor database to read them from),
+/// from the machine's own metadata (`metadata`), or, where there's none,
+/// Cursor's API (`GET /v1/agents/{id}`, whose ids are the hooks'
+/// conversations), with a Cursor API key (`CURSOR_API_KEY`, a secret).
 /// Each is kept (`cloud_name`), for every hook's status to carry, and a new
 /// or changed one is said at once, with the chat's state as it stands.
 /// Run by `watch-remote`, which is running there all along, so the hooks
@@ -678,12 +731,20 @@ pub fn name_cloud_chats(events_dir: &std::path::Path) -> usize {
     if !in_cloud() {
         return 0;
     }
-    let Some(key) = std::env::var(API_KEY_VAR)
+    let key = std::env::var(API_KEY_VAR)
         .ok()
         .map(|k| k.trim().to_string())
-        .filter(|k| !k.is_empty())
-    else {
+        .filter(|k| !k.is_empty());
+    // The machine's own metadata says, at once (asked each time); else
+    // Cursor's API, with a key (asked once a minute).
+    let local = metadata("agent/id").is_some();
+    if !local && key.is_none() {
         return 0;
+    }
+    let every = if local {
+        std::time::Duration::ZERO
+    } else {
+        NAME_EVERY
     };
     let Ok(entries) = std::fs::read_dir(events_dir) else {
         return 0;
@@ -710,16 +771,18 @@ pub fn name_cloud_chats(events_dir: &std::path::Path) -> usize {
         };
         {
             let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
-            if asked
-                .iter()
-                .any(|(a, at)| a == id && at.elapsed() < NAME_EVERY)
-            {
+            if asked.iter().any(|(a, at)| a == id && at.elapsed() < every) {
                 continue;
             }
             asked.retain(|(a, _)| a != id);
             asked.push((id.to_string(), std::time::Instant::now()));
         }
-        let Some(named) = agent_name(&agent, &key, id) else {
+        let named = match &key {
+            _ if local => socket_name(id),
+            Some(key) => agent_name(&agent, key, id),
+            None => None,
+        };
+        let Some(named) = named else {
             continue;
         };
         if cloud_name(id).as_deref() == Some(named.as_str()) {

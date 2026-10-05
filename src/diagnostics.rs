@@ -738,6 +738,19 @@ fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
 /// from its API, with a Cursor API key (`CURSOR_API_KEY`). Without one,
 /// they're named by their repository: nothing's wrong.
 fn cursor_cloud_names(out: &mut Vec<Finding>) {
+    use crate::adapter::cursor::metadata;
+    if metadata("agent/id").is_some() {
+        out.push(match metadata("agent/name") {
+            Some(name) => Finding::ok(format!(
+                "This agent is named as in Cursor, from its machine's metadata: {}",
+                crate::event::truncate_chars(name.lines().next().unwrap_or(""), 80)
+            )),
+            None => Finding::info(
+                "This machine's metadata has no name for its agent yet: it's named by its repository until it has",
+            ),
+        });
+        return;
+    }
     let var = crate::adapter::cursor::API_KEY_VAR;
     let Some(key) = std::env::var(var)
         .ok()
@@ -748,7 +761,7 @@ fn cursor_cloud_names(out: &mut Vec<Finding>) {
             Level::Info,
             "cursor-cloud-names",
             format!(
-                "{var} isn't set: cloud agents are named by their repository, not as in Cursor"
+                "This machine has no Cursor agent metadata, and {var} isn't set: cloud agents are named by their repository, not as in Cursor"
             ),
         ));
         return;
