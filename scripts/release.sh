@@ -308,6 +308,11 @@ else
   git commit --quiet -m "Release $VERSION"
   git push --quiet origin main
   echo "✓ Committed and pushed $(git rev-parse --short HEAD)"
+  # The version is in every crate's build hash here, so the next build
+  # starts its incremental caches afresh, beside the old ones. Cargo never
+  # removes those (they grew to 20GB), and they're of no use now.
+  target_dir="${CARGO_TARGET_DIR:-target}"
+  rm -rf "$target_dir"/*/incremental "$target_dir"/*/*/incremental
 fi
 COMMIT="$(git rev-parse HEAD)"
 
