@@ -602,6 +602,39 @@ main { padding: 22px 28px 40px; }
 }
 .modal-close:hover { background: var(--panel-2); color: var(--text); }
 
+/* Clouds that say they're broken: alerts atop the sessions list, and the report's dialog */
+.cloud-alerts { padding: 10px 12px 0; display: grid; gap: 8px; }
+.cloud-alerts[hidden] { display: none; }
+.cloud-alert {
+  display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; cursor: pointer;
+  padding: 10px 12px; border-radius: 10px; font: inherit; color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--failed, #d9480f) 55%, var(--line));
+  background: color-mix(in srgb, var(--failed, #d9480f) 10%, var(--panel));
+}
+.cloud-alert:hover { background: color-mix(in srgb, var(--failed, #d9480f) 16%, var(--panel)); }
+.cloud-alert-icon {
+  flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--failed, #d9480f); color: #fff; font-weight: 700; font-size: 13px;
+}
+.cloud-alert-text { display: grid; gap: 2px; font-size: 12.5px; }
+.cloud-alert-text span { color: var(--muted); }
+.cloud-modal { width: min(760px, calc(100vw - 32px)); }
+.cloud-finding { padding: 12px 0; border-top: 1px solid var(--line); }
+.cloud-finding:first-of-type { border-top: none; padding-top: 0; }
+.cloud-what { display: flex; gap: 8px; font-weight: 600; }
+.cloud-finding.error .cloud-mark { color: var(--failed, #d9480f); }
+.cloud-finding.warn .cloud-mark { color: var(--input); }
+.cloud-detail, .cloud-log {
+  margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--panel-2);
+  font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto;
+}
+.cloud-fix { margin: 8px 0 4px; }
+.cloud-more { font-size: 12.5px; }
+.cloud-fine { margin: 0; padding-left: 0; list-style: none; color: var(--muted); font-size: 12.5px; display: grid; gap: 4px; }
+.cloud-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 22px; }
+.cloud-status { color: var(--failed, #d9480f); font-size: 12.5px; margin-top: 8px; }
+.cloud-status:empty { display: none; }
+
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes halo { 0% { opacity: 0.9; transform: scale(0.85); } 100% { opacity: 0; transform: scale(1.5); } }

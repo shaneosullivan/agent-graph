@@ -4,6 +4,7 @@ import {useRouter} from "next/navigation";
 import {useState} from "react";
 
 import type {Computer} from "@/lib/accounts";
+import troubleshooting from "@/lib/troubleshooting.json";
 
 import {CopyCommand} from "../copy-command";
 import {KeyIcon, LaptopIcon} from "./icons";
@@ -414,5 +415,68 @@ export function ApiTokens({tokens}: {tokens: Array<Computer>}) {
       </form>
       {error ? <p className="error">{error}</p> : null}
     </>
+  );
+}
+
+/** A breakage a cloud reported that's been muted ("never show this again"). */
+type Hidden = {key: string; cloud: string; issues: Array<string>; at: number};
+
+const ISSUE_TITLES = Object.fromEntries(
+  (troubleshooting as {issues: Array<{id: string; title: string}>}).issues.map(
+    i => [i.id, i.title],
+  ),
+);
+
+/**
+ * The cloud problems muted at /watch (or in `agent-graph view`), folded
+ * away until asked for, each with a way to show it again.
+ */
+export function HiddenCloudProblems({hidden}: {hidden: Array<Hidden>}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function unmute(key: string) {
+    setBusy(key);
+    setError(null);
+    const res = await fetch("/api/cloud-diagnostics", {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({key, action: "unmute"}),
+    });
+    if (!res.ok) {
+      setError(await res.text());
+    }
+    setBusy(null);
+    router.refresh();
+  }
+
+  return (
+    <details className="acct-hidden">
+      <summary>
+        {hidden.length} hidden problem{hidden.length === 1 ? "" : "s"}
+      </summary>
+      <ul className="acct-rows">
+        {hidden.map(h => (
+          <li key={h.key}>
+            <span className="acct-row-main">
+              <strong>{h.cloud}</strong>
+              <span className="acct-row-sub">
+                {h.issues.map(i => ISSUE_TITLES[i] ?? i).join("; ")} · last
+                reported {date(h.at)}
+              </span>
+            </span>
+            <button
+              className="acct-row-action"
+              type="button"
+              onClick={() => unmute(h.key)}
+              disabled={busy === h.key}>
+              {busy === h.key ? "Showing…" : "Show again"}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {error ? <p className="error">{error}</p> : null}
+    </details>
   );
 }

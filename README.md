@@ -77,6 +77,7 @@ Its own sessions aren't recorded yet; only Claude Code, Codex and Cursor have ho
 | `agent-graph tree` | One-off text tree (`--all` includes older sessions). |
 | `agent-graph watch-remote` | Shares the graph live to your account at [agentgraph.chofter.com](https://agentgraph.chofter.com), where only you can see it. See below. |
 | `agent-graph run -- <command>` | Runs any command as a node in the graph, e.g. an agent without hooks (`agent-graph run -- aider`) or a script that starts several agents, which then appear under it. Exits with the command's exit code. |
+| `agent-graph diagnostics` | Checks what recording and sharing need, wherever it's run (your computer, or a coding agent's cloud): each agent's hooks, the data folder, the site, your login, sharing, and updates. Says how to fix anything wrong, with a link to it on [the troubleshooting page](https://agentgraph.chofter.com/troubleshooting); `--json` for the report as JSON. In a cloud, `watch-remote` sends this report to your account as it starts and stops, so a broken cloud says so at /watch. |
 
 ```
 claude-code:e0000002  search-indexer  [working]  Rebuilding the index schema (+1 pending)  tasks 0/2  waiting on 1 node (0 open tasks), Explore a91d0160 looks stuck

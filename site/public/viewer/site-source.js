@@ -250,6 +250,23 @@
     imageUrl: null,
     liveLabel: config.live ? "Live" : "Latest",
   };
+  // At /watch: what the account's coding agents' clouds report is wrong
+  // with them (app/api/cloud-diagnostics), shown atop the sessions list.
+  if (config.shares) {
+    window.agentGraphSource.cloudReports = async () => {
+      const res = await fetch("/api/cloud-diagnostics", {cache: "no-store"});
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    };
+    window.agentGraphSource.changeCloudReport = async (key, action) => {
+      const res = await fetch("/api/cloud-diagnostics", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({key, action}),
+      });
+      if (!res.ok) throw new Error(await res.text());
+    };
+  }
 
   const script = document.createElement("script");
   script.src = "/viewer/app.js";

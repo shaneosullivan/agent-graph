@@ -536,7 +536,7 @@ fn without_comments(text: &str) -> String {
 
 /// Whether Cursor would read `command` as it's written (see
 /// `without_comments`).
-fn cursor_can_read(command: &str) -> bool {
+pub fn cursor_can_read(command: &str) -> bool {
     !command.contains("//") && !command.contains("/*")
 }
 

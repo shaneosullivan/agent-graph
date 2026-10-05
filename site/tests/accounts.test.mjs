@@ -1010,3 +1010,135 @@ test(
     assert.equal(await there(`analytics-months/${old.slice(0, 7)}-0`), true);
   },
 );
+
+test("a cloud's diagnostics report shows until it's dismissed, cleared or muted", async () => {
+  const owner = await loggedIn();
+  const made = await fetch(`${BASE}/api/account/tokens`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...FROM_SITE,
+      Cookie: owner.cookie,
+    },
+    body: JSON.stringify({name: "cursor"}),
+  });
+  const {token} = await made.json();
+  const bearer = {Authorization: `Bearer ${token}`};
+  const report = (cloud, issues) => ({
+    version: "0.1.21",
+    cloud,
+    platform: "linux x86_64",
+    site: BASE,
+    at: "2026-10-05T08:00:00Z",
+    findings: [
+      {level: "ok", what: "The site can be reached"},
+      ...issues.map(issue => ({level: "error", what: issue, issue})),
+      {level: "warn", what: "newer", issue: "update-available"},
+    ],
+    logs: {"watch-remote.log": "Not logged in."},
+  });
+  const send = (body, auth = bearer) =>
+    fetch(`${BASE}/api/cloud-diagnostics`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", ...auth},
+      body: JSON.stringify(body),
+    });
+  const shown = async (query = "") => {
+    const res = await fetch(`${BASE}/api/cloud-diagnostics${query}`, {
+      headers: {Cookie: owner.cookie},
+    });
+    assert.equal(res.status, 200, await res.clone().text());
+    return (await res.json()).reports;
+  };
+  const change = (key, action) =>
+    fetch(`${BASE}/api/cloud-diagnostics`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...FROM_SITE,
+        Cookie: owner.cookie,
+      },
+      body: JSON.stringify({key, action}),
+    });
+
+  // Only an account's own login sends one, and only a cloud's report.
+  assert.equal(
+    (await send(report("Cursor cloud", ["token-missing"]), {})).status,
+    401,
+  );
+  assert.equal(
+    (await send(report("My laptop", ["token-missing"]))).status,
+    400,
+  );
+  assert.equal((await send({cloud: "Cursor cloud"})).status, 400);
+
+  const res = await send(
+    report("Cursor cloud", ["token-missing", "hooks-missing"]),
+  );
+  assert.equal(res.status, 200, await res.clone().text());
+  const {key} = await res.json();
+  assert.equal(key, "Cursor cloud:hooks-missing,token-missing");
+  let reports = await shown();
+  assert.equal(reports.length, 1);
+  assert.deepEqual(reports[0].issues, ["hooks-missing", "token-missing"]);
+  assert.equal(reports[0].report.logs["watch-remote.log"], "Not logged in.");
+  // With what to do about each, in that cloud, and where it's explained.
+  const fix = reports[0].fixes.find(f => f.id === "token-missing");
+  assert.match(fix.fix, /Cloud Agents/);
+  assert.match(fix.link, /\/troubleshooting#token-missing$/);
+  // The local viewer asks with the computer's login.
+  const asCli = await fetch(`${BASE}/api/cloud-diagnostics`, {headers: bearer});
+  assert.equal((await asCli.json()).reports.length, 1);
+  // Not from another site's page.
+  const forged = await fetch(`${BASE}/api/cloud-diagnostics`, {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json", Cookie: owner.cookie},
+    body: JSON.stringify({key, action: "dismiss"}),
+  });
+  assert.equal(forged.status, 401);
+
+  // Dismissed, it's gone until it's reported again.
+  assert.equal((await change(key, "dismiss")).status, 204);
+  assert.equal((await shown()).length, 0);
+  await send(report("Cursor cloud", ["token-missing", "hooks-missing"]));
+  assert.equal((await shown()).length, 1);
+
+  // A report with no problems clears that cloud's (and only that cloud's).
+  await send(report("Codex cloud", ["site-unreachable"]));
+  assert.equal((await shown()).length, 2);
+  await send(report("Cursor cloud", []));
+  reports = await shown();
+  assert.deepEqual(
+    reports.map(r => r.cloud),
+    ["Codex cloud"],
+  );
+
+  // Muted, it never shows again, even reported again, until it's unmuted.
+  const codex = reports[0].key;
+  assert.equal((await change(codex, "mute")).status, 204);
+  assert.equal((await shown()).length, 0);
+  await send(report("Codex cloud", ["site-unreachable"]));
+  assert.equal((await shown()).length, 0);
+  assert.deepEqual(
+    (await shown("?muted=1")).map(r => r.key),
+    [codex],
+  );
+  // Another breakage in that cloud still shows.
+  await send(report("Codex cloud", ["token-invalid"]));
+  assert.equal((await shown()).length, 1);
+  assert.equal((await change(codex, "unmute")).status, 204);
+  assert.equal((await shown()).length, 2);
+
+  // Someone else's isn't theirs to change.
+  const other = await loggedIn();
+  const theirs = await fetch(`${BASE}/api/cloud-diagnostics`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...FROM_SITE,
+      Cookie: other.cookie,
+    },
+    body: JSON.stringify({key: codex, action: "dismiss"}),
+  });
+  assert.equal(theirs.status, 404);
+});

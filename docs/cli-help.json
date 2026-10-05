@@ -312,6 +312,25 @@
       ]
     },
     {
+      "name": "diagnostics",
+      "summary": "Check what recording and sharing need, here, and say how to fix what's wrong",
+      "description": [
+        { "text": "Checks everything Agent Graph needs where it's run, on your computer or in a coding agent's cloud (Claude Code's, Codex's or Cursor's), and prints a report: each agent's hooks (and whether the agent can read them), the data folder and what's been recorded, the site, the login sharing uses, whether `watch-remote` is sharing, and whether there's a newer release. In a cloud, it also checks the project's committed hooks and shows the end of agent-graph's own logs there." },
+        { "text": "Each problem comes with what to do about it, and a link to it on the site's troubleshooting page. Nothing secret is printed: a token is only said to be set or not, and one in a log is hidden. It exits with 1 if there's a problem (a ✗), so a script can tell." },
+        { "text": "In a cloud, `watch-remote` sends this report to your account when it starts and when it stops: a cloud that's broken then says so at /watch, where you can dismiss it." }
+      ],
+      "options": [
+        { "id": "url", "flag": "--url <URL>", "text": "The site sharing goes to." },
+        { "id": "json", "flag": "--json", "text": "Print the report as JSON." },
+        { "id": "report", "flag": "--report", "text": "In a cloud: also send the report to your account (as `AGENT_GRAPH_TOKEN`'s), to show at /watch." }
+      ],
+      "examples": [
+        { "command": "agent-graph diagnostics", "text": "Check everything, here, and say what's wrong." },
+        { "command": "agent-graph diagnostics --json", "text": "The same, as JSON." },
+        { "command": "~/.local/bin/agent-graph diagnostics --report", "text": "In a cloud agent's machine: check, and send the report to your account." }
+      ]
+    },
+    {
       "name": "run",
       "summary": "Run any command as part of the graph, linked to whatever started it",
       "description": [

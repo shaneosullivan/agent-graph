@@ -10,6 +10,7 @@ import {getMeta} from "@/lib/store";
 import {SiteHeader} from "../site-header";
 import {SiteFooter} from "../site-footer";
 import {Viewer} from "../viewer";
+import {CloudReports} from "./cloud-reports";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,7 @@ export default async function Watch() {
     <div className="site">
       <div className="page">
         <SiteHeader links={[{href: "/docs", label: "Docs"}]} />
+        <CloudReports />
         <div className="card narrow">
           <div className="card-body">
             <h1>Nothing shared yet</h1>

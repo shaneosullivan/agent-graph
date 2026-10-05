@@ -178,6 +178,20 @@ enum Command {
         data_dir: Option<std::path::PathBuf>,
     },
     #[command(
+        display_order = 8,
+        about = help::diagnostics::SUMMARY,
+        long_about = help::diagnostics::DESCRIPTION,
+        after_help = help::diagnostics::EXAMPLES
+    )]
+    Diagnostics {
+        #[arg(long, default_value = crate::remote::DEFAULT_URL, help = help::diagnostics::opt::URL)]
+        url: String,
+        #[arg(long, help = help::diagnostics::opt::JSON)]
+        json: bool,
+        #[arg(long, help = help::diagnostics::opt::REPORT)]
+        report: bool,
+    },
+    #[command(
         display_order = 4,
         about = help::view::SUMMARY,
         long_about = help::view::DESCRIPTION,
@@ -411,17 +425,35 @@ pub fn run() -> ExitCode {
                 if no_autostart {
                     return crate::autostart::disable(&root);
                 }
-                crate::remote::run(
+                // In a cloud, the site's told what's wrong, if anything, as
+                // sharing starts, and why it stopped, if it does: where
+                // else would anyone see it?
+                let cloud = crate::account::cloud().is_some() && !logout;
+                if cloud {
+                    crate::diagnostics::report_from_cloud(&url, None);
+                }
+                let result = crate::remote::run(
                     &root,
                     crate::remote::Options {
-                        url,
+                        url: url.clone(),
                         session,
                         new,
                         logout,
                         background,
                     },
-                )
+                );
+                if cloud {
+                    let stopped = match &result {
+                        Ok(()) => "watch-remote stopped (its log says why)".to_string(),
+                        Err(e) => e.clone(),
+                    };
+                    crate::diagnostics::report_from_cloud(&url, Some(&stopped));
+                }
+                result
             }),
+        Command::Diagnostics { url, json, report } => {
+            return diagnostics_cmd(&url, json, report);
+        }
         Command::View {
             port,
             open,
@@ -702,6 +734,50 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
 /// `token_needed` (installing on a computer, for a cloud whose settings
 /// hold the token), a token that isn't set here is only noted; one that is
 /// set must still be valid.
+/// `agent-graph diagnostics`: the report, as text or JSON, sent to the
+/// site too with `--report` (in a cloud). Exits with 1 if anything's wrong.
+fn diagnostics_cmd(url: &str, json: bool, report: bool) -> ExitCode {
+    if report && crate::account::cloud().is_none() {
+        eprintln!(
+            "agent-graph: --report is for a coding agent's cloud (Claude Code's, Codex's or \
+             Cursor's): on your own computer, the report's for you"
+        );
+        return ExitCode::FAILURE;
+    }
+    let found = crate::diagnostics::run(&crate::diagnostics::Options {
+        site: url.to_string(),
+        project: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        from_sharer: false,
+    });
+    if json {
+        match serde_json::to_string_pretty(&found) {
+            Ok(text) => println!("{text}"),
+            Err(e) => eprintln!("agent-graph: {e}"),
+        }
+    } else {
+        print!("{}", found.text());
+    }
+    if report {
+        match crate::diagnostics::send(url, &found) {
+            Ok(()) if found.errors().is_empty() => {
+                eprintln!("Sent to your account: no problems, so any this cloud had are cleared.")
+            }
+            Ok(()) => eprintln!("Sent to your account: /watch shows the problems."),
+            Err(e) => eprintln!("agent-graph: couldn't send the report: {e}"),
+        }
+    }
+    if found.errors().is_empty()
+        && !found
+            .findings
+            .iter()
+            .any(|f| f.level == crate::diagnostics::Level::Error)
+    {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn report_cloud_checks(url: &str, token_needed: bool) -> Result<(), String> {
     println!("\nChecking what sharing from the cloud needs:");
     let token_set = std::env::var(crate::account::TOKEN_VAR).is_ok_and(|t| !t.trim().is_empty());
@@ -1309,7 +1385,7 @@ fn codex_hooks_changes(
 /// `path` as Codex names it in its trust keys: absolute, with links
 /// followed as far as the path exists, and on Windows without the `\\?\`
 /// prefix canonical paths get, as Codex has it (it uses `dunce` too).
-fn as_codex_sees(path: &Path) -> PathBuf {
+pub(crate) fn as_codex_sees(path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {

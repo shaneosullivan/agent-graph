@@ -1,0 +1,144 @@
+{
+  "$comment": "What can go wrong with Agent Graph, and how to fix it: shared by `agent-graph diagnostics` (compiled in: src/diagnostics.rs names each problem by its id) and the site's /troubleshooting page, where each is at #<id>. `fix` is what to do anywhere; `clouds` has what to do instead in a cloud, by the name `agent-graph` gives it. `Backticks` mark code.",
+  "issues": [
+    {
+      "id": "cursor-hooks-comment",
+      "title": "Cursor runs none of the hooks in a hooks file",
+      "problem": "Cursor reads `hooks.json` as JSON with comments: a `//` or `/*` anywhere in a hook's command (`https://…`, say) starts a \"comment\" that breaks the file, and Cursor then runs none of its hooks, without saying so. agent-graph 0.1.20's `install cursor --cloud` wrote such a command.",
+      "fix": "Install the hooks again with agent-graph 0.1.21 or later (`agent-graph install cursor`, or for the cloud, `agent-graph install cursor --cloud --scope project`, then commit `.cursor/hooks.json`). A hook of your own with `//` in its command needs it written another way: in `sh`, `https:/''/example.com` is still `https://example.com`."
+    },
+    {
+      "id": "hooks-file-invalid",
+      "title": "A hooks or settings file isn't valid JSON",
+      "problem": "The agent can't read the file its hooks are in, so it runs none of them.",
+      "fix": "Open the file named in the report and fix the JSON (a missing comma or quote, usually). Installing again won't change a file it can't read."
+    },
+    {
+      "id": "hooks-missing",
+      "title": "An agent has no Agent Graph hooks",
+      "problem": "The agent is installed on this computer, but nothing records its sessions.",
+      "fix": "Run `agent-graph install claude-code` (or `codex`, or `cursor`), then start a new session: sessions already running aren't recorded.",
+      "clouds": {
+        "Claude Code cloud": "On your computer, in the repository, run `agent-graph install claude-code --cloud`, commit `.claude/settings.json` and push it to the branch cloud sessions start from, then start a new session.",
+        "Codex cloud": "Edit the environment at chatgpt.com/codex: its setup script needs both lines from the site's Codex cloud steps. Click Reset cache, and start a new task.",
+        "Cursor cloud": "On your computer, in the repository, run `agent-graph install cursor --cloud --scope project`, commit `.cursor/hooks.json` and push it to the branch cloud agents start from, then start a new agent."
+      }
+    },
+    {
+      "id": "hook-program-missing",
+      "title": "A hook runs a program that isn't there",
+      "problem": "An Agent Graph hook names an `agent-graph` that's been moved or deleted (an upgrade by another route, or a build folder cleaned), so it does nothing.",
+      "fix": "Run `agent-graph install <agent>` again with the `agent-graph` you use now: it points the hooks at it."
+    },
+    {
+      "id": "codex-hooks-untrusted",
+      "title": "Codex doesn't trust Agent Graph's hooks",
+      "problem": "Codex runs a hook only once it's trusted in its `config.toml`, and these aren't (or were changed since they were trusted).",
+      "fix": "Run `agent-graph install codex` again, which trusts them, then restart Codex (and the ChatGPT app, with Cmd+Q)."
+    },
+    {
+      "id": "no-sessions",
+      "title": "Nothing has been recorded",
+      "problem": "Agent Graph's hooks are in place, but no session has been recorded: the agent hasn't started a session since, or its hooks aren't running.",
+      "fix": "Start a new session in the agent (one already running isn't recorded). Still nothing? Run `agent-graph diagnostics` again: it names whatever stops the hooks.",
+      "clouds": {
+        "Claude Code cloud": "The hooks come from the repository: check `.claude/settings.json` with the cloud hooks is committed on the branch the session started from (`agent-graph install claude-code --cloud`), and start a new session.",
+        "Codex cloud": "The environment's setup script installs the hooks: check it has both lines from the site's Codex cloud steps, click Reset cache on the environment's page, and start a new task.",
+        "Cursor cloud": "The hooks come from the repository: check `.cursor/hooks.json` with the cloud hooks is committed on the branch the agent started from (`agent-graph install cursor --cloud --scope project`), and start a new agent."
+      }
+    },
+    {
+      "id": "data-folder",
+      "title": "Agent Graph can't write its data folder",
+      "problem": "Sessions are recorded in `~/.agent-graph` (or `$AGENT_GRAPH_HOME`), and that folder can't be made or written to.",
+      "fix": "Check the folder's owner and permissions (`ls -ld ~/.agent-graph`), or set `AGENT_GRAPH_HOME` to a folder you can write to."
+    },
+    {
+      "id": "site-unreachable",
+      "title": "The site can't be reached",
+      "problem": "Sharing sends what's recorded to the site, and nothing answers there: no network, a firewall, or a proxy in the way.",
+      "fix": "Check this computer can open the site in a browser. Behind a proxy, `HTTPS_PROXY` must be set for `agent-graph` too.",
+      "clouds": {
+        "Claude Code cloud": "In the environment's settings at claude.ai/code, set network access to Custom, allowing `agentgraph.chofter.com` and `firebasestorage.googleapis.com`.",
+        "Codex cloud": "In the environment's settings at chatgpt.com/codex, turn on Agent internet access, add `agentgraph.chofter.com` to the additional allowed domains, and allow all HTTP methods.",
+        "Cursor cloud": "A cloud agent's machine can usually reach the internet: check your team's network settings in Cursor's dashboard allow `agentgraph.chofter.com`."
+      }
+    },
+    {
+      "id": "site-wrong-answer",
+      "title": "Something else answered for the site",
+      "problem": "A request to the site got an answer, but not the site's: a proxy's page, or a network that blocks it.",
+      "fix": "Allow the site through the proxy or firewall, for every HTTP method (sharing sends with POST).",
+      "clouds": {
+        "Codex cloud": "In the environment's settings at chatgpt.com/codex, set Allowed HTTP Methods to All methods."
+      }
+    },
+    {
+      "id": "token-missing",
+      "title": "AGENT_GRAPH_TOKEN isn't set",
+      "problem": "In a cloud, sharing logs in with an API token from your account page, given as `AGENT_GRAPH_TOKEN`, and there's none.",
+      "fix": "Make a token on the site's account page, under API tokens, and set `AGENT_GRAPH_TOKEN` to it.",
+      "clouds": {
+        "Claude Code cloud": "At claude.ai/code, open the environment's settings and add `AGENT_GRAPH_TOKEN=agt_…` under environment variables, then start a new session.",
+        "Codex cloud": "At chatgpt.com/codex, edit the environment and add `AGENT_GRAPH_TOKEN` under Environment variables (not Secrets, which only the setup script gets), then start a new task.",
+        "Cursor cloud": "At cursor.com/dashboard, open Cloud Agents, then Secrets, and add `AGENT_GRAPH_TOKEN`, then start a new agent."
+      }
+    },
+    {
+      "id": "token-invalid",
+      "title": "The login isn't one the site knows",
+      "problem": "The token (`AGENT_GRAPH_TOKEN`, or this computer's saved login) has been revoked or deleted on the account page, or was mistyped.",
+      "fix": "Make a new token on the account page, under API tokens, and use it in place of the old one. On your own computer, `agent-graph watch-remote` logs in again.",
+      "clouds": {
+        "Claude Code cloud": "Replace `AGENT_GRAPH_TOKEN` in the environment's settings at claude.ai/code with a new token, then start a new session.",
+        "Codex cloud": "Replace `AGENT_GRAPH_TOKEN` in the environment's variables at chatgpt.com/codex with a new token, click Reset cache, and start a new task.",
+        "Cursor cloud": "Replace the `AGENT_GRAPH_TOKEN` secret in Cursor's dashboard (Cloud Agents → Secrets) with a new token, then start a new agent."
+      }
+    },
+    {
+      "id": "not-logged-in",
+      "title": "This computer isn't logged in",
+      "problem": "Recording works without an account; sharing to the site needs this computer logged in.",
+      "fix": "Run `agent-graph watch-remote`: it opens the site to log in, then shares."
+    },
+    {
+      "id": "not-sharing",
+      "title": "Nothing is sharing",
+      "problem": "This computer is logged in, but `agent-graph watch-remote` isn't running, so the site shows nothing new.",
+      "fix": "Run `agent-graph watch-remote`, or `agent-graph watch-remote --autostart` to have it start whenever you log in.",
+      "clouds": {
+        "Claude Code cloud": "The cloud's `SessionStart` hook starts sharing: check the cloud hooks are committed (`agent-graph install claude-code --cloud`), and start a new session.",
+        "Codex cloud": "The session's first hook starts sharing: check the environment's setup script has both lines from the site's Codex cloud steps, click Reset cache, and start a new task.",
+        "Cursor cloud": "A turn's first hook starts sharing: check `.cursor/hooks.json` with the cloud hooks is committed, and send the agent another message. `~/.agent-graph/watch-remote.log` says why it stopped."
+      }
+    },
+    {
+      "id": "sharing-stopped",
+      "title": "Sharing stopped",
+      "problem": "`agent-graph watch-remote` started, then stopped with an error (the report has it).",
+      "fix": "Fix what the error names, then run `agent-graph watch-remote` again.",
+      "clouds": {
+        "Claude Code cloud": "Fix what the error names, then start a new session.",
+        "Codex cloud": "Fix what the error names, then start a new task.",
+        "Cursor cloud": "Fix what the error names, then send the agent another message: its first hook starts sharing again."
+      }
+    },
+    {
+      "id": "install-failed",
+      "title": "Installing agent-graph in the cloud failed",
+      "problem": "The cloud's first hook installs agent-graph from the site's install script, and that failed (its output is in the report).",
+      "fix": "Check the cloud can reach the site and download from Firebase Storage (`firebasestorage.googleapis.com`), then start a new session."
+    },
+    {
+      "id": "update-available",
+      "title": "A newer agent-graph is out",
+      "problem": "A newer release fixes problems this one has.",
+      "fix": "Upgrade the way you installed it: `brew upgrade --cask chofter/tap/agent-graph`, `npm update -g @chofter/agent-graph`, or the install script again.",
+      "clouds": {
+        "Claude Code cloud": "The cloud installs the latest release itself, in each new session.",
+        "Codex cloud": "Click Reset cache on the environment's page, so its setup script installs the latest release.",
+        "Cursor cloud": "The cloud installs the latest release itself, on each new agent's machine."
+      }
+    }
+  ]
+}

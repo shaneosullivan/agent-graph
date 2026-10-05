@@ -10,6 +10,7 @@ import {
   subscriptionOf,
 } from "@/lib/accounts";
 import {currentUser} from "@/lib/auth";
+import {breakagesOf} from "@/lib/cloud-diagnostics";
 import {type Billing, billingConfig, type Standing} from "@/lib/billing";
 import {type Share, sharesOf} from "@/lib/store";
 import {finishCheckout} from "@/lib/stripe";
@@ -22,6 +23,7 @@ import {
   ApiTokens,
   Computers,
   DeleteAccount,
+  HiddenCloudProblems,
   LogOut,
   StripeButton,
 } from "./actions";
@@ -65,7 +67,7 @@ export default async function Account({
     redirect("/account");
   }
   const billing = billingConfig();
-  const {computers, shares, sub, standing, now} = await load(user.uid);
+  const {computers, shares, sub, standing, hidden, now} = await load(user.uid);
   const machines = computers.filter(c => c.kind === "computer");
   const tokens = computers.filter(c => c.kind === "api");
   const running = shares.filter(s => now - s.at <= ALIVE_FOR_MS);
@@ -189,6 +191,23 @@ export default async function Account({
                 <ApiTokens tokens={tokens} />
               </Panel>
 
+              {hidden.length ? (
+                <Panel
+                  id="cloud-problems"
+                  icon={<AlertIcon />}
+                  title="Hidden cloud problems"
+                  description="Problems a cloud reported that you chose never to be shown again, at /watch and in agent-graph view.">
+                  <HiddenCloudProblems
+                    hidden={hidden.map(h => ({
+                      key: h.key,
+                      cloud: h.cloud,
+                      issues: h.issues,
+                      at: h.at,
+                    }))}
+                  />
+                </Panel>
+              ) : null}
+
               <Panel
                 id="delete"
                 icon={<AlertIcon />}
@@ -208,13 +227,14 @@ export default async function Account({
 
 /** What the page shows of account `uid`, as of now (and when that is). */
 async function load(uid: string) {
-  const [computers, shares, sub, standing] = await Promise.all([
+  const [computers, shares, sub, standing, hidden] = await Promise.all([
     computersOf(uid),
     sharesOf(uid),
     subscriptionOf(uid),
     standingOf(uid),
+    breakagesOf(uid, true),
   ]);
-  return {computers, shares, sub, standing, now: Date.now()};
+  return {computers, shares, sub, standing, hidden, now: Date.now()};
 }
 
 /** One of the account's panels: its title and what it's for, then its body. */

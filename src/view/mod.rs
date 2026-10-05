@@ -381,6 +381,7 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
         }
         return match req.path.as_str() {
             "/api/open" => open_session(stream, req, shared),
+            "/api/cloud-reports" => change_cloud_report(stream, req),
             _ => respond(stream, 404, "text/plain", &[], b"Not found"),
         };
     }
@@ -492,7 +493,52 @@ fn route(stream: &mut TcpStream, req: &Request, shared: &Shared) -> std::io::Res
             )
         }
         "/api/stream" => stream_changes(stream, shared),
+        "/api/cloud-reports" => cloud_reports(stream),
         _ => respond(stream, 404, "text/plain", &[], b"Not found"),
+    }
+}
+
+/// This computer's login to the site, if it has one: what asks the site for
+/// the account's clouds' reports.
+fn site_login() -> Option<(crate::remote::Client, String)> {
+    let site = crate::remote::DEFAULT_URL;
+    let account = crate::account::load(&crate::paths::data_dir()?, site)?;
+    Some((crate::remote::Client::new(site), account.token))
+}
+
+/// `GET /api/cloud-reports`: what the account's coding agents' clouds report
+/// is wrong with them, as the site has it (`{reports}`), for the page to
+/// show as /watch does. None if this computer isn't logged in, or the site
+/// can't be reached: the page just shows nothing.
+fn cloud_reports(stream: &mut TcpStream) -> std::io::Result<()> {
+    let body = site_login()
+        .and_then(|(client, token)| client.cloud_reports(&token).ok())
+        .unwrap_or_else(|| r#"{"reports":[]}"#.to_string());
+    respond(stream, 200, "application/json", &[], body.as_bytes())
+}
+
+/// `POST /api/cloud-reports?key=…&action=dismiss|mute`: dismisses or mutes
+/// one of them, at the site.
+fn change_cloud_report(stream: &mut TcpStream, req: &Request) -> std::io::Result<()> {
+    let (Some(key), Some(action)) = (req.param("key"), req.param("action")) else {
+        return respond(stream, 400, "text/plain", &[], b"key and action, please");
+    };
+    if !matches!(action, "dismiss" | "mute") {
+        return respond(stream, 400, "text/plain", &[], b"dismiss or mute");
+    }
+    let Some((client, token)) = site_login() else {
+        return respond(
+            stream,
+            401,
+            "text/plain",
+            &[],
+            b"This computer isn't logged in to the site: run agent-graph watch-remote.",
+        );
+    };
+    let body = serde_json::json!({ "key": key, "action": action }).to_string();
+    match client.change_cloud_report(&token, body.as_bytes()) {
+        Ok(()) => respond(stream, 204, "text/plain", &[], b""),
+        Err(e) => respond(stream, 502, "text/plain", &[], e.message().as_bytes()),
     }
 }
 

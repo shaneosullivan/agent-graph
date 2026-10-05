@@ -574,6 +574,19 @@ fn share_path(root: &Path, site: &str, target: Option<&str>) -> PathBuf {
     ))
 }
 
+/// Whether a `watch-remote` (not this process) is sharing to `site` from
+/// `root` now: any of its saved shares'.
+pub fn sharing_now(root: &Path, site: &str) -> bool {
+    let site = site.trim_end_matches('/');
+    fs::read_dir(root.join("shares"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| fs::read_to_string(e.path()).ok())
+        .filter_map(|text| serde_json::from_str::<SavedShare>(&text).ok())
+        .any(|s| s.site == site && s.sharing_now())
+}
+
 impl SavedShare {
     /// The share saved at `path` for `site` and `target`, if there's one.
     fn load(path: &Path, site: &str, target: Option<&str>) -> Option<SavedShare> {
@@ -1742,6 +1755,90 @@ impl Client {
             200 | 204 => Ok(()),
             s => Err(SendError::Fatal(format!("the site returned {s}"))),
         }
+    }
+
+    /// Sends a cloud's diagnostics report (`diagnostics::Report`, as JSON)
+    /// to the account whose login `token` is: the site shows its problems
+    /// at /watch, or, for a report with none, clears that cloud's earlier
+    /// ones.
+    pub fn report_diagnostics(&self, token: &str, report: &[u8]) -> Result<(), SendError> {
+        let mut res = self
+            .agent
+            .post(format!("{}/api/cloud-diagnostics", self.base))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .send(report)
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        let status = res.status().as_u16();
+        let text = res.body_mut().read_to_string().unwrap_or_default();
+        match status {
+            200 | 204 => Ok(()),
+            401 => Err(SendError::LoggedOut(
+                "the site doesn't know that login".into(),
+            )),
+            s => Err(SendError::Fatal(format!(
+                "the site returned {s}: {}",
+                crate::event::truncate_chars(text.trim(), 200)
+            ))),
+        }
+    }
+
+    /// The account's cloud diagnostics reports, as the site lists them
+    /// (`GET /api/cloud-diagnostics`): for the local viewer, which shows
+    /// them as the site's /watch does.
+    pub fn cloud_reports(&self, token: &str) -> Result<String, SendError> {
+        let mut res = self
+            .agent
+            .get(format!("{}/api/cloud-diagnostics", self.base))
+            .header("Authorization", format!("Bearer {token}"))
+            .call()
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        let status = res.status().as_u16();
+        let text = res.body_mut().read_to_string().unwrap_or_default();
+        match status {
+            200 => Ok(text),
+            401 => Err(SendError::LoggedOut(
+                "the site doesn't know that login".into(),
+            )),
+            s => Err(SendError::Fatal(format!("the site returned {s}"))),
+        }
+    }
+
+    /// Changes a cloud diagnostics report (`PATCH /api/cloud-diagnostics`,
+    /// with `body`: `{key, action}`), for the local viewer.
+    pub fn change_cloud_report(&self, token: &str, body: &[u8]) -> Result<(), SendError> {
+        let res = self
+            .agent
+            .patch(format!("{}/api/cloud-diagnostics", self.base))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .send(body)
+            .map_err(|e| SendError::Retry(e.to_string()))?;
+        match res.status().as_u16() {
+            200 | 204 => Ok(()),
+            401 => Err(SendError::LoggedOut(
+                "the site doesn't know that login".into(),
+            )),
+            s => Err(SendError::Fatal(format!("the site returned {s}"))),
+        }
+    }
+
+    /// The latest release's version, as the site's install script names it
+    /// (`# Installs agent-graph <version> from …`).
+    pub fn latest_version(&self) -> Option<String> {
+        let mut res = self
+            .agent
+            .get(format!("{}/install.sh", self.base))
+            .call()
+            .ok()?;
+        if res.status().as_u16() != 200 {
+            return None;
+        }
+        let text = res.body_mut().read_to_string().ok()?;
+        text.lines()
+            .find_map(|l| l.strip_prefix("# Installs agent-graph "))
+            .and_then(|rest| rest.split_whitespace().next())
+            .map(String::from)
     }
 
     /// Asks the site to delete the log's chunks before `before` (where a

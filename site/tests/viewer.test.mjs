@@ -1207,7 +1207,14 @@ test("R56: a refresh is one request: the graph now, with its tree's timeline", a
   assert.equal(banner.hidden, true, banner.textContent);
   assert.deepEqual(graphs(), ["/api/graph?root=x%3Aa"]);
   assert.deepEqual(
-    requests.filter(r => !r.startsWith("/api/graph") && r !== "/api/info"),
+    requests.filter(
+      // (What the clouds report is asked for once, as the page starts, and
+      // every few minutes: not with each refresh.)
+      r =>
+        !r.startsWith("/api/graph") &&
+        r !== "/api/info" &&
+        r !== "/api/cloud-reports",
+    ),
     [],
     "and nothing else",
   );
@@ -1229,6 +1236,90 @@ test("R56: a refresh is one request: the graph now, with its tree's timeline", a
   );
   assert.deepEqual(graphs().slice(2), ["/api/graph?root=x%3Ab"]);
   assert.equal(banner.hidden, true, banner.textContent);
+});
+
+test("a cloud that reports it's broken says so atop the list, and can be dismissed", async t => {
+  const changed = [];
+  const report = {
+    key: "Cursor cloud:token-missing",
+    cloud: "Cursor cloud",
+    issues: ["token-missing"],
+    at: Date.now() - 60_000,
+    report: {
+      version: "0.1.21",
+      platform: "linux x86_64",
+      findings: [
+        {
+          level: "error",
+          what: "AGENT_GRAPH_TOKEN isn't set",
+          issue: "token-missing",
+        },
+        {level: "ok", what: "The site can be reached"},
+      ],
+      logs: {"watch-remote.log": "Not logged in."},
+    },
+    fixes: [
+      {
+        id: "token-missing",
+        title: "AGENT_GRAPH_TOKEN isn't set",
+        fix: "Add `AGENT_GRAPH_TOKEN` in Cursor's dashboard.",
+        link: "https://x/troubleshooting#token-missing",
+      },
+    ],
+  };
+  const g = graph([node("x:a")]);
+  const fetch = async (url, init) => {
+    const u = new URL(String(url), "http://x");
+    if (u.pathname === "/api/cloud-reports" && init?.method === "POST") {
+      changed.push([u.searchParams.get("key"), u.searchParams.get("action")]);
+      return {ok: true, status: 204, text: async () => ""};
+    }
+    const body =
+      u.pathname === "/api/info"
+        ? {now_ms: Date.now(), events_dir: "x"}
+        : u.pathname === "/api/graph"
+          ? asServer(g, u.searchParams.get("root"))
+          : u.pathname === "/api/cloud-reports"
+            ? {reports: [report]}
+            : null;
+    return body
+      ? {ok: true, status: 200, json: async () => body}
+      : {ok: false, status: 404, text: async () => "Not found"};
+  };
+  class EventSource {
+    addEventListener() {}
+  }
+  const window = loadViewer(t, null, {hash: "#x:a", fetch, EventSource});
+  const doc = window.document;
+  await until(() => doc.querySelector(".cloud-alert"));
+  const alert = doc.querySelector(".cloud-alert");
+  assert.match(alert.textContent, /Cursor cloud isn’t working/);
+  assert.match(alert.textContent, /1 problem/);
+  // It's atop the sessions list.
+  assert.equal(
+    doc.querySelector("aside.sessions").firstElementChild.id,
+    "cloud-alerts",
+  );
+
+  alert.click();
+  const dialog = doc.querySelector("#cloud-modal");
+  assert.ok(dialog, "the report opens");
+  const text = dialog.textContent;
+  assert.match(text, /AGENT_GRAPH_TOKEN isn't set/);
+  assert.match(text, /Add AGENT_GRAPH_TOKEN in Cursor's dashboard/);
+  assert.match(text, /The site can be reached/);
+  assert.match(text, /Not logged in\./);
+  assert.equal(
+    dialog.querySelector(".cloud-more").getAttribute("href"),
+    "https://x/troubleshooting#token-missing",
+  );
+
+  [...dialog.querySelectorAll("button")]
+    .find(b => b.textContent === "Dismiss")
+    .click();
+  await until(() => changed.length === 1);
+  assert.deepEqual(changed, [["Cursor cloud:token-missing", "dismiss"]]);
+  await until(() => doc.querySelector("#cloud-alerts").hidden);
 });
 
 test("the list groups sessions by folder, which fold away", async t => {

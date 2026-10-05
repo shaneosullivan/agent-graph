@@ -1777,6 +1777,119 @@ body {
   margin-top: 16px;
 }
 
+/* /watch before anything's shared: what clouds report is wrong with them */
+.site .cloud-reports {
+  display: grid;
+  gap: 10px;
+  max-width: 640px;
+  margin: 0 auto 16px;
+}
+.site .cloud-report-alert {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line));
+  background: color-mix(in srgb, var(--bad) 8%, var(--panel));
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.site .cloud-report-alert span {
+  color: var(--muted);
+  font-size: 14px;
+}
+.site .cloud-report-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: 85vh;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+}
+.site .cloud-report-modal::backdrop {
+  background: rgb(0 0 0 / 0.42);
+}
+.site .cloud-report-box {
+  position: relative;
+  padding: 22px 24px 26px;
+}
+.site .cloud-report-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  border: none;
+  background: none;
+  font-size: 22px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.site .cloud-report-box h3 {
+  margin-top: 20px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.site .cloud-report-finding {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.site .cloud-report-what {
+  font-weight: 600;
+}
+.site .level-error .cloud-report-what {
+  color: var(--bad);
+}
+.site .level-warn .cloud-report-what {
+  color: var(--warn);
+}
+.site .cloud-report-box pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  background: var(--panel-2);
+  padding: 8px 10px;
+  border-radius: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+.site .cloud-report-fine {
+  list-style: none;
+  padding: 0;
+  color: var(--muted);
+}
+.site .cloud-report-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+}
+
+/* Hidden cloud problems: folded away until asked for */
+.site .acct-hidden > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.site .acct-hidden[open] > summary {
+  margin-bottom: 12px;
+}
+
+/* /troubleshooting: each problem, linkable */
+.site .trouble {
+  scroll-margin-top: 24px;
+}
+.site .trouble h2 .anchor {
+  color: inherit;
+  text-decoration: none;
+}
+.site .trouble:target h2 {
+  background: var(--accent-soft);
+  border-radius: 6px;
+}
+
 /* Rows: computers, API tokens, live shares */
 .site .acct-rows {
   margin: 0;

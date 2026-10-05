@@ -23,6 +23,8 @@ pub mod autostart;
 #[cfg(feature = "cli")]
 pub mod cli;
 #[cfg(feature = "cli")]
+pub mod diagnostics;
+#[cfg(feature = "cli")]
 pub mod emit;
 #[cfg(feature = "cli")]
 pub mod help;

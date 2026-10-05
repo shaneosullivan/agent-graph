@@ -312,18 +312,8 @@ fn random_secret() -> Result<String, String> {
 /// "Codex cloud", and in Cursor's (whose VMs are all called "cursor"),
 /// "Cursor cloud".
 pub fn host_name() -> String {
-    if in_claude_code_cloud(std::env::var("CLAUDE_CODE_REMOTE").ok().as_deref()) {
-        return CLAUDE_CODE_CLOUD.to_string();
-    }
-    if in_codex_cloud(
-        std::env::var("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")
-            .ok()
-            .as_deref(),
-    ) {
-        return CODEX_CLOUD.to_string();
-    }
-    if std::env::var_os(crate::adapter::cursor::CLOUD_VAR).is_some() {
-        return CURSOR_CLOUD.to_string();
+    if let Some(cloud) = cloud() {
+        return cloud.to_string();
     }
     std::process::Command::new("hostname")
         .output()
@@ -336,17 +326,34 @@ pub fn host_name() -> String {
         .unwrap_or_default()
 }
 
-const CLAUDE_CODE_CLOUD: &str = "Claude Code cloud";
+/// The coding agent's cloud this runs in, by the name it's given at /watch
+/// ("Claude Code cloud", "Codex cloud", "Cursor cloud"), or `None` on a
+/// computer of one's own.
+pub fn cloud() -> Option<&'static str> {
+    if in_claude_code_cloud(std::env::var("CLAUDE_CODE_REMOTE").ok().as_deref()) {
+        return Some(CLAUDE_CODE_CLOUD);
+    }
+    if in_codex_cloud(
+        std::env::var("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")
+            .ok()
+            .as_deref(),
+    ) {
+        return Some(CODEX_CLOUD);
+    }
+    std::env::var_os(crate::adapter::cursor::CLOUD_VAR).map(|_| CURSOR_CLOUD)
+}
+
+pub const CLAUDE_CODE_CLOUD: &str = "Claude Code cloud";
 
 /// Cursor's cloud agents' VMs (see `adapter::cursor::CLOUD_VAR`).
-const CURSOR_CLOUD: &str = "Cursor cloud";
+pub const CURSOR_CLOUD: &str = "Cursor cloud";
 
 /// Whether CLAUDE_CODE_REMOTE says this is Claude Code's cloud.
 fn in_claude_code_cloud(remote: Option<&str>) -> bool {
     remote == Some("true")
 }
 
-const CODEX_CLOUD: &str = "Codex cloud";
+pub const CODEX_CLOUD: &str = "Codex cloud";
 
 /// Whether CODEX_INTERNAL_ORIGINATOR_OVERRIDE, which a Codex cloud task
 /// (chatgpt.com/codex) is given, says this is Codex's cloud.

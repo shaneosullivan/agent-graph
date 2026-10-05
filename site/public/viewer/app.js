@@ -233,6 +233,23 @@ const source = window.agentGraphSource || {
     if (!res.ok) throw Object.assign(new Error(body.error), { command: body.command });
     return body;
   },
+  /**
+   * What the account's coding agents' clouds report is wrong with them
+   * (`{ reports }`, from the site, as /watch has them): asked for through
+   * `agent-graph view`, with this computer's login. None if it isn't logged
+   * in, or can't reach the site.
+   */
+  cloudReports: () => getJSON('/api/cloud-reports'),
+  /** Dismisses (`action` "dismiss") or mutes ("mute") cloud report `key`. */
+  async changeCloudReport(key, action) {
+    const params = new URLSearchParams({ key, action });
+    const res = await fetch(`/api/cloud-reports?${params}`, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'X-Agent-Graph-Key': KEY || '' },
+    });
+    if (!res.ok) throw new Error(await res.text());
+  },
 };
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -3631,6 +3648,176 @@ function wire() {
   setInterval(renderSessions, 30_000);
 }
 
+// ---------------------------------------------------------------------------
+// Clouds that say they're broken
+
+/** How often to ask again what the clouds report. */
+const CLOUD_REPORTS_EVERY = 5 * 60_000;
+
+/**
+ * What coding agents' clouds have reported is wrong with them
+ * (`agent-graph diagnostics`, which `watch-remote` sends from a cloud as it
+ * starts and stops): an alert at the top of the sessions list for each,
+ * opening a dialog with the whole report and what to do. Dismissing one
+ * hides it until it's reported again; "Never show this again" hides that
+ * breakage, in that cloud, for good (the account page can show it again).
+ * Only a source with `cloudReports` has any.
+ */
+async function loadCloudReports() {
+  if (!source.cloudReports) return;
+  try {
+    const { reports } = await source.cloudReports();
+    S.cloudReports = Array.isArray(reports) ? reports : [];
+  } catch {
+    S.cloudReports = [];
+  }
+  renderCloudAlerts();
+}
+
+function renderCloudAlerts() {
+  const list = document.querySelector('aside.sessions');
+  if (!list) return;
+  let box = $('#cloud-alerts');
+  if (!box) {
+    box = h('div', { id: 'cloud-alerts', class: 'cloud-alerts', role: 'alert' });
+    list.prepend(box);
+  }
+  const reports = S.cloudReports || [];
+  box.replaceChildren(
+    ...reports.map((r) =>
+      h(
+        'button',
+        { class: 'cloud-alert', type: 'button', onclick: () => openCloudReport(r.key) },
+        h('span', { class: 'cloud-alert-icon', 'aria-hidden': 'true' }, '!'),
+        h(
+          'span',
+          { class: 'cloud-alert-text' },
+          h('strong', null, `${r.cloud} isn’t working`),
+          h(
+            'span',
+            null,
+            `${r.issues.length} problem${r.issues.length === 1 ? '' : 's'}, reported ${ago(r.at)}. What’s wrong?`,
+          ),
+        ),
+      ),
+    ),
+  );
+  box.hidden = !reports.length;
+}
+
+/** `text` with its `backticks` as code. */
+function withCode(text) {
+  return String(text)
+    .split('`')
+    .map((part, i) => (i % 2 ? h('code', null, part) : part));
+}
+
+/** The dialog with everything cloud report `key` says, and what to do. */
+/** Closes `dialog`, where the browser can (as `closeModal`). */
+const closeDialog = (dialog) => {
+  if (typeof dialog.close === 'function') dialog.close();
+  else dialog.removeAttribute('open');
+};
+
+function openCloudReport(key) {
+  const r = (S.cloudReports || []).find((x) => x.key === key);
+  if (!r) return;
+  let dialog = $('#cloud-modal');
+  if (!dialog) {
+    dialog = h('dialog', { id: 'cloud-modal', class: 'node-modal cloud-modal', 'aria-label': 'What’s wrong with a cloud' });
+    dialog.addEventListener('click', (e) => {
+      if (e.target === dialog) closeDialog(dialog);
+    });
+    document.body.append(dialog);
+  }
+  const report = r.report || {};
+  const fixes = new Map((r.fixes || []).map((f) => [f.id, f]));
+  const findings = Array.isArray(report.findings) ? report.findings : [];
+  const problems = findings.filter((f) => f.level === 'error' || f.level === 'warn');
+  const fine = findings.filter((f) => f.level === 'ok' || f.level === 'info');
+  const status = h('p', { class: 'cloud-status', role: 'status' });
+  const act = async (action, done) => {
+    status.textContent = '';
+    try {
+      await source.changeCloudReport(key, action);
+    } catch (err) {
+      status.textContent = `That didn’t work: ${err.message || err}`;
+      return;
+    }
+    S.cloudReports = (S.cloudReports || []).filter((x) => x.key !== key);
+    renderCloudAlerts();
+    closeDialog(dialog);
+    if (done) done();
+  };
+  dialog.replaceChildren(
+    h(
+      'div',
+      { class: 'modal-box' },
+      h('button', { class: 'modal-close', type: 'button', 'aria-label': 'Close', onclick: () => closeDialog(dialog) }, '×'),
+      h('h2', null, `${r.cloud} isn’t working`),
+      h(
+        'p',
+        { class: 'lead' },
+        `Reported ${clock(r.at)} by agent-graph ${report.version || ''}${report.platform ? ` (${report.platform})` : ''}. `,
+        'Fix what’s below, then start a new session there: a cloud that works again clears this by itself.',
+      ),
+      section(
+        'What’s wrong',
+        problems.map((f) => {
+          const fix = f.issue && fixes.get(f.issue);
+          return h(
+            'div',
+            { class: `cloud-finding ${f.level}` },
+            h('div', { class: 'cloud-what' }, h('span', { class: 'cloud-mark' }, f.level === 'error' ? '✗' : '!'), f.what),
+            f.detail ? h('pre', { class: 'cloud-detail' }, f.detail) : null,
+            fix ? h('p', { class: 'cloud-fix' }, h('strong', null, 'Fix: '), withCode(fix.fix)) : null,
+            fix
+              ? h('a', { class: 'cloud-more', href: fix.link, target: '_blank', rel: 'noopener' }, `More: ${fix.title}`)
+              : null,
+          );
+        }),
+      ),
+      fine.length
+        ? section(
+            'What’s in place',
+            h('ul', { class: 'cloud-fine' }, fine.map((f) => h('li', null, f.level === 'ok' ? '✓ ' : '• ', f.what))),
+          )
+        : null,
+      Object.entries(report.logs || {}).map(([name, text]) =>
+        section(`The end of ${name}`, h('pre', { class: 'cloud-log' }, text)),
+      ),
+      h(
+        'div',
+        { class: 'cloud-actions' },
+        h(
+          'button',
+          {
+            class: 'btn',
+            type: 'button',
+            title: 'Hide it until this cloud reports it again.',
+            onclick: () => act('dismiss'),
+          },
+          'Dismiss',
+        ),
+        h(
+          'button',
+          {
+            class: 'btn secondary',
+            type: 'button',
+            title: `Never show this problem in ${r.cloud} again. Your account page can show it again.`,
+            onclick: () => act('mute'),
+          },
+          'Never show this again',
+        ),
+      ),
+      status,
+    ),
+  );
+  if (dialog.open) return;
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
+}
+
 async function main() {
   wire();
   // On a phone, a session named in the address opens as its page, with the
@@ -3662,6 +3849,8 @@ async function main() {
   }
   connect();
   scheduleRefresh();
+  loadCloudReports();
+  if (source.cloudReports) setInterval(loadCloudReports, CLOUD_REPORTS_EVERY);
 }
 
 main();
