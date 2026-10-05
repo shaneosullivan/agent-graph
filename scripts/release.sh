@@ -351,7 +351,9 @@ scripts/notarize-mac.sh "${bins[@]}"
 
 step "4. Uploading to $RELEASE_BUCKET/releases/$VERSION"
 out="target/release-$VERSION"
-rm -rf "$out"
+# Earlier releases' archives are in the bucket: nothing here reads them.
+rm -rf "$out" target/release-*/
+rm -f target/release-*.log
 mkdir -p "$out"
 bucket="${RELEASE_BUCKET#gs://}"
 files="$out/files.tsv" # target, URL, SHA-256
