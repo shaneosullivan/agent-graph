@@ -348,6 +348,8 @@ pub fn run(root: &Path, opts: Options) -> Result<(), String> {
             crate::adapter::cursor::mark_archived(&events);
             // And what they're waiting on you for (an approval, an answer).
             crate::adapter::cursor::mark_waiting(&events);
+            // In Cursor's cloud, its agents' names, from Cursor's API.
+            crate::adapter::cursor::name_cloud_chats(&events);
         }
         // Still here, watching so many sessions: said now and then, while
         // the site can be reached (it's only for the home page, so a
@@ -1499,6 +1501,22 @@ pub struct Client {
 /// it names a file of them (as for curl and OpenSSL), or else the ones
 /// built in. A proxy that looks inside HTTPS signs with a certificate of
 /// its own, which only that file has: Codex's cloud, for one, sets it so.
+/// An HTTP agent for another service's API (Cursor's), as `Client`'s is
+/// for the site: `timeout` for each request, through any proxy, with the
+/// certificates `SSL_CERT_FILE` names too, and never following a redirect
+/// (which would carry the key on).
+pub(crate) fn api_agent(timeout: Duration) -> ureq::Agent {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .proxy(ureq::Proxy::try_from_env())
+        .user_agent(concat!("agent-graph/", env!("CARGO_PKG_VERSION")))
+        .tls_config(tls_config())
+        .build();
+    ureq::Agent::new_with_config(config)
+}
+
 fn tls_config() -> ureq::tls::TlsConfig {
     let builder = ureq::tls::TlsConfig::builder();
     match std::env::var_os("SSL_CERT_FILE")

@@ -57,6 +57,12 @@
       }
     },
     {
+      "id": "cursor-cloud-names",
+      "title": "Cursor cloud agents are named by their repository",
+      "problem": "A Cursor cloud agent's machine has no Cursor database to read its name from, so Agent Graph names it by its repository, unless it can ask Cursor's API, with a Cursor API key. Then each agent shows as Cursor names it.",
+      "fix": "In Cursor's dashboard, make an API key, and add it as a secret named `CURSOR_API_KEY` (Cloud Agents → Secrets, as for `AGENT_GRAPH_TOKEN`), then start a new agent. The agent can read it, as it can any secret, and it can do whatever your Cursor API key can: leave it out if you'd rather."
+    },
+    {
       "id": "data-folder",
       "title": "Agent Graph can't write its data folder",
       "problem": "Sessions are recorded in `~/.agent-graph` (or `$AGENT_GRAPH_HOME`), and that folder can't be made or written to.",

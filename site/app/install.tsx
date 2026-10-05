@@ -342,6 +342,16 @@ function CursorCloudSteps() {
         add a secret named <code>AGENT_GRAPH_TOKEN</code>, with the token as its
         value:
         <CopyCommand command="AGENT_GRAPH_TOKEN" />
+        <span className="install-or">
+          Optional: to show each agent with the name Cursor gives it (rather
+          than its repository&rsquo;s), make a Cursor API key in the dashboard
+          too, and add it the same way, as a secret named:
+        </span>
+        <CopyCommand command="CURSOR_API_KEY" />
+        <span className="install-or">
+          An agent can read its secrets, and this key can do whatever your
+          Cursor API key can: leave it out if you&rsquo;d rather.
+        </span>
       </li>
       <li>
         Still in Cursor, open the settings of the cloud environment for that

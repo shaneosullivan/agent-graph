@@ -254,6 +254,9 @@ pub fn run(opts: &Options) -> Report {
     if cloud == Some(crate::account::CODEX_CLOUD) {
         codex_cloud_hooks(&mut findings);
     }
+    if cloud == Some(crate::account::CURSOR_CLOUD) {
+        cursor_cloud_names(&mut findings);
+    }
     let reached = site(&client, &opts.site, cloud, &mut findings);
     let logged_in = login(
         &client,
@@ -729,6 +732,42 @@ fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
     let mut text = String::new();
     std::io::Read::read_to_string(&mut child.stdout.take()?, &mut text).ok()?;
     Some(text.trim().to_string())
+}
+
+/// In Cursor's cloud: whether its agents can be named as Cursor names them,
+/// from its API, with a Cursor API key (`CURSOR_API_KEY`). Without one,
+/// they're named by their repository: nothing's wrong.
+fn cursor_cloud_names(out: &mut Vec<Finding>) {
+    let var = crate::adapter::cursor::API_KEY_VAR;
+    let Some(key) = std::env::var(var)
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    else {
+        out.push(Finding::problem(
+            Level::Info,
+            "cursor-cloud-names",
+            format!(
+                "{var} isn't set: cloud agents are named by their repository, not as in Cursor"
+            ),
+        ));
+        return;
+    };
+    match crate::adapter::cursor::api_key_works(&key) {
+        Some(true) => out.push(Finding::ok(format!(
+            "{var} (set) is a key Cursor's API takes: cloud agents are named as in Cursor"
+        ))),
+        Some(false) => out.push(Finding::problem(
+            Level::Warn,
+            "cursor-cloud-names",
+            format!(
+                "{var} isn't a key Cursor's API takes: cloud agents are named by their repository"
+            ),
+        )),
+        None => out.push(Finding::info(format!(
+            "{var} is set, but Cursor's API couldn't be asked about it"
+        ))),
+    }
 }
 
 /// The repository `dir` is in: the nearest folder up with a `.git`.

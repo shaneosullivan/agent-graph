@@ -609,6 +609,9 @@ fn titled(session: &str, state: State, conversation: &str) -> Draft {
 /// app chat's (`app_titles`).
 #[cfg(feature = "cli")]
 pub fn title_of(conversation: &str) -> Option<String> {
+    if in_cloud() {
+        return cloud_name(conversation);
+    }
     let home = crate::paths::user_home()?;
     if std::env::var_os("CURSOR_INVOKED_AS").is_some() {
         return cli_title(&home.join(".cursor").join("chats"), conversation);
@@ -620,6 +623,188 @@ pub fn title_of(conversation: &str) -> Option<String> {
 #[cfg(not(feature = "cli"))]
 pub fn title_of(_conversation: &str) -> Option<String> {
     None
+}
+
+/// The variable a Cursor API key is given as, in Cursor's cloud (a secret):
+/// what its agents' names are asked for with (`name_cloud_chats`).
+pub const API_KEY_VAR: &str = "CURSOR_API_KEY";
+
+/// Cursor's API, for its cloud agents' names (`AGENT_GRAPH_CURSOR_API` in
+/// its place, for the tests).
+#[cfg(feature = "cli")]
+fn cursor_api() -> String {
+    std::env::var("AGENT_GRAPH_CURSOR_API")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| "https://api.cursor.com".to_string())
+}
+
+/// How often, at most, a cloud agent's name is asked for again: it's named
+/// soon after it starts, and can be renamed.
+#[cfg(feature = "cli")]
+const NAME_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Where a cloud agent's name, from Cursor's API, is kept, in its machine.
+#[cfg(feature = "cli")]
+fn cloud_name_path(conversation: &str) -> Option<std::path::PathBuf> {
+    is_id(conversation.trim_start_matches("bc-")).then_some(())?;
+    Some(
+        crate::paths::data_dir()?
+            .join(CLOUD_NOTES)
+            .join(format!("name-{conversation}")),
+    )
+}
+
+/// A cloud agent's name, as last asked for (`name_cloud_chats`).
+#[cfg(feature = "cli")]
+fn cloud_name(conversation: &str) -> Option<String> {
+    let name = std::fs::read_to_string(cloud_name_path(conversation)?).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| truncate_chars(name, LABEL_MAX))
+}
+
+/// In Cursor's cloud, with a Cursor API key (`CURSOR_API_KEY`, a secret):
+/// asks Cursor's API (`GET /v1/agents/{id}`, whose ids are the hooks'
+/// conversations) for the names of the chats at work here, as Cursor shows
+/// them: a cloud agent's machine has no Cursor database to read them from.
+/// Each is kept (`cloud_name`), for every hook's status to carry, and a new
+/// or changed one is said at once, with the chat's state as it stands.
+/// Run by `watch-remote`, which is running there all along, so the hooks
+/// never wait on the network. Returns how many names were said.
+#[cfg(feature = "cli")]
+pub fn name_cloud_chats(events_dir: &std::path::Path) -> usize {
+    use std::sync::Mutex;
+    static ASKED: Mutex<Vec<(String, std::time::Instant)>> = Mutex::new(Vec::new());
+    if !in_cloud() {
+        return 0;
+    }
+    let Some(key) = std::env::var(API_KEY_VAR)
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    else {
+        return 0;
+    };
+    let Ok(entries) = std::fs::read_dir(events_dir) else {
+        return 0;
+    };
+    let recent = std::time::Duration::from_secs(30 * 60);
+    let agent = crate::remote::api_agent(std::time::Duration::from_secs(10));
+    let mut said = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name
+            .strip_prefix(&format!("{PROVIDER}-"))
+            .and_then(|n| n.strip_suffix(".jsonl"))
+        else {
+            continue;
+        };
+        let fresh = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age < recent);
+        let Some(path) = cloud_name_path(id).filter(|_| fresh) else {
+            continue;
+        };
+        {
+            let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
+            if asked
+                .iter()
+                .any(|(a, at)| a == id && at.elapsed() < NAME_EVERY)
+            {
+                continue;
+            }
+            asked.retain(|(a, _)| a != id);
+            asked.push((id.to_string(), std::time::Instant::now()));
+        }
+        let Some(named) = agent_name(&agent, &key, id) else {
+            continue;
+        };
+        if cloud_name(id).as_deref() == Some(named.as_str()) {
+            continue;
+        }
+        let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
+        if std::fs::write(&path, &named).is_err() {
+            continue;
+        }
+        // Said now, with the chat's state as it stands (a status is what
+        // carries a name).
+        let file = entry.path();
+        let node = node_id(id, None);
+        // (Never a chat that's ended: a status would start it again.)
+        if latest_word(&file, &node).is_some_and(|l| l.kind == "session.ended") {
+            continue;
+        }
+        let Some(state) = latest_state(&file, &node) else {
+            continue;
+        };
+        let draft = Draft::new(
+            &node,
+            Payload::Status(Status {
+                state,
+                summary: None,
+                title: Some(truncate_chars(&named, LABEL_MAX)),
+                turn_end: false,
+            }),
+        );
+        if append_app_event(&file, draft) {
+            said += 1;
+        }
+    }
+    said
+}
+
+#[cfg(not(feature = "cli"))]
+pub fn name_cloud_chats(_events_dir: &std::path::Path) -> usize {
+    0
+}
+
+/// Cloud agent `id`'s name, from Cursor's API, if it has one.
+#[cfg(feature = "cli")]
+fn agent_name(agent: &ureq::Agent, key: &str, id: &str) -> Option<String> {
+    let mut res = agent
+        .get(format!("{}/v1/agents/{id}", cursor_api()))
+        .header("Authorization", format!("Bearer {key}"))
+        .call()
+        .ok()?;
+    if res.status().as_u16() != 200 {
+        return None;
+    }
+    let body: Value = serde_json::from_str(&res.body_mut().read_to_string().ok()?).ok()?;
+    let name = str_at(&body, &["name"])?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The state `node` last said it was in, in `file`.
+#[cfg(feature = "cli")]
+fn latest_state(file: &std::path::Path, node: &str) -> Option<State> {
+    let tail = super::claude_code::read_file(file, Some(64 * 1024))?;
+    tail.lines().rev().find_map(|line| {
+        let event: Value = serde_json::from_str(line).ok()?;
+        if str_at(&event, &["node"])? != node || str_at(&event, &["type"])? != "status" {
+            return None;
+        }
+        serde_json::from_value(event.get("data")?.get("state")?.clone()).ok()
+    })
+}
+
+/// Whether `key` is a Cursor API key Cursor's API takes: `Some(false)` if
+/// it refuses it, `None` if it can't be asked.
+#[cfg(feature = "cli")]
+pub fn api_key_works(key: &str) -> Option<bool> {
+    let agent = crate::remote::api_agent(std::time::Duration::from_secs(10));
+    let res = agent
+        .get(format!("{}/v1/agents?limit=1", cursor_api()))
+        .header("Authorization", format!("Bearer {key}"))
+        .call()
+        .ok()?;
+    match res.status().as_u16() {
+        200 => Some(true),
+        401 | 403 => Some(false),
+        _ => None,
+    }
 }
 
 /// What Cursor's CLI keeps of a chat in its own database
