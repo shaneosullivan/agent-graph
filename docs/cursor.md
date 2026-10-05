@@ -209,6 +209,8 @@ A cloud agent at cursor.com/agents, on a branch of a throwaway repository with t
 
 ### A. Hooks in the repository (as Claude Code's cloud)
 
+**Found in the first real test (2026-10-05):** Cursor reads `hooks.json` as JSON with comments, so a `//` anywhere in a command (the install script's `https://…`) starts a "comment" that breaks the file, and Cursor then runs *none* of its hooks, without a word, locally or in the cloud. (Found with Cursor's CLI: any command holding `https://x`, even after a `#`, stopped every hook in the file.) The commands now write the address as `https:/''/…`, which `sh` reads as `https://…`; `install cursor` refuses a `--command` with `//` or `/*`; and the first hook keeps the install script's output in `~/.agent-graph/install.log`.
+
 **Built (2026-10-04)**, with the site's tab, but not yet tried in Cursor's cloud (the hooks install the site's latest release, so that waits for one): `agent-graph install cursor --cloud --scope project`. The hooks are `install::cursor_cloud_command`; the cloud mode is `Adapter::start` and `cloud_subagent_here` in `src/adapter/cursor.rs`, with its notes in `~/.agent-graph/cursor-cloud/`.
 
 The docs say cloud agents run **command hooks from the repository's `.cursor/hooks.json`**, but not `sessionStart`, `sessionEnd` or the MCP hooks. Everything else fires. That's Claude Code's cloud again, where the hooks are committed to the repository and do nothing anywhere else:

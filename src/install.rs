@@ -445,6 +445,12 @@ pub fn install_cursor(hooks_file: &mut Value, command: &str) -> Result<(), Strin
              {command}"
         ));
     }
+    if !cursor_can_read(command) {
+        return Err(format!(
+            "Cursor would read the `//` or `/*` in the hook command as the start of a \
+             comment, and then run none of its hooks, so nothing was changed: {command}"
+        ));
+    }
     uninstall_cursor(hooks_file)?;
     let file = hooks_file
         .as_object_mut()
@@ -498,7 +504,9 @@ fn cursor_cloud_command(event: &str, site: &str) -> String {
     if event != "beforeSubmitPrompt" {
         return format!("{IN_CURSOR_CLOUD}; {emit}");
     }
-    let url = if site.trim_end_matches('/') == crate::remote::DEFAULT_URL {
+    let ours = site.trim_end_matches('/') == crate::remote::DEFAULT_URL;
+    let site = without_comments(site.trim_end_matches('/'));
+    let url = if ours {
         String::new()
     } else {
         format!(" --url={site}")
@@ -507,14 +515,29 @@ fn cursor_cloud_command(event: &str, site: &str) -> String {
     // (Whether it's sharing is the pid file's process being there: matching
     // its command line would match this hook's own.)
     format!(
-        "{IN_CURSOR_CLOUD}; [ -x {CLOUD_BIN} ] || curl -fsSL {site}/install.sh | \
-         AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh >/dev/null 2>&1; \
+        "{IN_CURSOR_CLOUD}; mkdir -p \"$HOME/.agent-graph\"; \
+         [ -x {CLOUD_BIN} ] || curl -fsSL {site}/install.sh | \
+         AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh >>\"$HOME/.agent-graph/install.log\" 2>&1; \
          P=\"$HOME/.agent-graph/cursor-cloud-share.pid\"; \
          if [ -x {CLOUD_BIN} ] && ! kill -0 \"$(cat \"$P\" 2>/dev/null)\" 2>/dev/null; then \
-         mkdir -p \"$HOME/.agent-graph\"; \
          (if command -v setsid >/dev/null; then exec setsid {share}; else exec {share}; fi) \
          </dev/null >>\"$HOME/.agent-graph/watch-remote.log\" 2>&1 & echo $! >\"$P\"; fi; {emit}"
     )
+}
+
+/// `text` as a Cursor hook's command may have it: Cursor reads its hooks
+/// file as JSON with comments, so a `//` (as in `https://`) or `/*` in a
+/// command starts a "comment" that breaks the file, and Cursor then runs
+/// none of its hooks, silently. To the shell, `https:/''/x` is still
+/// `https://x`.
+fn without_comments(text: &str) -> String {
+    text.replace("//", "/''/").replace("/*", "/''*")
+}
+
+/// Whether Cursor would read `command` as it's written (see
+/// `without_comments`).
+fn cursor_can_read(command: &str) -> bool {
+    !command.contains("//") && !command.contains("/*")
 }
 
 /// Adds our hooks for Cursor's cloud (its cloud agents, at cursor.com/agents
@@ -1266,6 +1289,14 @@ mod tests {
             file["hooks"]["beforeSubmitPrompt"][0]["timeout"],
             CURSOR_CLOUD_START_TIMEOUT_SECS
         );
+        // Nothing Cursor would take for a comment, which would stop every
+        // hook in the file.
+        for list in file["hooks"].as_object().unwrap().values() {
+            for hook in list.as_array().unwrap() {
+                let command = hook["command"].as_str().unwrap();
+                assert!(cursor_can_read(command), "{command}");
+            }
+        }
         // Another site's named; ours isn't.
         let mut other = json!({});
         install_cursor_cloud(&mut other, "https://graphs.example.com").unwrap();
@@ -1273,9 +1304,10 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(
-            start.contains("--url=https://graphs.example.com"),
+            start.contains("--url=https:/''/graphs.example.com"),
             "{start}"
         );
+        assert!(cursor_can_read(start), "{start}");
         assert_eq!(uninstall_cursor(&mut file).unwrap(), CURSOR_HOOKS.len());
         assert_eq!(file, theirs);
     }
@@ -1341,6 +1373,13 @@ mod tests {
     #[test]
     fn a_cursor_hook_command_must_be_findable_again() {
         assert!(install_cursor(&mut json!({}), "my-hook.sh").is_err());
+    }
+
+    #[test]
+    fn a_cursor_hook_command_cursor_would_read_as_a_comment_is_refused() {
+        let command = "/opt//agent-graph emit --provider cursor";
+        assert!(install_cursor(&mut json!({}), command).is_err());
+        assert_eq!(without_comments("https://x/a"), "https:/''/x/a");
     }
 
     /// Codex's own test vector (codex-rs/config/src/fingerprint_tests.rs, as
