@@ -25,6 +25,16 @@
       }
     },
     {
+      "id": "hooks-outdated",
+      "title": "The committed cloud hooks are from an older agent-graph",
+      "problem": "A cloud's hooks are committed to the repository, so they stay as an older agent-graph wrote them until they're installed again: without what's been fixed or added since (newer hooks keep agent-graph itself up to date in the cloud, for one).",
+      "fix": "On your computer, with the latest agent-graph, install the cloud hooks again in the repository, and commit and push them.",
+      "clouds": {
+        "Claude Code cloud": "On your computer, in the repository, with the latest agent-graph: run `agent-graph install claude-code --cloud`, then commit `.claude/settings.json` and push it.",
+        "Cursor cloud": "On your computer, in the repository, with the latest agent-graph: run `agent-graph install cursor --cloud --scope project`, then commit `.cursor/hooks.json` and push it."
+      }
+    },
+    {
       "id": "hook-program-missing",
       "title": "A hook runs a program that isn't there",
       "problem": "An Agent Graph hook names an `agent-graph` that's been moved or deleted (an upgrade by another route, or a build folder cleaned), so it does nothing.",

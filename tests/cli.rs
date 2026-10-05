@@ -2457,3 +2457,54 @@ fn diagnostics_warns_when_a_clouds_checkout_is_behind() {
     git(&workspace, &["pull", "-q", "origin", "main"]);
     assert!(!behind(&checked(&workspace)));
 }
+
+/// In a cloud, `diagnostics` warns when the committed hooks aren't what
+/// this agent-graph installs: an older release's.
+#[test]
+fn diagnostics_warns_when_a_clouds_committed_hooks_are_older() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let out = bin()
+        .current_dir(&repo)
+        .args([
+            "install", "cursor", "--cloud", "--scope", "project", "--yes",
+        ])
+        .env("HOME", dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let issues = || -> Vec<String> {
+        let out = bin()
+            .current_dir(&repo)
+            .args(["diagnostics", "--json", "--url", "http://127.0.0.1:9"])
+            .env("AGENT_GRAPH_HOME", dir.path().join("ag"))
+            .env("HOME", dir.path())
+            .env("CLOUD_AGENT_ALL_SECRET_NAMES", "AGENT_GRAPH_TOKEN")
+            .env("CURSOR_AGENT_SOCKET", dir.path().join("none.sock"))
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| f["issue"].as_str().map(String::from))
+            .collect()
+    };
+    let hooks = repo.join(".cursor/hooks.json");
+    let text = read(&hooks);
+    let current = issues();
+    // An older release's: one of its commands isn't as this one writes it.
+    std::fs::write(&hooks, text.replace("update-checked", "update-was-checked")).unwrap();
+    let older = issues();
+    assert!(older.iter().any(|i| i == "hooks-outdated"), "{older:?}");
+    assert!(
+        !current.iter().any(|i| i == "hooks-outdated"),
+        "{current:?}"
+    );
+}

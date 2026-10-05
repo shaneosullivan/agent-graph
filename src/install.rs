@@ -92,7 +92,7 @@ const SYNC_TIMEOUT_SECS: u64 = 10;
 
 /// Also ours: the hook that shares from Claude Code's cloud (see
 /// `install_claude_code_cloud`), which runs no `emit`.
-const CLOUD_SHARE_MARKER: &str = "watch-remote --background";
+pub const CLOUD_SHARE_MARKER: &str = "watch-remote --background";
 
 /// Where the cloud hooks install `agent-graph`, and run it from.
 const CLOUD_BIN: &str = "\"$HOME/.local/bin/agent-graph\"";
@@ -525,8 +525,24 @@ fn cursor_cloud_command(event: &str, site: &str) -> String {
          </dev/null >>\"$HOME/.agent-graph/watch-remote.log\" 2>&1 & echo $! >\"$P\"; fi"
     );
     let setup = if event == "beforeSubmitPrompt" {
+        // And, at most once an hour, in the background: if the site's latest
+        // release (its install script names it) isn't this one, installs it,
+        // and starts sharing again with it. (A machine Cursor keeps between
+        // agents would otherwise stay on the release it first installed.)
+        // The install script swaps the file in whole, so what's running
+        // carries on; stopping sharing says nothing to the site, and the
+        // new run carries on the same share.
+        let lock = "\"$HOME/.agent-graph/installing\"";
+        let upgrade = format!(
+            "C=\"$HOME/.agent-graph/update-checked\"; \
+             if [ -x {CLOUD_BIN} ] && [ -z \"$(find \"$C\" -mmin -60 2>/dev/null)\" ]; then touch \"$C\"; \
+             (L=$(curl -fsSL {site}/install.sh | sed -n 's/^# Installs agent-graph \\([^ ]*\\) .*/\\1/p' | head -n 1); \
+             if [ -n \"$L\" ] && [ \"$({CLOUD_BIN} --version)\" != \"agent-graph $L\" ] && mkdir {lock} 2>/dev/null; then \
+             {install}; rmdir {lock}; kill \"$(cat \"$P\" 2>/dev/null)\" 2>/dev/null; sleep 1; {share_unless_sharing}; fi) \
+             </dev/null >/dev/null 2>&1 & fi"
+        );
         format!(
-            "[ -x {CLOUD_BIN} ] || {install}; if [ -x {CLOUD_BIN} ]; then {share_unless_sharing}; fi"
+            "[ -x {CLOUD_BIN} ] || {install}; if [ -x {CLOUD_BIN} ]; then {share_unless_sharing}; fi; {upgrade}"
         )
     } else {
         // (A lock left by an install that was stopped is let go of after
@@ -1382,6 +1398,8 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // (Checked for an upgrade just now: none's fetched.)
+        std::fs::write(home.path().join(".agent-graph/update-checked"), b"").unwrap();
         assert_eq!(run("beforeSubmitPrompt", true).trim(), "{}");
         assert_eq!(run("beforeSubmitPrompt", true).trim(), "{}");
         assert_eq!(run("stop", true).trim(), "{}");

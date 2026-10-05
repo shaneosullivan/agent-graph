@@ -599,7 +599,10 @@ fn codex_trusted(path: &Path, hooks: &Value, out: &mut Vec<Finding>) {
 /// A project's committed hooks, in `project` (or the repository it's in):
 /// the cloud's, which a cloud needs, and Cursor's, which it may not be able
 /// to read.
+/// (Whether they're current is against what `install` writes, which is for
+/// the site it shares to by default.)
 fn project_hooks(project: &Path, cloud: Option<&str>, out: &mut Vec<Finding>) {
+    let site = crate::remote::DEFAULT_URL;
     let root = repository_root(project).unwrap_or_else(|| project.to_path_buf());
     let cursor = root.join(".cursor").join("hooks.json");
     if let Some(hooks) = read_json(&cursor, "This project's Cursor hooks", out) {
@@ -613,10 +616,14 @@ fn project_hooks(project: &Path, cloud: Option<&str>, out: &mut Vec<Finding>) {
                     format!("{} has no Agent Graph hooks", cursor.display()),
                 ));
             } else if readable {
-                out.push(Finding::ok(format!(
-                    "{} has the cloud's hooks",
-                    cursor.display()
-                )));
+                let mut current = hooks.clone();
+                let outdated = install::install_cursor_cloud(&mut current, site).is_ok()
+                    && ours_of(&current) != ours_of(&hooks);
+                out.push(if outdated {
+                    outdated_hooks(&cursor)
+                } else {
+                    Finding::ok(format!("{} has the cloud's hooks", cursor.display()))
+                });
             }
         }
     } else if cloud == Some(crate::account::CURSOR_CLOUD) {
@@ -630,10 +637,16 @@ fn project_hooks(project: &Path, cloud: Option<&str>, out: &mut Vec<Finding>) {
     if cloud == Some(crate::account::CLAUDE_CODE_CLOUD) {
         let settings = root.join(".claude").join("settings.json");
         match read_json(&settings, "This project's Claude Code settings", out) {
-            Some(s) if !install::our_events(&s).is_empty() => out.push(Finding::ok(format!(
-                "{} has the cloud's hooks",
-                settings.display()
-            ))),
+            Some(s) if !install::our_events(&s).is_empty() => {
+                let mut current = s.clone();
+                let outdated = install::install_claude_code_cloud(&mut current, site).is_ok()
+                    && ours_of(&current) != ours_of(&s);
+                out.push(if outdated {
+                    outdated_hooks(&settings)
+                } else {
+                    Finding::ok(format!("{} has the cloud's hooks", settings.display()))
+                });
+            }
             Some(_) => out.push(Finding::problem(
                 Level::Error,
                 "hooks-missing",
@@ -781,6 +794,36 @@ fn cursor_cloud_names(out: &mut Vec<Finding>) {
             "{var} is set, but Cursor's API couldn't be asked about it"
         ))),
     }
+}
+
+/// Agent Graph's own hook commands in a hooks or settings file, sorted: what
+/// installing again would replace (the rest is the user's own).
+fn ours_of(file: &Value) -> Vec<&str> {
+    let mut ours: Vec<&str> = commands(file)
+        .into_iter()
+        .filter(|c| {
+            c.contains(install::CURSOR_MARKER)
+                || c.contains(install::CLAUDE_CODE_MARKER)
+                || c.contains(install::CLOUD_SHARE_MARKER)
+        })
+        .collect();
+    ours.sort_unstable();
+    ours
+}
+
+/// Committed cloud hooks that aren't what this agent-graph installs: an
+/// older release's, without what's been fixed or added since (upgrading
+/// itself, say).
+fn outdated_hooks(path: &Path) -> Finding {
+    Finding::problem(
+        Level::Warn,
+        "hooks-outdated",
+        format!(
+            "{} has an older agent-graph's cloud hooks than this one ({}) installs",
+            path.display(),
+            env!("CARGO_PKG_VERSION")
+        ),
+    )
 }
 
 /// The repository `dir` is in: the nearest folder up with a `.git`.
