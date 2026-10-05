@@ -53,17 +53,24 @@ impl Adapter for Cursor {
     }
 
     /// In Cursor's cloud, which runs no `sessionStart`, a conversation's
-    /// first prompt starts it (a cloud subagent's, tied to its parent, is in
-    /// its parent's events, which have started).
+    /// first hook starts it: its first prompt, usually, but Cursor runs no
+    /// hooks while a cloud agent's machine is starting, which can last the
+    /// first turn, so whichever comes first. (A cloud subagent's, tied to its
+    /// parent, is in its parent's events, which have started.) Its folder is
+    /// the repository the agent works in, as GitHub names it: every cloud
+    /// agent works in `/workspace`.
     fn start(&self, input: &Value) -> Option<Draft> {
-        if !in_cloud() || str_at(input, &["hook_event_name"]) != Some("beforeSubmitPrompt") {
+        if !in_cloud() {
             return None;
         }
         let conversation = str_at(input, &["conversation_id"])?;
+        let workspace = str_at(input, &["workspace_roots", "0"]);
         Some(Draft::new(
             node_id(conversation, None),
             Payload::SessionStarted(SessionStarted {
-                cwd: str_at(input, &["workspace_roots", "0"]).map(String::from),
+                cwd: workspace
+                    .and_then(cloud_repository)
+                    .or_else(|| workspace.map(String::from)),
                 source: Some("cloud".to_string()),
                 ..Default::default()
             }),
@@ -1292,6 +1299,50 @@ pub const CLOUD_VAR: &str = "CLOUD_AGENT_ALL_SECRET_NAMES";
 /// Whether this hook runs in Cursor's cloud.
 fn in_cloud() -> bool {
     std::env::var_os(CLOUD_VAR).is_some()
+}
+
+/// The repository a cloud agent works in (its `workspace`), as its `origin`
+/// remote names it, without a scheme, login or `.git`:
+/// "github.com/owner/repo". (A token in the remote's address is never kept.)
+#[cfg(feature = "cli")]
+fn cloud_repository(workspace: &str) -> Option<String> {
+    let config =
+        std::fs::read_to_string(std::path::Path::new(workspace).join(".git/config")).ok()?;
+    let mut in_origin = false;
+    for line in config.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_origin = line == "[remote \"origin\"]";
+        } else if in_origin {
+            if let Some(url) = line.strip_prefix("url").map(str::trim_start) {
+                return repository_of(url.strip_prefix('=')?.trim());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(feature = "cli"))]
+fn cloud_repository(_workspace: &str) -> Option<String> {
+    None
+}
+
+/// A git remote's address as "host/owner/repo": `https://user:token@host/o/r.git`,
+/// `git@host:o/r.git` or `ssh://git@host/o/r`.
+pub fn repository_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    // No login: whatever's before the last `@` of the host part.
+    let (host_part, path) = match rest.find('/') {
+        Some(i) if url.contains("://") => (&rest[..i], &rest[i + 1..]),
+        _ => rest.split_once(':')?,
+    };
+    let host = host_part.rsplit('@').next()?.split(':').next()?;
+    let path = path.trim_matches('/').trim_end_matches(".git");
+    let safe = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/'))
+    };
+    (safe(host) && safe(path) && path.contains('/')).then(|| format!("{host}/{path}"))
 }
 
 /// Leaves a note, in the VM, that a cloud subagent whose task is `task` has

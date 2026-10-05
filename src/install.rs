@@ -491,19 +491,20 @@ const IN_CURSOR_CLOUD: &str =
 /// first download and install `agent-graph`.
 const CURSOR_CLOUD_START_TIMEOUT_SECS: u64 = 180;
 
-/// A Cursor cloud hook's command for `event`. A turn's first hook
-/// (`beforeSubmitPrompt`) installs `agent-graph` where the VM hasn't it (the
-/// site's install script), and starts sharing, detached (in a session of its
-/// own, where there's `setsid`), to the account whose API token the
-/// `AGENT_GRAPH_TOKEN` secret gives, unless it's already sharing. Every hook
+/// A Cursor cloud hook's command for `event`. Each sets up what it finds
+/// missing, as Cursor may not run a turn's first hook (it runs none while a
+/// cloud agent's machine is starting, which can last the first turn):
+/// `agent-graph`, from the site's install script, where the VM hasn't it,
+/// and sharing, detached (in a session of its own, where there's `setsid`),
+/// to the account whose API token the `AGENT_GRAPH_TOKEN` secret gives. A
+/// turn's first hook (`beforeSubmitPrompt`), which may take its time,
+/// installs as it runs, so its own event's recorded; any other, with a few
+/// seconds, in the background, once (`installing` is the lock). Every hook
 /// then records its event, once `agent-graph`'s there, and answers `{}`
 /// either way.
 fn cursor_cloud_command(event: &str, site: &str) -> String {
     let emit =
         format!("if [ -x {CLOUD_BIN} ]; then {CLOUD_BIN} {CURSOR_MARKER}; else echo '{{}}'; fi");
-    if event != "beforeSubmitPrompt" {
-        return format!("{IN_CURSOR_CLOUD}; {emit}");
-    }
     let ours = site.trim_end_matches('/') == crate::remote::DEFAULT_URL;
     let site = without_comments(site.trim_end_matches('/'));
     let url = if ours {
@@ -512,16 +513,35 @@ fn cursor_cloud_command(event: &str, site: &str) -> String {
         format!(" --url={site}")
     };
     let share = format!("{CLOUD_BIN} {CLOUD_SHARE_MARKER}{url}");
+    let install = format!(
+        "curl -fsSL {site}/install.sh | AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh \
+         >>\"$HOME/.agent-graph/install.log\" 2>&1"
+    );
     // (Whether it's sharing is the pid file's process being there: matching
     // its command line would match this hook's own.)
+    let share_unless_sharing = format!(
+        "if ! kill -0 \"$(cat \"$P\" 2>/dev/null)\" 2>/dev/null; then \
+         (if command -v setsid >/dev/null; then exec setsid {share}; else exec {share}; fi) \
+         </dev/null >>\"$HOME/.agent-graph/watch-remote.log\" 2>&1 & echo $! >\"$P\"; fi"
+    );
+    let setup = if event == "beforeSubmitPrompt" {
+        format!(
+            "[ -x {CLOUD_BIN} ] || {install}; if [ -x {CLOUD_BIN} ]; then {share_unless_sharing}; fi"
+        )
+    } else {
+        // (A lock left by an install that was stopped is let go of after
+        // five minutes.)
+        let lock = "\"$HOME/.agent-graph/installing\"";
+        format!(
+            "if [ -x {CLOUD_BIN} ]; then {share_unless_sharing}; else \
+             find \"$HOME/.agent-graph\" -maxdepth 1 -name installing -mmin +5 -exec rmdir {{}} + 2>/dev/null; \
+             if mkdir {lock} 2>/dev/null; then ({install}; rmdir {lock}; \
+             if [ -x {CLOUD_BIN} ]; then {share_unless_sharing}; fi) </dev/null >/dev/null 2>&1 & fi; fi"
+        )
+    };
     format!(
         "{IN_CURSOR_CLOUD}; mkdir -p \"$HOME/.agent-graph\"; \
-         [ -x {CLOUD_BIN} ] || curl -fsSL {site}/install.sh | \
-         AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh >>\"$HOME/.agent-graph/install.log\" 2>&1; \
-         P=\"$HOME/.agent-graph/cursor-cloud-share.pid\"; \
-         if [ -x {CLOUD_BIN} ] && ! kill -0 \"$(cat \"$P\" 2>/dev/null)\" 2>/dev/null; then \
-         (if command -v setsid >/dev/null; then exec setsid {share}; else exec {share}; fi) \
-         </dev/null >>\"$HOME/.agent-graph/watch-remote.log\" 2>&1 & echo $! >\"$P\"; fi; {emit}"
+         P=\"$HOME/.agent-graph/cursor-cloud-share.pid\"; {setup}; {emit}"
     )
 }
 
@@ -1279,10 +1299,9 @@ mod tests {
                 }
                 assert!(command.starts_with(IN_CURSOR_CLOUD), "{command}");
                 assert!(command.contains(CLOUD_BIN), "{command}");
-                // Only a turn's first hook installs and shares.
-                let first = event == "beforeSubmitPrompt";
-                assert_eq!(command.contains("/install.sh"), first, "{event}");
-                assert_eq!(command.contains(CLOUD_SHARE_MARKER), first, "{event}");
+                // Each sets up what's missing: Cursor may skip the first.
+                assert!(command.contains("/install.sh"), "{event}");
+                assert!(command.contains(CLOUD_SHARE_MARKER), "{event}");
             }
         }
         assert_eq!(
@@ -1344,9 +1363,14 @@ mod tests {
         };
         // Outside the cloud: `{}`, and nothing run (or installed).
         assert_eq!(run("stop", false).trim(), "{}");
-        // In the cloud, with no `agent-graph` yet (and no install, for this
-        // isn't the first hook): still `{}`.
+        // In the cloud, with no `agent-graph` yet: still `{}`, at once (any
+        // hook but the first installs in the background: here, one's said
+        // to be under way already, so none's fetched).
+        std::fs::create_dir_all(home.path().join(".agent-graph/installing")).unwrap();
+        let started = std::time::Instant::now();
         assert_eq!(run("stop", true).trim(), "{}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(home.path().join(".agent-graph/installing").exists());
         let bin = home.path().join(".local/bin/agent-graph");
         std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
         std::fs::write(

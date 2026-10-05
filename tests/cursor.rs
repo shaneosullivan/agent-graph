@@ -847,3 +847,32 @@ fn the_viewer_shows_what_an_app_chat_waits_for_and_drops_the_guess() {
     // The turn's over (payload 11): a request left over isn't waiting.
     assert_eq!(with(Some(Waiting::Approval), true, 12, 1).0, State::Idle);
 }
+
+/// A cloud agent's folder is the repository it works in, without any login
+/// its remote's address holds.
+#[test]
+fn a_cloud_agents_folder_is_its_repository() {
+    use agent_graph::adapter::cursor::repository_of;
+    for (url, want) in [
+        (
+            "https://github.com/owner/repo.git",
+            Some("github.com/owner/repo"),
+        ),
+        (
+            "https://x-access-token:ghs_secret@github.com/owner/repo",
+            Some("github.com/owner/repo"),
+        ),
+        (
+            "git@github.com:owner/repo.git",
+            Some("github.com/owner/repo"),
+        ),
+        (
+            "ssh://git@gitlab.com:22/group/sub/repo.git",
+            Some("gitlab.com/group/sub/repo"),
+        ),
+        ("/local/path/repo", None),
+        ("https://github.com/owner/$(x)", None),
+    ] {
+        assert_eq!(repository_of(url).as_deref(), want, "{url}");
+    }
+}

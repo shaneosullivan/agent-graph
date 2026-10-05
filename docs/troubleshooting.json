@@ -48,6 +48,15 @@
       }
     },
     {
+      "id": "checkout-behind",
+      "title": "The cloud agent started from an older commit",
+      "problem": "A cloud agent works on a copy of the repository, which can start behind its branch (a cloud may restore an older copy, then catch up). The agent's hooks are read from the copy it starts with, so hooks committed since don't run, or run only later.",
+      "fix": "Check the agent starts on the branch with the hooks, and that the branch is pushed. Then start a new agent: one that starts on the latest commit runs the hooks from its first message.",
+      "clouds": {
+        "Cursor cloud": "A Cursor cloud agent starts from its environment's saved copy of the repository, which can be older than your latest push. In Cursor, set the environment's Start Script to `git pull --ff-only`, so each agent brings it up to date first, then start a new agent."
+      }
+    },
+    {
       "id": "data-folder",
       "title": "Agent Graph can't write its data folder",
       "problem": "Sessions are recorded in `~/.agent-graph` (or `$AGENT_GRAPH_HOME`), and that folder can't be made or written to.",

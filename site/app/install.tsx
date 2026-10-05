@@ -342,18 +342,32 @@ function CursorCloudSteps() {
         add a secret named <code>AGENT_GRAPH_TOKEN</code>, with the token as its
         value:
         <CopyCommand command="AGENT_GRAPH_TOKEN" />
+      </li>
+      <li>
+        Still in Cursor, open the settings of the cloud environment for that
+        repository, and set its <strong>Start Script</strong> to:
+        <CopyCommand command="git pull --ff-only" />
         <span className="install-or">
-          Nothing else needs setting up there: the hooks install agent-graph
-          themselves, with no install or start script.
+          A cloud agent starts from the environment&rsquo;s saved copy of the
+          repository, which can be older than your latest push: without the
+          hooks, if they were committed after the environment was made. This
+          brings it up to date first. The hooks install agent-graph themselves,
+          so the Install Script can stay as it is.
         </span>
       </li>
       <li>
         Start a cloud agent on that repository (at{" "}
         <a {...link("https://cursor.com/agents")}>cursor.com/agents</a>, or from
-        the Cursor app). Its first message installs agent-graph on its machine,
-        which can take a few seconds, then records the agent and its subagents
-        and shares them live: watch them at <a href="/watch">/watch</a>, where
-        they&rsquo;re labelled &ldquo;Cursor cloud&rdquo;.
+        the Cursor app). Its hooks install agent-graph on its machine, then
+        record the agent and its subagents and share them live: watch them at{" "}
+        <a href="/watch">/watch</a>, where they&rsquo;re labelled &ldquo;Cursor
+        cloud&rdquo;, under the repository&rsquo;s name.
+        <span className="install-or">
+          Nothing at /watch? Ask the agent to run{" "}
+          <code>~/.local/bin/agent-graph diagnostics</code>, which also says
+          whether it started behind its branch, or see{" "}
+          <a href="/troubleshooting">Troubleshooting</a>.
+        </span>
         <span className="install-or">
           A cloud agent can read the token, as it can any secret, but it can
           only share to your account; delete it on your account page to stop it

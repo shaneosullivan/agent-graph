@@ -248,6 +248,9 @@ pub fn run(opts: &Options) -> Report {
         local_hooks(&opts.project, &mut findings);
     }
     project_hooks(&opts.project, cloud, &mut findings);
+    if cloud.is_some() {
+        checkout_current(&opts.project, &mut findings);
+    }
     if cloud == Some(crate::account::CODEX_CLOUD) {
         codex_cloud_hooks(&mut findings);
     }
@@ -641,6 +644,91 @@ fn project_hooks(project: &Path, cloud: Option<&str>, out: &mut Vec<Finding>) {
             None => {}
         }
     }
+}
+
+/// Whether the commit a cloud agent started on is its branch's latest, as
+/// the repository's remote has it: a cloud may start from an older copy of
+/// the repository, without the hooks committed since (found in Cursor's).
+/// An agent on a branch of its own, not on the remote, is compared with
+/// the remote's default branch. Only a warning: starting from another
+/// commit may be meant. Says nothing if the remote can't be asked.
+fn checkout_current(project: &Path, out: &mut Vec<Finding>) {
+    let Some(root) = repository_root(project) else {
+        return;
+    };
+    let git = |args: &[&str]| git_output(&root, args);
+    let Some(head) = git(&["rev-parse", "HEAD"]) else {
+        return;
+    };
+    let branch = git(&["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let remote = |r: &str| {
+        git(&["ls-remote", "origin", r]).and_then(|o| o.split_whitespace().next().map(String::from))
+    };
+    let (latest, of) = match branch
+        .as_deref()
+        .and_then(|b| remote(&format!("refs/heads/{b}")).map(|c| (c, b.to_string())))
+    {
+        Some(found) => found,
+        None => match remote("HEAD") {
+            Some(c) => (c, "the default branch".to_string()),
+            None => return,
+        },
+    };
+    // Up to date, or ahead: the latest is in what's checked out.
+    let has = latest == head
+        || (git(&["cat-file", "-e", &format!("{latest}^{{commit}}")]).is_some()
+            && git(&["merge-base", "--is-ancestor", &latest, "HEAD"]).is_some());
+    let short = |c: &str| c.chars().take(7).collect::<String>();
+    if has {
+        out.push(Finding::ok(format!(
+            "{} has {of}'s latest commit ({})",
+            root.display(),
+            short(&latest)
+        )));
+    } else {
+        out.push(Finding::problem(
+            Level::Warn,
+            "checkout-behind",
+            format!(
+                "{} is on {}, not {of}'s latest commit ({}): hooks committed since aren't here",
+                root.display(),
+                short(&head),
+                short(&latest)
+            ),
+        ));
+    }
+}
+
+/// What `git <args>` says in `dir`, trimmed, if it succeeds within 15
+/// seconds, never asking for a password.
+fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
+    let mut child = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        match child.try_wait().ok()? {
+            Some(status) if status.success() => break,
+            Some(_) => return None,
+            None if std::time::Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut text).ok()?;
+    Some(text.trim().to_string())
 }
 
 /// The repository `dir` is in: the nearest folder up with a `.git`.

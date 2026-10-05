@@ -2330,3 +2330,130 @@ fn a_cloud_chat_starts_with_its_first_prompt_and_its_subagents_are_in_it() {
                 .is_none()
     );
 }
+
+/// Cursor runs no hooks while a cloud agent's machine starts, which can last
+/// the first turn: whichever hook comes first starts the chat, in the
+/// repository it works in.
+#[test]
+fn a_cloud_chat_starts_with_whichever_hook_comes_first_in_its_repository() {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".git")).unwrap();
+    std::fs::write(
+        workspace.join(".git/config"),
+        "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = https://x-access-token:ghs_secret@github.com/owner/wedding.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+    )
+    .unwrap();
+    let mut stop = cloud_payload("stop", CLOUD_CHAT);
+    stop["workspace_roots"] = serde_json::json!([workspace]);
+    stop["status"] = "completed".into();
+    cloud_hook(home.path(), stop);
+    let text = read(
+        home.path()
+            .join(format!("events/cursor-{CLOUD_CHAT}.jsonl")),
+    );
+    assert!(text.contains("\"type\":\"session.started\""), "{text}");
+    assert!(
+        text.contains("\"cwd\":\"github.com/owner/wedding\""),
+        "{text}"
+    );
+    assert!(!text.contains("ghs_secret"), "{text}");
+}
+
+/// In a cloud, `diagnostics` warns when the agent's copy of the repository
+/// isn't its branch's latest: the hooks are read from the copy it starts
+/// with (found in Cursor's cloud).
+#[test]
+fn diagnostics_warns_when_a_clouds_checkout_is_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |cwd: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let origin = dir.path().join("origin.git");
+    git(
+        dir.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    let seed = dir.path().join("seed");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            seed.to_str().unwrap(),
+        ],
+    );
+    git(&seed, &["checkout", "-q", "-b", "main"]);
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    git(&seed, &["push", "-q", "origin", "main"]);
+    let workspace = dir.path().join("workspace");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            workspace.to_str().unwrap(),
+        ],
+    );
+
+    let checked = |cwd: &Path| -> Vec<serde_json::Value> {
+        let out = bin()
+            .current_dir(cwd)
+            .args(["diagnostics", "--json", "--url", "http://127.0.0.1:9"])
+            .env("AGENT_GRAPH_HOME", dir.path().join("ag"))
+            .env("HOME", dir.path())
+            .env("CLOUD_AGENT_ALL_SECRET_NAMES", "AGENT_GRAPH_TOKEN")
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        report["findings"].as_array().unwrap().clone()
+    };
+    let behind =
+        |findings: &[serde_json::Value]| findings.iter().any(|f| f["issue"] == "checkout-behind");
+    // Up to date.
+    let findings = checked(&workspace);
+    assert!(!behind(&findings), "{findings:?}");
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["what"].as_str().unwrap().contains("latest commit")),
+        "{findings:?}"
+    );
+    // The branch moves on, and the agent's copy doesn't.
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
+    git(&seed, &["push", "-q", "origin", "main"]);
+    let findings = checked(&workspace);
+    let warning = findings.iter().find(|f| f["issue"] == "checkout-behind");
+    assert_eq!(
+        warning.map(|w| w["level"].clone()),
+        Some("warn".into()),
+        "{findings:?}"
+    );
+    // An agent's own branch, not on the remote: compared with the default.
+    git(&workspace, &["checkout", "-q", "-b", "cursor/agent-branch"]);
+    assert!(behind(&checked(&workspace)));
+    git(&workspace, &["pull", "-q", "origin", "main"]);
+    assert!(!behind(&checked(&workspace)));
+}
