@@ -1,31 +1,31 @@
 {
-  "version": "0.1.23",
-  "commit": "f271568213b72d3fdb01718130c0bf23ca29b623",
+  "version": "0.1.24",
+  "commit": "cc03ab23a5fdfa529754e53534cb602b182245d6",
   "date": "2026-10-05",
   "files": {
     "aarch64-apple-darwin": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.23%2Fmac%2Fagent-graph-aarch64-apple-darwin.tar.gz?alt=media&token=8dd5f3b4-447c-4159-a0d0-008563575048",
-      "sha256": "b7b94b793389e0712d8cd775d0c983371d115abdcc4e17c794e1fea8d830aa8d"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.24%2Fmac%2Fagent-graph-aarch64-apple-darwin.tar.gz?alt=media&token=d899f45e-2e8a-4954-8d8c-8ba3b34531d3",
+      "sha256": "a1dbc8163db6ea6216f5c7540817f9b5a6f72c4961c993d291e52dc4d89150c4"
     },
     "x86_64-apple-darwin": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.23%2Fmac%2Fagent-graph-x86_64-apple-darwin.tar.gz?alt=media&token=78bf52aa-35cd-46f1-875f-1d3e818fd4ec",
-      "sha256": "c099dff63a2a21408926edd852e0a6769ac2c52cba4b69d3151304a8704e59bf"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.24%2Fmac%2Fagent-graph-x86_64-apple-darwin.tar.gz?alt=media&token=a89f78d7-7c20-41d2-9cf8-f03fddad43ee",
+      "sha256": "180acc59ae18446683d307c4c464113e9426082fc0283b84d83073287e8e8580"
     },
     "aarch64-unknown-linux-musl": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.23%2Flinux%2Fagent-graph-aarch64-unknown-linux-musl.tar.gz?alt=media&token=08039f23-c422-4166-bba6-f28d45a77742",
-      "sha256": "9354735dc63ceb4ff5c6be60d77eb61ba32f212bfb14fbdd9302f4d5795cfa17"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.24%2Flinux%2Fagent-graph-aarch64-unknown-linux-musl.tar.gz?alt=media&token=3f9a4401-1073-4256-bcf1-4f24e4e490ad",
+      "sha256": "b35a08c5c7b7cd12a0abfa81caca0741417818b1ff621feaeea2ed4430af8adc"
     },
     "x86_64-unknown-linux-musl": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.23%2Flinux%2Fagent-graph-x86_64-unknown-linux-musl.tar.gz?alt=media&token=b6255431-d2b0-4f92-972b-2e44c271acb9",
-      "sha256": "ca7c1f65c4fe6125e6d4dc160a00c04d3af14816644582dbe7d63aefda9aa1b6"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.24%2Flinux%2Fagent-graph-x86_64-unknown-linux-musl.tar.gz?alt=media&token=a2807cba-224f-49e0-bfbd-a959d6186af6",
+      "sha256": "490224339b3508a9e6132840229b7b614c8a36c1b505bb446be50f33fc794caa"
     },
     "aarch64-pc-windows-msvc": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.23%2Fwindows%2Fagent-graph-aarch64-pc-windows-msvc.zip?alt=media&token=4e088cad-36a7-4e5b-b0b1-d6fb909084f7",
-      "sha256": "bceba56d59279f74ef2575039b31b3d11d8aaa5683e1894735ba9b82c1517b3a"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.24%2Fwindows%2Fagent-graph-aarch64-pc-windows-msvc.zip?alt=media&token=ed1089f4-6e42-4420-9ab2-483bba3c507e",
+      "sha256": "4222364b795946f901d7ee421fe4b8b57a23abbf4d7c4cd25c9113043eaa0af7"
     },
     "x86_64-pc-windows-msvc": {
-      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.23%2Fwindows%2Fagent-graph-x86_64-pc-windows-msvc.zip?alt=media&token=1bf4eb06-d14e-4242-a17f-1673619f16e2",
-      "sha256": "18d54c70878c3e6c9a731940709c3501b0a90b27c2b441386f7c8d55caa3b4b9"
+      "url": "https://firebasestorage.googleapis.com/v0/b/agentgraph1.firebasestorage.app/o/releases%2F0.1.24%2Fwindows%2Fagent-graph-x86_64-pc-windows-msvc.zip?alt=media&token=36301e06-ae7f-4f70-978a-2dc11119e951",
+      "sha256": "80ac240289f26c48c80d03df0564e846241d5aa5e2d9cf27e792f4de3ccde444"
     }
   },
   "npm": true
