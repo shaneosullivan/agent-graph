@@ -407,7 +407,9 @@ fn program_of(command: &str) -> Option<PathBuf> {
         command.split_whitespace().next()?
     };
     let path = PathBuf::from(first);
-    path.is_absolute().then_some(path)
+    // A leading `/` is rooted but not absolute on Windows (no drive letter);
+    // hook commands may still name a path that way.
+    (path.is_absolute() || first.starts_with('/')).then_some(path)
 }
 
 /// Checks that the hook commands that are ours (`ours`) run a program
