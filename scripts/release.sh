@@ -5,7 +5,8 @@
 # Cuts a release of agent-graph for macOS, Linux and Windows, from this Mac:
 #
 #   1. Sets the version (Cargo.toml and Cargo.lock), commits it and pushes
-#      it. Nothing is built on this Mac.
+#      it, and clears this repository's own debug builds from target/.
+#      Nothing is built on this Mac.
 #   2. Waits for Chofter CI's run of that commit to finish (at once, if it
 #      has), and downloads the builds it made (scripts/fetch-ci-builds.sh:
 #      on the build machine's network). The builds have to be of that
@@ -308,11 +309,11 @@ else
   git commit --quiet -m "Release $VERSION"
   git push --quiet origin main
   echo "✓ Committed and pushed $(git rev-parse --short HEAD)"
-  # The version is in every crate's build hash here, so the next build
-  # starts its incremental caches afresh, beside the old ones. Cargo never
-  # removes those (they grew to 20GB), and they're of no use now.
-  target_dir="${CARGO_TARGET_DIR:-target}"
-  rm -rf "$target_dir"/*/incremental "$target_dir"/*/*/incremental
+  # Cargo never removes this repository's old debug builds: each version's
+  # sit beside the last (the version's in their build hash), and on macOS
+  # every build leaves its object files too, for their debug info. They
+  # grew past 50GB. The next build would start afresh anyway.
+  cargo clean --workspace --quiet
 fi
 COMMIT="$(git rev-parse HEAD)"
 
