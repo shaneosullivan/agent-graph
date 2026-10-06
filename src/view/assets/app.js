@@ -284,9 +284,9 @@ const APP_ICON = {
   gemini: svgImage(
     '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4285F4"/><stop offset="1" stop-color="#9B72CB"/></linearGradient></defs><path d="M8 1c.6 3.6 3.4 6.4 7 7-3.6.6-6.4 3.4-7 7-.6-3.6-3.4-6.4-7-7 3.6-.6 6.4-3.4 7-7z" fill="url(#g)"/>',
   ),
-  // A cube.
+  // Cursor's cube (from cursor.com/brand's app icon), light on its dark tile.
   cursor: svgImage(
-    '<rect width="16" height="16" rx="4" fill="#1b1b1b"/><path d="M8 3l4.5 2.6v4.8L8 13l-4.5-2.6V5.6z" fill="none" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/><path d="M3.5 5.6 8 8.2l4.5-2.6M8 8.2V13" fill="none" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>',
+    '<rect width="16" height="16" rx="4" fill="#14120B"/><path transform="scale(0.04) translate(-600 -300)" fill="#EDECEC" d="M920.015 424.958L805.919 359.086C802.256 356.97 797.735 356.97 794.071 359.086L679.981 424.958C676.901 426.736 675 430.025 675 433.587V566.419C675 569.981 676.901 573.269 679.981 575.048L794.077 640.92C797.74 643.036 802.261 643.036 805.925 640.92L920.02 575.048C923.1 573.269 925.001 569.981 925.001 566.419V433.587C925.001 430.025 923.1 426.736 920.02 424.958H920.015ZM912.848 438.911L802.706 629.682C801.961 630.968 799.995 630.443 799.995 628.954V504.039C799.995 501.543 798.662 499.234 796.498 497.981L688.321 435.526C687.036 434.781 687.561 432.816 689.05 432.816H909.334C912.462 432.816 914.417 436.206 912.853 438.917H912.848V438.911Z"/>',
   ),
   // A command run with `agent-graph run`: a play button.
   run: svgImage('<rect width="16" height="16" rx="4" fill="#6b7280"/><path d="M6.2 4.6v6.8L11.6 8z" fill="#fff"/>'),
