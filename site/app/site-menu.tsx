@@ -1,18 +1,27 @@
 "use client";
 
 import {link} from "@/lib/links";
-import {useEffect, useRef, useState, useSyncExternalStore} from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 /**
  * On a narrow screen, the header's links (all but "Log in" or "Account")
  * are behind a menu button, in a panel that slides in from the right
- * (site.css hides the header's own copies there). Escape, the backdrop, a
+ * (site.css hides the header's own copies there), with `children` under
+ * them: more of the page's (the docs' contents). Escape, the backdrop, a
  * close button or a link closes it. Nothing's shown with nothing to list.
  */
 export function SiteMenu({
   links,
+  children,
 }: {
   links: Array<{href: string; label: string}>;
+  children?: ReactNode;
 }) {
   const admin = useSyncExternalStore(
     () => () => {},
@@ -100,6 +109,18 @@ export function SiteMenu({
             </li>
           ))}
         </ul>
+        {children ? (
+          // A link in it closes the menu too, as the ones above do.
+          <div
+            className="menu-more"
+            onClick={event => {
+              if ((event.target as Element).closest("a")) {
+                close();
+              }
+            }}>
+            {children}
+          </div>
+        ) : null}
       </div>
     </>
   );

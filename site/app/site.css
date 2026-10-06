@@ -1097,6 +1097,54 @@ body {
 .site .commands-title {
   margin-top: 56px;
 }
+/* On a phone, the docs' contents are in the header's menu (app/site-menu.tsx),
+   under its links, rather than above the page. */
+@media (max-width: 640px) {
+  .site .docs-nav {
+    display: none;
+  }
+  .site .menu-panel {
+    overflow-y: auto;
+  }
+  .site .menu-more {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .site .top nav .menu-panel .menu-more a {
+    padding: 7px 12px;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .site .top nav .menu-panel .menu-more a code {
+    font-size: 14px;
+  }
+  .site .top nav .menu-panel .menu-more a.docs-nav-part,
+  .site .menu-more .docs-nav-label {
+    display: block;
+    margin-top: 12px;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .site .top nav .menu-panel .menu-more a.docs-nav-part {
+    color: var(--text);
+  }
+  .site .top nav .menu-panel .menu-more a.docs-nav-part:first-child {
+    margin-top: 4px;
+  }
+  .site .menu-more .docs-nav-label {
+    margin-right: 0;
+    margin-left: 0;
+    padding: 0 12px 4px;
+    color: var(--faint);
+  }
+}
 @media (max-width: 800px) {
   .site .docs-layout {
     grid-template-columns: 1fr;

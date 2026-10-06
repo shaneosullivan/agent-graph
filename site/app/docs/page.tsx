@@ -19,6 +19,37 @@ export const metadata: Metadata = {
   description: `How to use the ${help.program} command: ${help.summary}`,
 };
 
+/**
+ * The page's contents: its two parts, the getting-started platforms, the
+ * reference's sections and its commands. Beside the page on a wide screen;
+ * on a phone, in the header's menu (SiteMenu), not above the page.
+ */
+function DocsContents() {
+  return (
+    <>
+      <a href="#getting-started" className="docs-nav-part">
+        Getting started
+      </a>
+      <GettingStartedLinks />
+      <a href="#reference" className="docs-nav-part">
+        Reference
+      </a>
+      <a href="#overview">Overview</a>
+      {help.sections.map(s => (
+        <a key={s.title} href={`#${slug(titled(s.title))}`}>
+          {titled(s.title)}
+        </a>
+      ))}
+      <span className="docs-nav-label">Commands</span>
+      {help.commands.map(c => (
+        <a key={c.name} href={`#${c.name}`}>
+          <code>{c.name}</code>
+        </a>
+      ))}
+    </>
+  );
+}
+
 export default function Docs() {
   return (
     <div className="site">
@@ -28,29 +59,12 @@ export default function Docs() {
             {href: "/", label: "Share a log"},
             {href: "/docs", label: "Docs"},
           ]}
+          menu={<DocsContents />}
         />
 
         <div className="docs-layout">
           <aside className="docs-nav" aria-label="Contents">
-            <a href="#getting-started" className="docs-nav-part">
-              Getting started
-            </a>
-            <GettingStartedLinks />
-            <a href="#reference" className="docs-nav-part">
-              Reference
-            </a>
-            <a href="#overview">Overview</a>
-            {help.sections.map(s => (
-              <a key={s.title} href={`#${slug(titled(s.title))}`}>
-                {titled(s.title)}
-              </a>
-            ))}
-            <span className="docs-nav-label">Commands</span>
-            {help.commands.map(c => (
-              <a key={c.name} href={`#${c.name}`}>
-                <code>{c.name}</code>
-              </a>
-            ))}
+            <DocsContents />
           </aside>
 
           <main className="docs-main">
