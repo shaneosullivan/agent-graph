@@ -189,6 +189,7 @@ impl Adapter for Codex {
                     Payload::AgentFinished(AgentFinished {
                         status: FinishStatus::Completed,
                         summary,
+                        background: None,
                     }),
                 ));
             }
@@ -429,6 +430,7 @@ fn post_tool_use(input: &Value, session: &str, node: &str, drafts: &mut Vec<Draf
                     Payload::AgentFinished(AgentFinished {
                         status: FinishStatus::Failed,
                         summary: Some(truncate_chars(&error, LABEL_MAX)),
+                        background: None,
                     }),
                 ));
             }
@@ -676,6 +678,7 @@ fn unstarted_agents(session: &str, session_node: &str) -> Vec<Draft> {
             Payload::AgentFinished(AgentFinished {
                 status: FinishStatus::Failed,
                 summary: Some("Couldn't start".into()),
+                background: None,
             }),
         ));
     }
@@ -693,6 +696,7 @@ fn left_running(session: &str) -> Vec<Draft> {
                 Payload::AgentFinished(AgentFinished {
                     status: FinishStatus::Canceled,
                     summary: Some("Stopped when the session was resumed".into()),
+                    background: None,
                 }),
             )
         })
@@ -746,6 +750,7 @@ fn errored_agents_of(input: &Value, session: &str) -> Vec<Draft> {
                 Payload::AgentFinished(AgentFinished {
                     status: FinishStatus::Failed,
                     summary: Some(truncate_chars(&error, LABEL_MAX)),
+                    background: None,
                 }),
             ))
         })

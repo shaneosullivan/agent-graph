@@ -121,7 +121,8 @@
       "type": "object",
       "properties": {
         "status": { "enum": ["completed", "failed", "canceled"] },
-        "summary": { "type": "string" }
+        "summary": { "type": "string" },
+        "background": { "type": "boolean", "description": "A helper its agent ran on its own between turns, never said to start: counted on its parent, not drawn. When unsaid, an agent first heard of finishing is taken to be one." }
       }
     },
     "status": {

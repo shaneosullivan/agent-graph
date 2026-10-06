@@ -1166,11 +1166,17 @@ function sessionItems() {
 function sessionItem(id) {
   // What's going on in the session's tree, worked out where the graph is.
   const root = S.live.sessions[id];
-  const { agents, needs_you: needsYou, deadlocked, stuck, busy } = root;
+  const { agents, background_agents: helpers, needs_you: needsYou, deadlocked, stuck, busy } = root;
   const dotState = needsYou ? 'input_required' : busy && root.state === 'idle' ? 'working' : root.state;
   const done = root.tasks - root.open_tasks;
   // (On the site's /watch, sharing from several computers, which it's on.)
-  const meta = [root.host || null, root.provider, agents ? plural(agents, 'agent') : null, root.tasks ? `tasks ${done}/${root.tasks}` : null]
+  const meta = [
+    root.host || null,
+    root.provider,
+    agents ? plural(agents, 'agent') : null,
+    helpers ? plural(helpers, 'background agent') : null,
+    root.tasks ? `tasks ${done}/${root.tasks}` : null,
+  ]
     .filter(Boolean)
     .join(' · ');
   const name = listName(root);
@@ -3337,6 +3343,8 @@ function drawDetail(pane, id = S.selected) {
     ['Provider', n.provider],
     ['Parent', n.parent ? link(n.parent) : null],
     ['Linked by', LINK_LABEL[n.link]],
+    // Helpers its agent ran on its own between turns, which aren't drawn.
+    ['Background agents', n.background_agents ? String(n.background_agents) : null],
     ['Folder', n.cwd],
     ['Started', n.started_at && clock(n.started_at)],
     ['Ended', n.ended_at && clock(n.ended_at)],

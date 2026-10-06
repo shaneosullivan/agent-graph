@@ -166,6 +166,13 @@ pub struct AgentFinished {
     pub status: FinishStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Whether it's a helper its agent ran on its own between turns
+    /// (Claude Code's memory extraction, prompt suggestions, summaries),
+    /// which has no type or transcript and was never said to start: one
+    /// to count, not draw. Unsaid by other providers, and in logs from
+    /// before it was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

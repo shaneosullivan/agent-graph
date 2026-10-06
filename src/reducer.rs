@@ -123,6 +123,12 @@ pub struct Node {
     /// When its turn ended on a question (a `status` with `turn_end`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_at: Option<String>,
+    /// How many helpers its agent ran on its own between turns (Claude
+    /// Code's memory extraction, prompt suggestions, summaries), which say
+    /// nothing of what they are for (`AgentFinished::background`). Counted,
+    /// not drawn.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub background_agents: usize,
 
     // Derived in `finish`.
     /// One line on what's happening now: the status line, else the task in progress.
@@ -218,6 +224,10 @@ pub struct Blocked {
     pub open_tasks: usize,
     /// The waits lead back to this node: nothing in the loop can finish.
     pub cycle: bool,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// When an event happened, for ordering. Unparseable times sort first.
@@ -602,8 +612,20 @@ impl Reducer {
             return;
         }
         let provider = e.source.as_ref().map(|s| s.provider.clone());
-        self.ensure(&e.node, provider.as_deref(), &e.ts);
         let payload = e.payload();
+        // One of its parent's background helpers (see `background_agents`):
+        // as its provider says, else (in logs from before that was
+        // recorded) an agent whose first word is that it's finished.
+        if let (Payload::AgentFinished(d), Some((parent, _))) = (&payload, e.node.rsplit_once('/'))
+        {
+            if !self.nodes.contains_key(&e.node) && d.background != Some(false) {
+                self.ensure(parent, provider.as_deref(), &e.ts);
+                let parent = self.nodes.get_mut(parent).expect("ensured above");
+                parent.background_agents += 1;
+                return;
+            }
+        }
+        self.ensure(&e.node, provider.as_deref(), &e.ts);
         // A session that starts again is on a new run, which may have been
         // started from somewhere else, if it had ended, or if the start comes
         // from another process (`claude --resume` always does): the last may
@@ -1088,6 +1110,7 @@ impl Reducer {
                 planning: false,
                 stopped: false,
                 asked_at: None,
+                background_agents: 0,
                 headline: None,
                 open_tasks: 0,
                 blocked: None,

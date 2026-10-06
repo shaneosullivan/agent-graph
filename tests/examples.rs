@@ -243,6 +243,7 @@ fn finished(status: FinishStatus) -> Payload {
     Payload::AgentFinished(AgentFinished {
         status,
         summary: None,
+        background: None,
     })
 }
 fn wait(id: &str, on: &str, reason: &str) -> Payload {

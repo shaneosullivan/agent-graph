@@ -162,6 +162,13 @@ fn node_line(graph: &Graph, node: &Node) -> Line {
             Tone::Dim,
         )]);
     }
+    if node.background_agents > 0 {
+        let n = node.background_agents;
+        parts.push(vec![span(
+            format!("{n} background agent{}", plural(n)),
+            Tone::Dim,
+        )]);
+    }
     if let Some(blocked) = &node.blocked {
         let mut waiting = Vec::new();
         if blocked.cycle {

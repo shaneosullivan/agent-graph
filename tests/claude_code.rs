@@ -547,3 +547,42 @@ fn a_suggestion_waits_for_its_name() {
     assert_eq!(launched.spawned_by, None);
     assert_eq!(g.nodes["claude-code:p"].spawns[0].child, None);
 }
+
+/// A helper Claude Code runs on its own between turns (a prompt suggestion,
+/// say) has no type and no transcript, and is never said to start: it's
+/// counted on its session, not drawn. A subagent whose start was missed,
+/// with its type, still is.
+#[test]
+fn background_helpers_are_counted_not_drawn() {
+    let stop = |agent: &str, agent_type: &str| {
+        json!({
+            "session_id": "5f2c1e8a-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+            "transcript_path": "/home/dev/.claude/projects/-home-dev-app/5f2c1e8a-3b4d-4e5f-8a9b-0c1d2e3f4a5b.jsonl",
+            "cwd": "/home/dev/app",
+            "hook_event_name": "SubagentStop",
+            "stop_hook_active": false,
+            "agent_id": agent,
+            "agent_type": agent_type,
+            "agent_transcript_path": format!("/home/dev/.claude/projects/-home-dev-app/5f2c1e8a-3b4d-4e5f-8a9b-0c1d2e3f4a5b/subagents/agent-{agent}.jsonl"),
+            "last_assistant_message": "run the tests"
+        })
+    };
+    let payloads = vec![
+        fixture("claude-code/session.jsonl").remove(0),
+        stop("aa63958c", ""),
+        stop("ab12cd34", ""),
+        stop("ac0ffee1", "Explore"),
+    ];
+    let events = translate(&payloads, Capture::default());
+    let flags: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e.payload() {
+            Payload::AgentFinished(d) => d.background,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(flags, [true, true, false]);
+    let g = reduce(events);
+    assert_eq!(g.nodes[SESSION].background_agents, 2);
+    assert_eq!(g.nodes[SESSION].children, [agent("ac0ffee1")]);
+}

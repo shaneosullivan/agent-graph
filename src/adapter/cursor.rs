@@ -251,6 +251,7 @@ impl Adapter for Cursor {
                     Payload::AgentFinished(AgentFinished {
                         status,
                         summary: body(&["summary"]),
+                        background: None,
                     }),
                 ));
             }

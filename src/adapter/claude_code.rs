@@ -112,11 +112,19 @@ impl Adapter for ClaudeCode {
                     .then(|| str_at(input, &["last_assistant_message"]))
                     .flatten()
                     .map(|s| truncate_chars(s, BODY_MAX));
+                // The helpers Claude Code runs on its own between turns
+                // (memory extraction, prompt suggestions, summaries) have
+                // no type, and keep no transcript: an agent the Agent tool
+                // started has both.
+                let untyped = str_at(input, &["agent_type"]).is_none_or(str::is_empty);
+                let unrecorded = str_at(input, &["agent_transcript_path"])
+                    .is_none_or(|p| !std::path::Path::new(p).exists());
                 drafts.push(Draft::new(
                     node_id(session, Some(agent)),
                     Payload::AgentFinished(AgentFinished {
                         status: FinishStatus::Completed,
                         summary,
+                        background: Some(untyped && unrecorded),
                     }),
                 ));
             }

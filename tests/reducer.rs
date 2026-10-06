@@ -138,6 +138,46 @@ fn session_end_cancels_running_agents() {
     assert_eq!(g.nodes["x:s/b"].state, State::Completed);
 }
 
+/// An agent first heard of finishing is a helper its agent ran on its own
+/// between turns (Claude Code's memory extraction, say): counted on its
+/// parent, not drawn. One that started, or did anything first, is drawn.
+#[test]
+fn agents_that_only_finish_are_counted_not_drawn() {
+    let events = vec![
+        ev(0, "x:s", "session.started", json!({})),
+        ev(
+            1,
+            "x:s/h1",
+            "agent.finished",
+            json!({"status": "completed"}),
+        ),
+        ev(2, "x:s/a", "agent.spawned", json!({})),
+        ev(3, "x:s/a", "agent.finished", json!({"status": "completed"})),
+        ev(4, "x:s/b", "status", json!({"state": "working"})),
+        ev(5, "x:s/b", "agent.finished", json!({"status": "completed"})),
+        ev(
+            6,
+            "x:s/a/h2",
+            "agent.finished",
+            json!({"status": "completed"}),
+        ),
+        ev(
+            7,
+            "x:s/h3",
+            "agent.finished",
+            json!({"status": "completed"}),
+        ),
+    ];
+    let g = reduce_at(events, 10);
+    assert!(!g.nodes.contains_key("x:s/h1"));
+    assert!(!g.nodes.contains_key("x:s/a/h2"));
+    assert!(!g.nodes.contains_key("x:s/h3"));
+    assert_eq!(g.nodes["x:s"].children, ["x:s/a", "x:s/b"]);
+    assert_eq!(g.nodes["x:s"].background_agents, 2);
+    assert_eq!(g.nodes["x:s/a"].background_agents, 1);
+    assert_eq!(g.nodes["x:s/b"].state, State::Completed);
+}
+
 #[test]
 fn resumed_session_comes_back_but_compaction_does_not_reset_state() {
     let events = vec![

@@ -165,6 +165,10 @@ impl<'a> Brief<'a> {
     }
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 /// A session as the list shows it: itself, and what's going on in its tree.
 #[derive(Serialize)]
 struct SessionSummary<'a> {
@@ -180,6 +184,10 @@ struct SessionSummary<'a> {
     open_tasks: usize,
     /// How many nodes are under it.
     agents: usize,
+    /// How many background helpers its tree's agents ran, not among them
+    /// (see `Node::background_agents`).
+    #[serde(skip_serializing_if = "is_zero")]
+    background_agents: usize,
     /// The first node in its tree that needs you.
     needs_you: Option<Brief<'a>>,
     /// Something in its tree waits on something that waits on it.
@@ -202,6 +210,7 @@ impl<'a> SessionSummary<'a> {
             tasks: root.tasks.len(),
             open_tasks: root.open_tasks,
             agents: tree.len() - 1,
+            background_agents: tree.iter().map(|n| n.background_agents).sum(),
             needs_you: first(&|n| n.state == State::InputRequired),
             deadlocked: tree
                 .iter()
