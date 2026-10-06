@@ -203,7 +203,7 @@
             ["Details", "Click any session or agent: its tasks, what it's waiting on, the agents it started, its messages, and when things happened."],
             ["Timeline", "Every event in the session is a stop on a slider. Drag it, click it, or use ← and → to see the graph exactly as it was at that moment; the node that step changed is ringed. \"Live\" (or L, or End) jumps back to now."],
             ["Save image", "A picture of the session as it is at the step you're on."],
-            ["Resume", "A Claude Code or Codex session's details have a button that reopens it: in the Claude app or the ChatGPT app if that's where it ran, else in a new terminal window, in its folder (`claude --resume`, `codex resume`). One that hasn't ended is probably still open somewhere, so that opens a copy of its conversation instead (`codex fork`). If it can't open a window, it tells you the command to run. The shared site doesn't have this."]
+            ["Resume", "A Claude Code or Codex session's details, or a chat in Cursor's CLI's, have a button that reopens it: in the Claude app or the ChatGPT app if that's where it ran, else in a new terminal window, in its folder (`claude --resume`, `codex resume`, `agent --resume`). One that hasn't ended is probably still open somewhere, so that opens a copy of its conversation instead (`codex fork`); a Cursor chat is offered only between its turns, since its CLI has no copy to open. If it can't open a window, it tells you the command to run. The shared site doesn't have this."]
           ]
         },
         { "text": "The page updates as events arrive, without reloading." }
@@ -247,7 +247,7 @@
           "table": [
             ["--session <id>", "That session: its id, or the first few characters of it."],
             ["--all", "Every session active in the last day, one after another."],
-            ["--session current", "The Claude Code or Codex session this runs in, then the latest session in this folder, then the latest anywhere. This is also the default for a picture."]
+            ["--session current", "The Claude Code, Codex or Cursor session this runs in, then the latest session in this folder, then the latest anywhere. This is also the default for a picture."]
           ]
         },
         { "text": "Only the file's path is printed, so scripts can use it. By default the picture goes in ~/.agent-graph/images/ with a new name each time. --out chooses the file, and its extension chooses the format: .png, .svg, or .json. As .json, it's the graph as data: with --session or --all, just the sessions they choose and any they exchanged messages with, plus any of those wait on (directly or not); with neither, every session, as --json prints. It won't replace a file that's already there unless you add --force." }
@@ -294,7 +294,7 @@
       ],
       "options": [
         { "id": "url", "flag": "--url <URL>", "text": "The site to share on." },
-        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code or Codex session this runs in; if that isn't recorded, it stops rather than guess)." },
+        { "id": "session", "flag": "--session <SESSION>", "text": "Share just this session, with the sessions it started: its id, the first few characters of it, or `current` (the Claude Code, Codex or Cursor session this runs in; if that isn't recorded, it stops rather than guess)." },
         { "id": "new", "flag": "--new", "text": "Start a new share, rather than carry on with the last one." },
         { "id": "logout", "flag": "--logout", "text": "Log this computer out of the site, and forget the login. The next run asks you to log in again." },
         { "id": "autostart", "flag": "--autostart", "text": "Share every session whenever you log in to this computer, without running this yourself: it's started now, and at every login (on macOS, Linux and Windows). If you aren't logged in, you log in first, in the browser." },
@@ -341,7 +341,7 @@
           "list": [
             "Started from an agent's shell (or anywhere `AGENT_GRAPH_PARENT` is set), it goes under that session.",
             "The command gets `AGENT_GRAPH_PARENT` and `TRACEPARENT` for the new node, so agents it starts that have Agent Graph's hooks go under it.",
-            "When a Claude Code or Codex session runs it in its shell, the session waits on it, as on any agent it starts."
+            "When a Claude Code, Codex or Cursor session runs it in its shell, the session waits on it, as on any agent it starts."
           ]
         },
         { "text": "Put the command after `--`, so its own options aren't read as `run`'s." }

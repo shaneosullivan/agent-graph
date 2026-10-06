@@ -68,14 +68,26 @@ export default function Home() {
                   target="_blank"
                   rel="noopener noreferrer">
                   Claude Code
-                </a>{" "}
-                and{" "}
+                </a>
+                {hasCursor(latestRelease()) ? ", " : " and "}
                 <a
                   href="https://openai.com/codex/"
                   target="_blank"
                   rel="noopener noreferrer">
                   Codex
-                </a>{" "}
+                </a>
+                {hasCursor(latestRelease()) && (
+                  <>
+                    {" "}
+                    and{" "}
+                    <a
+                      href="https://cursor.com"
+                      target="_blank"
+                      rel="noopener noreferrer">
+                      Cursor
+                    </a>
+                  </>
+                )}{" "}
                 to record a log of all your sessions, agents and tasks and the
                 dependencies between them. It highlights where you are needed at
                 any time, what work is ongoing, and what is completed. You can
