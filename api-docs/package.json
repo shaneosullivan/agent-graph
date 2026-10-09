@@ -1,0 +1,23 @@
+{
+  "name": "agent-graph-api-docs",
+  "private": true,
+  "type": "module",
+  "description": "The Agent Graph API reference, served by the site at /docs/reference.",
+  "scripts": {
+    "prepare-docs": "node scripts/prepare.mjs",
+    "dev": "npm run prepare-docs && astro dev",
+    "build": "npm run prepare-docs && astro build",
+    "astro": "astro"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "@astrojs/react": "5.0.7",
+    "@astrojs/starlight": "0.38.5",
+    "@stainless-api/docs": "1.0.0-beta.143",
+    "astro": "6.4.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

@@ -14,6 +14,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     "public/viewer/**",
     "lib/viewer-shell.ts",
+    "public/docs/reference/**",
   ]),
   {
     files: ["**/*.{ts,tsx}"],

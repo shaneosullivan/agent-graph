@@ -1,0 +1,5 @@
+{
+  "openapi_spec": "../site/openapi.json",
+  "stainless_config": "stainless.yml",
+  "output_path": "./sdks"
+}

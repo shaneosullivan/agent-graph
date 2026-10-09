@@ -1,0 +1,3255 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Agent Graph API",
+    "version": "2026-10-09",
+    "summary": "Read the graphs your coding agents make, at any point in their history.",
+    "description": "The Agent Graph API gives your own servers, and the AI systems they run, read access to the graphs your coding agents make: every session and subagent, what each is doing, who is waiting on whom, and how that changed over time.\n\nIt is a REST API with predictable, resource-oriented URLs. It returns JSON, uses standard HTTP verbs, status codes and authentication, and is read-only: every endpoint is a `GET`.\n\n~~~bash\ncurl https://agentgraph.chofter.com/api/v1/graphs \\\n  -u ag_sk_live_51Hx7Qm2Vb9Kd4Tz0Ws3Ne8L:\n~~~\n\n## What's in a graph\n\nA **graph** is one of your account's live shares: what `agent-graph watch-remote` streams from your machine. It holds **nodes** and the **events** that made them.\n\n- A **node** is a session (one run of Claude Code, Codex, Cursor, …) or an agent that a session or another agent started. Nodes form trees: every node has a `parent_id`, a `root_id` (the top of its tree) and a `session_id` (the session it runs in).\n- An **event** is one thing that happened: a session started, an agent was spawned, a node changed state, a task list was updated. Events are immutable and ordered; each one records which nodes it changed, and how.\n\nThe graph is derived from the events by the same reducer the viewer runs, so the API and the viewer always agree.\n\n## Authentication\n\nAuthenticate with an API key, made on your [account page](https://agentgraph.chofter.com/account). Send it as the username of HTTP Basic auth (no password), or as a bearer token:\n\n~~~bash\ncurl https://agentgraph.chofter.com/api/v1/graphs \\\n  -H \"Authorization: Bearer ag_sk_live_51Hx7Qm2Vb9Kd4Tz0Ws3Ne8L\"\n~~~\n\n| Prefix | Kind | Can read |\n| --- | --- | --- |\n| `ag_sk_live_` | Secret key | Every graph your account owns |\n| `ag_rk_live_` | Restricted key | Only the graphs chosen when it was made |\n\nKeys are shown once, when made, and stored only as a hash: keep them secret, on your server, never in a browser or a repository. Revoke a key on the account page and it stops working at once. All requests must be made over HTTPS.\n\n## Versioning\n\nThe API is versioned by date. Each key is pinned to the version current when it was made, so a change that would break your integration never reaches you unannounced. To try another version for one request, send it in the `Agent-Graph-Version` header; every response says which version answered it.\n\n~~~bash\ncurl https://agentgraph.chofter.com/api/v1/graphs \\\n  -u ag_sk_live_51Hx7Qm2Vb9Kd4Tz0Ws3Ne8L: \\\n  -H \"Agent-Graph-Version: 2026-10-09\"\n~~~\n\nAdding a field, an endpoint, an optional parameter, an event type, an enum value or an error code is not a breaking change. Your code should ignore what it doesn't recognise.\n\n## Ids\n\nEvery object has an `id` with a prefix that says what it is.\n\n| Object | Prefix | Example |\n| --- | --- | --- |\n| Graph | `gph_` | `gph_k3P9xQ2mWt7a` |\n| Node | `node_` | `node_Y2xhdWRlLWNvZGU6NWYyYzFlOWE…` |\n| Event | `evt_` | `evt_01M4G2FMPN7KD3N1PZ0QX8RM4A` |\n\n- A **graph** id is `gph_` and the id in the share's link: `/l/k3P9xQ2mWt7a` is `gph_k3P9xQ2mWt7a`.\n- A **node** id is `node_` and the base64url (no padding) of the id the agent tool gave it, which is returned as `provider_ref`: `claude-code:<session>` for a session, `claude-code:<session>/<agent>` for an agent. The encoding is reversible, needs no lookup, and keeps ids safe in a URL path.\n- An **event** id is `evt_` and the event's ULID. ULIDs sort by time, so event ids sort in the order events happened, and any event id names a point in time (below).\n\nIds are case-sensitive. Treat them as opaque strings: don't parse them, except to decode `node_` ids if you need the provider's own id and don't have `provider_ref` at hand.\n\n## Time travel: `as_of`\n\nEvery graph, node and search endpoint can answer as of any point in the graph's retained history. Pass `as_of`:\n\n| Value | Answers with |\n| --- | --- |\n| An event id, `evt_…` | The state just after that event was applied |\n| A Unix time in milliseconds | The state after the last event at or before that time |\n| Omitted | The state now |\n\nEvery object and list in a response carries `as_of_event_id`: the event it was answered at. Pass it on later requests to read one consistent moment, even while the graph keeps changing:\n\n~~~bash\n# What's stuck right now?\ncurl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes \\\n  -u $AGENT_GRAPH_KEY: -d stale=true\n# → \"as_of_event_id\": \"evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1\"\n\n# Everything under the first one, at that same moment.\ncurl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes/node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU \\\n  -u $AGENT_GRAPH_KEY: \\\n  -d as_of=evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1 \\\n  -d \"expand[]=descendants\"\n~~~\n\nA response for a fixed point never changes, so it's sent with `Cache-Control: private, max-age=31536000, immutable`.\n\nTo walk through history rather than look at one point, list [events](#tag/Events): each records which nodes it changed, field by field.\n\n## Retention\n\nA live share keeps its recent history: between 1,000 and 2,000 events, trimmed from the start as new ones arrive. A graph's `retention` says what it holds now. An `as_of` before `retention.first_event_id` is refused with `410` and the code `outside_retention_window`, and the error names the oldest point you can ask for.\n\nWhen a share restarts on a new machine state (see `restart` in the [design notes](https://agentgraph.chofter.com/docs)), its retained history can briefly shrink to less than 1,000 events.\n\n## Ids versus objects, and expanding\n\nA field that refers to another object comes in two forms, and they never mix:\n\n- `parent_id`, `root_id`, `session_id`, `requested_by_id`, `on_ids`, …: **always** a string id (or `null`, or an array of ids), and **always** present.\n- `parent`, `root`, `session`, `requested_by`, `on`, …: **always** the full object, and present **only** when you ask for it with `expand[]`. A field that wasn't expanded is absent, never an id in its place.\n\nSo a field never changes type, and whether something was expanded is simply whether its field is there.\n\n~~~bash\ncurl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes/node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE \\\n  -u $AGENT_GRAPH_KEY: \\\n  -d \"expand[]=parent\" \\\n  -d \"expand[]=children\"\n~~~\n\nSome fields exist only when expanded, because they can be large: `children`, `descendants`, `tasks`, `spawns`, `waits` and `messages`.\n\n**Paths.** Expand an expanded object's fields with dots: `expand[]=parent.parent`, `expand[]=children.children`, `expand[]=blocked.on`. A path goes at most **4 levels** deep, and a request can expand at most 20 paths. In a list, expand each item's fields with the `data.` prefix: `expand[]=data.parent`.\n\n**Whole subtrees.** `children` is nested, one level per path segment. For everything under a node, however deep, expand `descendants` instead: a single flat list in tree order, each node with its `parent_id`, paged like any other list. See [Retrieve a node](#operation/retrieveNode).\n\n## Pagination\n\nEvery list endpoint returns a list object and takes the same cursor parameters:\n\n~~~json\n{\n  \"object\": \"list\",\n  \"url\": \"/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes\",\n  \"as_of_event_id\": \"evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1\",\n  \"has_more\": true,\n  \"data\": [ … ]\n}\n~~~\n\n| Parameter | |\n| --- | --- |\n| `limit` | How many objects to return, 1 to 1,000. Defaults to 100. |\n| `starting_after` | An object id: return the page after it. Pass the last `id` of the page you have. |\n| `ending_before` | An object id: return the page before it. Pass the first `id` of the page you have. |\n\nKeep `as_of` the same across the pages of one list (the first page's `as_of_event_id`), so that nodes added in the meantime don't shift the pages under you. An embedded list's `url` already includes it, and every parameter that defined the list: add only `starting_after`.\n\n[Search](#operation/searchNodes) pages with `page` and `next_page` instead, as its results are ranked.\n\n## Conditional requests\n\nEvery successful response has an `ETag`. Send it back as `If-None-Match` and, if nothing has changed, you get `304 Not Modified` with no body. That's the cheap way to poll the state now: it costs no rate limit and almost no bandwidth.\n\nResponses are compressed with Brotli or gzip when you send `Accept-Encoding`.\n\n## Errors\n\nThe API uses conventional HTTP status codes: `2xx` succeeded, `4xx` means something about the request was wrong, `5xx` means something went wrong on our side (they're rare). Every error has the same shape:\n\n~~~json\n{\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"code\": \"outside_retention_window\",\n    \"message\": \"This graph holds events from evt_01M4FXYWR82B8XK0V5QJ7M1N3R to evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1.\",\n    \"param\": \"as_of\",\n    \"doc_url\": \"https://agentgraph.chofter.com/docs/api/errors#outside_retention_window\",\n    \"first_event_id\": \"evt_01M4FXYWR82B8XK0V5QJ7M1N3R\",\n    \"last_event_id\": \"evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1\"\n  }\n}\n~~~\n\n| Status | Meaning |\n| --- | --- |\n| `200` | OK. |\n| `304` | Not modified since the `ETag` you sent. |\n| `400` | A parameter is missing, unknown or invalid. |\n| `401` | No API key, or one that's invalid or revoked. |\n| `403` | The key can't read this graph. |\n| `404` | No such graph, node or event, or the node doesn't exist at `as_of`. |\n| `410` | `as_of` is older than the graph's retained history. |\n| `429` | Too many requests: wait for `Retry-After`. |\n| `500`, `502`, `503` | Something went wrong on our side. Safe to retry: every request is read-only. |\n\n| Type | |\n| --- | --- |\n| `invalid_request_error` | The request was invalid. |\n| `authentication_error` | The API key is missing, invalid or revoked. |\n| `permission_error` | The key isn't allowed to do this. |\n| `rate_limit_error` | Too many requests. |\n| `api_error` | Something went wrong on our side. |\n\n| Code | Status | |\n| --- | --- | --- |\n| `parameter_missing` | 400 | A required parameter is missing. `param` names it. |\n| `parameter_invalid` | 400 | A parameter's value is invalid. `param` names it. |\n| `parameter_unknown` | 400 | A parameter that the endpoint doesn't take. `param` names it. |\n| `version_invalid` | 400 | `Agent-Graph-Version` isn't a version. |\n| `expand_invalid` | 400 | An `expand[]` path names a field that can't be expanded. |\n| `expand_too_deep` | 400 | An `expand[]` path goes more than 4 levels deep. |\n| `expand_not_allowed` | 400 | That expansion isn't available here: `descendants` and `children` can't be expanded on the items of a list. |\n| `search_query_invalid` | 400 | The search query couldn't be parsed. `message` says where. |\n| `api_key_missing` | 401 | No API key was sent. |\n| `api_key_invalid` | 401 | The API key isn't one, or has been revoked. |\n| `api_key_restricted` | 403 | A restricted key that can't read this graph. |\n| `resource_missing` | 404 | No such graph, node or event (for this key). |\n| `node_not_yet_created` | 404 | The node exists, but not yet at `as_of`. `first_event_id` is the event that creates it. |\n| `outside_retention_window` | 410 | `as_of` is before the graph's retained history. `first_event_id` and `last_event_id` say what it holds. |\n| `rate_limit` | 429 | Too many requests. |\n| `api_error` | 500 | Something went wrong on our side. |\n\nEvery response, including errors, has a `Request-Id` header. Include it if you contact us about a request.\n\n## Rate limits\n\nEach key can make 25 requests a second, in bursts of up to 100. Responses carry `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` (seconds until the limit resets); a refused request has `Retry-After`. A `304` doesn't count.\n\nThe cheapest way to follow a graph is to list [events](#tag/Events) `starting_after` the last one you saw, or to poll with `If-None-Match`, not to fetch the whole graph again.\n\n## Text in nodes is untrusted\n\nFields like `title`, `summary`, `headline`, `purpose`, `attention`, task text and message summaries are written by coding agents, from what they were working on. They can contain anything, including text written to manipulate a model that reads it.\n\nIf you pass them to an AI system, mark them as data, not instructions, and don't let them trigger actions on their own.\n\n## What's not included\n\n- **Prompts.** No endpoint returns what a person typed to an agent.\n- **Message bodies** are present only if the share was made with body capture on; otherwise `body` is `null`.\n- **Processes and hosts.** The ids of processes and the names of machines are left out.",
+    "termsOfService": "https://agentgraph.chofter.com/terms",
+    "contact": {
+      "name": "Agent Graph",
+      "url": "https://agentgraph.chofter.com/contact"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://agentgraph.chofter.com/api/v1",
+      "description": "Production"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Graphs",
+      "description": "A graph is one of your account's live shares: the sessions and agents `agent-graph watch-remote` streams from a machine, kept on the site while it's in use, and deleted after a week with no new events.\n\nRetrieve a graph to see what it holds (`retention`), how big it is, and how its nodes stand (`counts`), now or as of any retained event."
+    },
+    {
+      "name": "Nodes",
+      "description": "A node is a session (one run of a coding agent) or an agent it started. Nodes form trees:\n\n~~~\nsession        claude-code:5f2c1e…            depth 0, parent_id null\n├─ agent       claude-code:5f2c1e…/a3fd07…    depth 1\n│  └─ agent    claude-code:5f2c1e…/b81c22…    depth 2\n└─ agent       claude-code:5f2c1e…/c90d13…    depth 1\n~~~\n\nEvery node says where it sits: `parent_id`, `root_id` (the top of its tree, following sessions that started other sessions), `session_id` (the session it runs in) and `depth`.\n\n**State.** A node's `state` is one of:\n\n| State | Meaning |\n| --- | --- |\n| `working` | Doing something. |\n| `input_required` | Waiting on a person: a permission prompt, a question, a plan to approve. `attention` says what's asked. |\n| `idle` | A session whose turn is over, alive and waiting for its next prompt. |\n| `completed` | Finished. |\n| `failed` | Finished with an error. |\n| `canceled` | Stopped before it finished. |\n\nWaiting on another node isn't a state: a node can be `working` and `blocked` at once. `blocked` says what it's waiting on, directly (`on_ids`) and in all (how many nodes, how many open tasks among them), and whether the waits form a cycle that can never finish. A `working` node with no events for 30 minutes, and nothing it's waiting on, is `stale`: it may have hung or crashed."
+    },
+    {
+      "name": "Events",
+      "description": "An event is one thing that happened in a graph. Events are immutable and ordered by `id`, which sorts by time.\n\nEach event has the `payload` its agent tool reported, and `changes`: every node the event changed, and for each, the fields that changed, from what to what. A node's derived fields count too: an agent being spawned changes its parent's `child_count`, and every ancestor's `descendant_count`.\n\nList events `starting_after` the last one you saw to follow a graph cheaply, or with `order=asc` from any point to replay its history.\n\n**Event types**\n\n| Type | `payload` | When |\n| --- | --- | --- |\n| `session.started` | `cwd?`, `source?` (`startup`, `resume`, …), `title?`, `link_method?` | A session starts or resumes. |\n| `session.ended` | `reason?` | A session exits. |\n| `agent.spawned` | `agent_type?`, `purpose?`, `background?` | An agent starts. |\n| `agent.finished` | `status` (`completed`, `failed`, `canceled`), `summary?` | An agent stops. |\n| `status` | `state`, `summary?`, `title?` | A node's state or status line changes. |\n| `tasks.updated` | `items`: `[{id, text, active_text?, status}]` | A to-do tool sent its whole list, which replaces the node's. |\n| `task.upserted` | `id`, `text?`, `active_text?`, `status?` | One task was created or changed. |\n| `task.deleted` | `id` | A task was removed. |\n| `spawn.requested` | `call_id`, `kind` (`agent`, `session`), `agent_type?`, `purpose?`, `background` | A node asked for a child to start. Unless `background`, it's blocked until the call returns. |\n| `spawn.returned` | `call_id`, `child?`, `outcome?` | That call returned. |\n| `wait.started` | `wait_id`, `on` (a provider node id), `reason?` | A node blocked on another for some other reason. |\n| `wait.ended` | `wait_id`, `outcome?` | That block cleared. |\n| `message.sent` | `message_id`, `to`, `reply_to?`, `summary?`, `body?` | One node sent another a message. |\n| `activity` | `tool`, `label?` | A tool call, when the share records them. |\n\nIds inside `payload` are the provider's own (as in `provider_ref`), exactly as the agent tool reported them; use `node_id` and `changes` for API ids. More types may be added: ignore those you don't recognise."
+    }
+  ],
+  "paths": {
+    "/graphs": {
+      "get": {
+        "operationId": "listGraphs",
+        "tags": ["Graphs"],
+        "summary": "List graphs",
+        "description": "Returns the graphs this key can read: your account's live shares, most recently active first.\n\nEach graph's `counts` are as of its own latest event.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/StartingAfter"
+          },
+          {
+            "$ref": "#/components/parameters/EndingBefore"
+          },
+          {
+            "name": "last_event",
+            "in": "query",
+            "required": false,
+            "description": "Only graphs whose latest event is in this range. `last_event[gte]=<5 minutes ago>` lists the shares active now.",
+            "style": "deepObject",
+            "explode": true,
+            "schema": {
+              "type": "object",
+              "description": "A range of times, in Unix milliseconds. Send any of `gt`, `gte`, `lt` and `lte`.",
+              "properties": {
+                "gt": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "After this time."
+                },
+                "gte": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "At or after this time."
+                },
+                "lt": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Before this time."
+                },
+                "lte": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "At or before this time."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of graphs.",
+            "headers": {
+              "Request-Id": {
+                "$ref": "#/components/headers/Request-Id"
+              },
+              "Agent-Graph-Version": {
+                "$ref": "#/components/headers/Agent-Graph-Version"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphList"
+                },
+                "examples": {
+                  "graphs": {
+                    "value": {
+                      "object": "list",
+                      "url": "/api/v1/graphs",
+                      "as_of_event_id": null,
+                      "has_more": false,
+                      "data": [
+                        {
+                          "id": "gph_k3P9xQ2mWt7a",
+                          "object": "graph",
+                          "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                          "source": "watch",
+                          "url": "https://agentgraph.chofter.com/l/k3P9xQ2mWt7a",
+                          "created": 1790959209012,
+                          "last_event": 1791541907912,
+                          "retention": {
+                            "first_event_id": "evt_01M4FXYWR82B8XK0V5QJ7M1N3R",
+                            "last_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                            "first_event_created": 1791536100104,
+                            "last_event_created": 1791541907912,
+                            "event_count": 1638
+                          },
+                          "counts": {
+                            "nodes": 214,
+                            "sessions": 9,
+                            "agents": 205,
+                            "stale": 1,
+                            "blocked": 6,
+                            "by_state": {
+                              "working": 7,
+                              "input_required": 1,
+                              "idle": 3,
+                              "completed": 198,
+                              "failed": 4,
+                              "canceled": 1
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "source": "curl -G https://agentgraph.chofter.com/api/v1/graphs \\\n  -u $AGENT_GRAPH_KEY: \\\n  -d limit=10"
+          }
+        ]
+      }
+    },
+    "/graphs/{graph_id}": {
+      "get": {
+        "operationId": "retrieveGraph",
+        "tags": ["Graphs"],
+        "summary": "Retrieve a graph",
+        "description": "Retrieves a graph: what history it holds (`retention`) and how its nodes stand (`counts`), now or as of any retained event.\n\nThis is the cheapest overview of a graph: one small object however many nodes it has. Poll it with `If-None-Match` to learn when anything changes.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/GraphId"
+          },
+          {
+            "$ref": "#/components/parameters/AsOf"
+          },
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The graph.",
+            "headers": {
+              "Request-Id": {
+                "$ref": "#/components/headers/Request-Id"
+              },
+              "Agent-Graph-Version": {
+                "$ref": "#/components/headers/Agent-Graph-Version"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Graph"
+                },
+                "examples": {
+                  "graph": {
+                    "value": {
+                      "id": "gph_k3P9xQ2mWt7a",
+                      "object": "graph",
+                      "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                      "source": "watch",
+                      "url": "https://agentgraph.chofter.com/l/k3P9xQ2mWt7a",
+                      "created": 1790959209012,
+                      "last_event": 1791541907912,
+                      "retention": {
+                        "first_event_id": "evt_01M4FXYWR82B8XK0V5QJ7M1N3R",
+                        "last_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                        "first_event_created": 1791536100104,
+                        "last_event_created": 1791541907912,
+                        "event_count": 1638
+                      },
+                      "counts": {
+                        "nodes": 214,
+                        "sessions": 9,
+                        "agents": 205,
+                        "stale": 1,
+                        "blocked": 6,
+                        "by_state": {
+                          "working": 7,
+                          "input_required": 1,
+                          "idle": 3,
+                          "completed": 198,
+                          "failed": 4,
+                          "canceled": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "source": "curl https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a \\\n  -u $AGENT_GRAPH_KEY:"
+          }
+        ]
+      }
+    },
+    "/graphs/{graph_id}/nodes": {
+      "get": {
+        "operationId": "listNodes",
+        "tags": ["Nodes"],
+        "summary": "List nodes",
+        "description": "Returns a graph's nodes as of a point in its history, filtered and ordered as you ask.\n\nCommon uses:\n\n| To list | Send |\n| --- | --- |\n| The top-level trees | `is_root=true` |\n| A node's children | `parent_id=node_…` |\n| Everything under a node | `ancestor_id=node_…&order=tree` |\n| The top three levels under it | `ancestor_id=node_…&max_depth=3&order=tree` |\n| Everything waiting on a person | `state=input_required` |\n| What may have hung | `stale=true` |\n| What's blocked behind another node | `blocked=true` |\n\nFilters combine with AND. In tree order (`order=tree`), each parent comes before its children, and siblings are oldest first, so a page never separates a node from what places it; with a filter, the nodes that match keep that order.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/GraphId"
+          },
+          {
+            "$ref": "#/components/parameters/AsOf"
+          },
+          {
+            "name": "expand",
+            "in": "query",
+            "required": false,
+            "description": "Fields to expand on each node, with the `data.` prefix: `expand[]=data.parent`, `expand[]=data.blocked.on`. `children` and `descendants` can't be expanded in a list (use `parent_id` or `ancestor_id` instead).\n\nSend one `expand[]` per path. A path goes at most 4 levels deep; at most 20 paths per request. An expanded field appears beside its `_id` field, which is always there; one not expanded is absent.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 20
+            }
+          },
+          {
+            "name": "parent_id",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes directly under this one.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ancestor_id",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes under this one, at any depth (not the node itself).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "description": "With `ancestor_id`: only nodes at most this many levels below it. 1 is its children.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "root_id",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes in this tree, the root included.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "description": "Only this session and the agents in it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "is_root",
+            "in": "query",
+            "required": false,
+            "description": "Only roots (`true`) or only non-roots (`false`).",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "description": "Only sessions or only agents.",
+            "schema": {
+              "$ref": "#/components/schemas/NodeKind"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes in these states. Send one `state[]` per state.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/NodeState"
+              }
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes from this agent tool, e.g. `claude-code`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent_type",
+            "in": "query",
+            "required": false,
+            "description": "Only agents of this type, e.g. `Explore`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stale",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes that are, or aren't, `stale`.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "blocked",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes that are (`true`) or aren't (`false`) waiting on another node.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "created",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes that started in this range.",
+            "style": "deepObject",
+            "explode": true,
+            "schema": {
+              "type": "object",
+              "description": "A range of start times, in Unix milliseconds. Send any of `gt`, `gte`, `lt` and `lte`.",
+              "properties": {
+                "gt": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "After this time."
+                },
+                "gte": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "At or after this time."
+                },
+                "lt": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Before this time."
+                },
+                "lte": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "At or before this time."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          {
+            "name": "last_event",
+            "in": "query",
+            "required": false,
+            "description": "Only nodes whose last event is in this range.",
+            "style": "deepObject",
+            "explode": true,
+            "schema": {
+              "type": "object",
+              "description": "A range of times, in Unix milliseconds. Send any of `gt`, `gte`, `lt` and `lte`.",
+              "properties": {
+                "gt": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "After this time."
+                },
+                "gte": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "At or after this time."
+                },
+                "lt": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Before this time."
+                },
+                "lte": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "At or before this time."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "`newest`: most recently started first. `tree`: depth-first, each parent before its children, siblings oldest first.",
+            "schema": {
+              "type": "string",
+              "enum": ["newest", "tree"],
+              "default": "newest"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/StartingAfter"
+          },
+          {
+            "$ref": "#/components/parameters/EndingBefore"
+          },
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of nodes.",
+            "headers": {
+              "Request-Id": {
+                "$ref": "#/components/headers/Request-Id"
+              },
+              "Agent-Graph-Version": {
+                "$ref": "#/components/headers/Agent-Graph-Version"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeList"
+                },
+                "examples": {
+                  "children": {
+                    "summary": "A node's children",
+                    "value": {
+                      "object": "list",
+                      "url": "/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes?parent_id=node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw&as_of=evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                      "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                      "has_more": true,
+                      "data": [
+                        {
+                          "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                          "object": "node",
+                          "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                          "graph_id": "gph_k3P9xQ2mWt7a",
+                          "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10/a3fd07c2b19e4d61",
+                          "provider": "claude-code",
+                          "kind": "agent",
+                          "parent_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                          "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                          "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                          "requested_by_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                          "depth": 1,
+                          "state": "working",
+                          "stale": false,
+                          "attention": null,
+                          "title": null,
+                          "summary": "Reading the auth middleware",
+                          "headline": "Reading the auth middleware",
+                          "purpose": "Find every caller of the old session store",
+                          "agent_type": "Explore",
+                          "background": false,
+                          "link_method": null,
+                          "spawn_call_id": "toolu_01HxV9qT3mJb7d2KcL5nRw8E",
+                          "cwd": "/Users/dev/work/api",
+                          "created": 1791540843221,
+                          "ended": null,
+                          "last_event": 1791541903812,
+                          "child_count": 1,
+                          "descendant_count": 1,
+                          "background_agent_count": 0,
+                          "task_counts": {
+                            "total": 4,
+                            "pending": 1,
+                            "in_progress": 1,
+                            "completed": 2,
+                            "open": 2
+                          },
+                          "blocked": {
+                            "on_ids": [
+                              "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU"
+                            ],
+                            "starting": 0,
+                            "node_count": 1,
+                            "open_tasks": 5,
+                            "cycle": false
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "source": "curl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes \\\n  -u $AGENT_GRAPH_KEY: \\\n  -d \"state[]=working\" \\\n  -d stale=true \\\n  -d \"expand[]=data.session\""
+          }
+        ]
+      }
+    },
+    "/graphs/{graph_id}/nodes/search": {
+      "get": {
+        "operationId": "searchNodes",
+        "tags": ["Nodes"],
+        "summary": "Search nodes",
+        "description": "Searches a graph's nodes with a query, as of a point in its history.\n\nUse it for questions the [list filters](#operation/listNodes) can't express: text in a node's summary, OR, negation, numeric comparisons.\n\n**Query language**\n\nA query is one or more clauses, joined by `AND` or `OR` (not both in one query). Values are quoted.\n\n| Clause | Matches |\n| --- | --- |\n| `field:\"value\"` | Exactly equal (case-insensitive for text). |\n| `field~\"value\"` | Contains (text fields; at least 3 characters). |\n| `-field:\"value\"` | Not equal. |\n| `field>value`, `field>=value`, `field<value`, `field<=value` | Numbers and times (Unix milliseconds). |\n| `field:null` | Has no value. |\n\n**Fields:** `state`, `kind`, `provider`, `agent_type`, `stale`, `blocked`, `background`, `parent_id`, `root_id`, `session_id`, `depth`, `created`, `ended`, `last_event`, `child_count`, `descendant_count`, `open_tasks` (its `task_counts.open`), `blocked_open_tasks` (its `blocked.open_tasks`), `title`, `summary`, `headline`, `purpose`, `attention`.\n\n**Examples**\n\n~~~\nstate:\"working\" AND stale:\"true\"\nagent_type:\"Explore\" AND descendant_count>10\nstate:\"failed\" OR state:\"canceled\"\nsummary~\"migration\" AND -state:\"completed\"\nblocked_open_tasks>=20\n~~~\n\nResults are best match first, then most recently active.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/GraphId"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "description": "The search query. See the query language above.",
+            "schema": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "example": "state:\"working\" AND stale:\"true\""
+          },
+          {
+            "$ref": "#/components/parameters/AsOf"
+          },
+          {
+            "name": "expand",
+            "in": "query",
+            "required": false,
+            "description": "Fields to expand on each node, with the `data.` prefix: `expand[]=data.root`.\n\nSend one `expand[]` per path. A path goes at most 4 levels deep; at most 20 paths per request. An expanded field appears beside its `_id` field, which is always there; one not expanded is absent.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 20
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "The cursor for a page after the first: the previous page's `next_page`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of matching nodes.",
+            "headers": {
+              "Request-Id": {
+                "$ref": "#/components/headers/Request-Id"
+              },
+              "Agent-Graph-Version": {
+                "$ref": "#/components/headers/Agent-Graph-Version"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeSearchResult"
+                },
+                "examples": {
+                  "stale": {
+                    "value": {
+                      "object": "search_result",
+                      "url": "/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes/search?query=state%3A%22working%22",
+                      "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                      "has_more": false,
+                      "next_page": null,
+                      "total_count": 1,
+                      "data": [
+                        {
+                          "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU",
+                          "object": "node",
+                          "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                          "graph_id": "gph_k3P9xQ2mWt7a",
+                          "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10/b81c22e09f7a3c55",
+                          "provider": "claude-code",
+                          "kind": "agent",
+                          "parent_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                          "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                          "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                          "requested_by_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                          "depth": 2,
+                          "state": "working",
+                          "stale": false,
+                          "attention": null,
+                          "title": null,
+                          "summary": null,
+                          "headline": "Searching for SessionStore imports",
+                          "purpose": "List the files that import SessionStore",
+                          "agent_type": "general-purpose",
+                          "background": false,
+                          "link_method": null,
+                          "spawn_call_id": "toolu_01Pq4Ze8sYh2WnVb6XcJ1dRt",
+                          "cwd": "/Users/dev/work/api",
+                          "created": 1791540874033,
+                          "ended": null,
+                          "last_event": 1791541898692,
+                          "child_count": 0,
+                          "descendant_count": 0,
+                          "background_agent_count": 0,
+                          "task_counts": {
+                            "total": 5,
+                            "pending": 3,
+                            "in_progress": 1,
+                            "completed": 1,
+                            "open": 4
+                          },
+                          "blocked": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "source": "curl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes/search \\\n  -u $AGENT_GRAPH_KEY: \\\n  --data-urlencode 'query=agent_type:\"Explore\" AND descendant_count>10'"
+          }
+        ]
+      }
+    },
+    "/graphs/{graph_id}/nodes/{node_id}": {
+      "get": {
+        "operationId": "retrieveNode",
+        "tags": ["Nodes"],
+        "summary": "Retrieve a node",
+        "description": "Retrieves a node as it stood at a point in its graph's history, with whatever around it you expand.\n\n**Expandable fields**\n\n| Path | Adds |\n| --- | --- |\n| `parent` | The parent node, beside `parent_id`. Absent for a root. |\n| `root` | The root node, beside `root_id`. |\n| `session` | The session node, beside `session_id`. |\n| `requested_by` | The node that asked for this one, beside `requested_by_id`. |\n| `blocked.on` | The nodes it's waiting on, beside `blocked.on_ids`. |\n| `children` | Its children, as a list (the first 100, oldest first, and a `url` for the rest). |\n| `descendants` | Every node under it, as one flat list in tree order (the first 1,000, and a `url` for the rest). See `descendants_max_depth`. |\n| `tasks` | Its task list. |\n| `spawns` | The children it has asked for. |\n| `waits` | What it has waited on, and is waiting on. |\n| `messages` | Messages it has sent and received. |\n\nExpanded nodes can be expanded in turn: `parent.parent`, `children.children`, `root.tasks`.\n\n**Expanding to a depth.** `expand[]=children.children` nests two levels of children; a path goes at most 4 levels.\n\n**Expanding all the way down.** `expand[]=descendants` returns everything under the node as one flat list, in tree order (each parent before its children), each node with its `parent_id` so you can rebuild the tree in one pass. Limit its depth with `descendants_max_depth`. It holds the first 1,000; if `has_more`, its `url` lists the rest (it includes `as_of`, so every page is the same moment): request it with `starting_after` set to the last node you have.\n\n~~~bash\n# The whole tree under a node…\ncurl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes/node_Y2xhdWRlLWNvZGU6NWY… \\\n  -u $AGENT_GRAPH_KEY: -d \"expand[]=descendants\"\n\n# …and, if has_more, the next 1,000.\ncurl -G \"https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes?ancestor_id=…&as_of=…&order=tree\" \\\n  -u $AGENT_GRAPH_KEY: -d limit=1000 -d starting_after=node_…\n~~~\n\nIf the node doesn't exist at `as_of` but does later, the error is `404 node_not_yet_created`, with the event that creates it.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/GraphId"
+          },
+          {
+            "$ref": "#/components/parameters/NodeId"
+          },
+          {
+            "$ref": "#/components/parameters/AsOf"
+          },
+          {
+            "name": "expand",
+            "in": "query",
+            "required": false,
+            "description": "Fields to expand. See `Expandable fields` above.\n\nSend one `expand[]` per path. A path goes at most 4 levels deep; at most 20 paths per request. An expanded field appears beside its `_id` field, which is always there; one not expanded is absent.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 20
+            }
+          },
+          {
+            "name": "descendants_max_depth",
+            "in": "query",
+            "required": false,
+            "description": "With `expand[]=descendants`: only include nodes at most this many levels below. Leave it out for all of them.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The node.",
+            "headers": {
+              "Request-Id": {
+                "$ref": "#/components/headers/Request-Id"
+              },
+              "Agent-Graph-Version": {
+                "$ref": "#/components/headers/Agent-Graph-Version"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                },
+                "examples": {
+                  "node": {
+                    "summary": "Not expanded",
+                    "value": {
+                      "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                      "object": "node",
+                      "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                      "graph_id": "gph_k3P9xQ2mWt7a",
+                      "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10/a3fd07c2b19e4d61",
+                      "provider": "claude-code",
+                      "kind": "agent",
+                      "parent_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "requested_by_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "depth": 1,
+                      "state": "working",
+                      "stale": false,
+                      "attention": null,
+                      "title": null,
+                      "summary": "Reading the auth middleware",
+                      "headline": "Reading the auth middleware",
+                      "purpose": "Find every caller of the old session store",
+                      "agent_type": "Explore",
+                      "background": false,
+                      "link_method": null,
+                      "spawn_call_id": "toolu_01HxV9qT3mJb7d2KcL5nRw8E",
+                      "cwd": "/Users/dev/work/api",
+                      "created": 1791540843221,
+                      "ended": null,
+                      "last_event": 1791541903812,
+                      "child_count": 1,
+                      "descendant_count": 1,
+                      "background_agent_count": 0,
+                      "task_counts": {
+                        "total": 4,
+                        "pending": 1,
+                        "in_progress": 1,
+                        "completed": 2,
+                        "open": 2
+                      },
+                      "blocked": {
+                        "on_ids": [
+                          "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU"
+                        ],
+                        "starting": 0,
+                        "node_count": 1,
+                        "open_tasks": 5,
+                        "cycle": false
+                      }
+                    }
+                  },
+                  "expanded": {
+                    "summary": "With expand[]=parent and expand[]=children",
+                    "value": {
+                      "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                      "object": "node",
+                      "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                      "graph_id": "gph_k3P9xQ2mWt7a",
+                      "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10/a3fd07c2b19e4d61",
+                      "provider": "claude-code",
+                      "kind": "agent",
+                      "parent_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "requested_by_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "depth": 1,
+                      "state": "working",
+                      "stale": false,
+                      "attention": null,
+                      "title": null,
+                      "summary": "Reading the auth middleware",
+                      "headline": "Reading the auth middleware",
+                      "purpose": "Find every caller of the old session store",
+                      "agent_type": "Explore",
+                      "background": false,
+                      "link_method": null,
+                      "spawn_call_id": "toolu_01HxV9qT3mJb7d2KcL5nRw8E",
+                      "cwd": "/Users/dev/work/api",
+                      "created": 1791540843221,
+                      "ended": null,
+                      "last_event": 1791541903812,
+                      "child_count": 1,
+                      "descendant_count": 1,
+                      "background_agent_count": 0,
+                      "task_counts": {
+                        "total": 4,
+                        "pending": 1,
+                        "in_progress": 1,
+                        "completed": 2,
+                        "open": 2
+                      },
+                      "blocked": {
+                        "on_ids": [
+                          "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU"
+                        ],
+                        "starting": 0,
+                        "node_count": 1,
+                        "open_tasks": 5,
+                        "cycle": false
+                      },
+                      "parent": {
+                        "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                        "object": "node",
+                        "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                        "graph_id": "gph_k3P9xQ2mWt7a",
+                        "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10",
+                        "provider": "claude-code",
+                        "kind": "session",
+                        "parent_id": null,
+                        "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                        "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                        "requested_by_id": null,
+                        "depth": 0,
+                        "state": "working",
+                        "stale": false,
+                        "attention": null,
+                        "title": "Move auth to the new session store",
+                        "summary": null,
+                        "headline": "Updating the session middleware",
+                        "purpose": null,
+                        "agent_type": null,
+                        "background": null,
+                        "link_method": null,
+                        "spawn_call_id": null,
+                        "cwd": "/Users/dev/work/api",
+                        "created": 1791540131480,
+                        "ended": null,
+                        "last_event": 1791541907912,
+                        "child_count": 3,
+                        "descendant_count": 5,
+                        "background_agent_count": 2,
+                        "task_counts": {
+                          "total": 6,
+                          "pending": 2,
+                          "in_progress": 1,
+                          "completed": 3,
+                          "open": 3
+                        },
+                        "blocked": {
+                          "on_ids": [
+                            "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE"
+                          ],
+                          "starting": 0,
+                          "node_count": 2,
+                          "open_tasks": 7,
+                          "cycle": false
+                        }
+                      },
+                      "children": {
+                        "object": "list",
+                        "url": "/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes?parent_id=node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE&as_of=evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                        "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                        "has_more": false,
+                        "data": [
+                          {
+                            "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU",
+                            "object": "node",
+                            "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                            "graph_id": "gph_k3P9xQ2mWt7a",
+                            "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10/b81c22e09f7a3c55",
+                            "provider": "claude-code",
+                            "kind": "agent",
+                            "parent_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                            "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                            "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                            "requested_by_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                            "depth": 2,
+                            "state": "working",
+                            "stale": false,
+                            "attention": null,
+                            "title": null,
+                            "summary": null,
+                            "headline": "Searching for SessionStore imports",
+                            "purpose": "List the files that import SessionStore",
+                            "agent_type": "general-purpose",
+                            "background": false,
+                            "link_method": null,
+                            "spawn_call_id": "toolu_01Pq4Ze8sYh2WnVb6XcJ1dRt",
+                            "cwd": "/Users/dev/work/api",
+                            "created": 1791540874033,
+                            "ended": null,
+                            "last_event": 1791541898692,
+                            "child_count": 0,
+                            "descendant_count": 0,
+                            "background_agent_count": 0,
+                            "task_counts": {
+                              "total": 5,
+                              "pending": 3,
+                              "in_progress": 1,
+                              "completed": 1,
+                              "open": 4
+                            },
+                            "blocked": null
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "descendants": {
+                    "summary": "With expand[]=descendants",
+                    "value": {
+                      "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "object": "node",
+                      "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                      "graph_id": "gph_k3P9xQ2mWt7a",
+                      "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10",
+                      "provider": "claude-code",
+                      "kind": "session",
+                      "parent_id": null,
+                      "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                      "requested_by_id": null,
+                      "depth": 0,
+                      "state": "working",
+                      "stale": false,
+                      "attention": null,
+                      "title": "Move auth to the new session store",
+                      "summary": null,
+                      "headline": "Updating the session middleware",
+                      "purpose": null,
+                      "agent_type": null,
+                      "background": null,
+                      "link_method": null,
+                      "spawn_call_id": null,
+                      "cwd": "/Users/dev/work/api",
+                      "created": 1791540131480,
+                      "ended": null,
+                      "last_event": 1791541907912,
+                      "child_count": 3,
+                      "descendant_count": 5,
+                      "background_agent_count": 2,
+                      "task_counts": {
+                        "total": 6,
+                        "pending": 2,
+                        "in_progress": 1,
+                        "completed": 3,
+                        "open": 3
+                      },
+                      "blocked": {
+                        "on_ids": [
+                          "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE"
+                        ],
+                        "starting": 0,
+                        "node_count": 2,
+                        "open_tasks": 7,
+                        "cycle": false
+                      },
+                      "descendants": {
+                        "object": "list",
+                        "url": "/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes?ancestor_id=node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw&as_of=evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1&order=tree",
+                        "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                        "has_more": true,
+                        "data": [
+                          {
+                            "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                            "object": "node",
+                            "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                            "graph_id": "gph_k3P9xQ2mWt7a",
+                            "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10/a3fd07c2b19e4d61",
+                            "provider": "claude-code",
+                            "kind": "agent",
+                            "parent_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                            "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                            "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                            "requested_by_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                            "depth": 1,
+                            "state": "working",
+                            "stale": false,
+                            "attention": null,
+                            "title": null,
+                            "summary": "Reading the auth middleware",
+                            "headline": "Reading the auth middleware",
+                            "purpose": "Find every caller of the old session store",
+                            "agent_type": "Explore",
+                            "background": false,
+                            "link_method": null,
+                            "spawn_call_id": "toolu_01HxV9qT3mJb7d2KcL5nRw8E",
+                            "cwd": "/Users/dev/work/api",
+                            "created": 1791540843221,
+                            "ended": null,
+                            "last_event": 1791541903812,
+                            "child_count": 1,
+                            "descendant_count": 1,
+                            "background_agent_count": 0,
+                            "task_counts": {
+                              "total": 4,
+                              "pending": 1,
+                              "in_progress": 1,
+                              "completed": 2,
+                              "open": 2
+                            },
+                            "blocked": {
+                              "on_ids": [
+                                "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU"
+                              ],
+                              "starting": 0,
+                              "node_count": 1,
+                              "open_tasks": 5,
+                              "cycle": false
+                            }
+                          },
+                          {
+                            "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU",
+                            "object": "node",
+                            "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                            "graph_id": "gph_k3P9xQ2mWt7a",
+                            "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10/b81c22e09f7a3c55",
+                            "provider": "claude-code",
+                            "kind": "agent",
+                            "parent_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                            "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                            "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                            "requested_by_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                            "depth": 2,
+                            "state": "working",
+                            "stale": false,
+                            "attention": null,
+                            "title": null,
+                            "summary": null,
+                            "headline": "Searching for SessionStore imports",
+                            "purpose": "List the files that import SessionStore",
+                            "agent_type": "general-purpose",
+                            "background": false,
+                            "link_method": null,
+                            "spawn_call_id": "toolu_01Pq4Ze8sYh2WnVb6XcJ1dRt",
+                            "cwd": "/Users/dev/work/api",
+                            "created": 1791540874033,
+                            "ended": null,
+                            "last_event": 1791541898692,
+                            "child_count": 0,
+                            "descendant_count": 0,
+                            "background_agent_count": 0,
+                            "task_counts": {
+                              "total": 5,
+                              "pending": 3,
+                              "in_progress": 1,
+                              "completed": 1,
+                              "open": 4
+                            },
+                            "blocked": null
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "source": "curl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/nodes/node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE \\\n  -u $AGENT_GRAPH_KEY: \\\n  -d \"expand[]=parent\" \\\n  -d \"expand[]=children\""
+          }
+        ]
+      }
+    },
+    "/graphs/{graph_id}/events": {
+      "get": {
+        "operationId": "listEvents",
+        "tags": ["Events"],
+        "summary": "List events",
+        "description": "Returns a graph's events, newest first by default, from its retained history.\n\n**Following a graph.** Remember the newest event id you've seen, and list with `order=asc` and `starting_after` set to it: you get only what's happened since, each event with its `changes`. No need to fetch the graph again.\n\n**Replaying history.** List with `order=asc` from the start of `retention`, or from any event; `expand[]=data.node` adds each event's node as it stood just after it.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/GraphId"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Only events of these types. Send one `type[]` per type; a trailing `*` matches a family: `type[]=agent.*`.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "query",
+            "required": false,
+            "description": "Only events about this node.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "root_id",
+            "in": "query",
+            "required": false,
+            "description": "Only events about nodes in this tree.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "created",
+            "in": "query",
+            "required": false,
+            "description": "Only events that happened in this range.",
+            "style": "deepObject",
+            "explode": true,
+            "schema": {
+              "type": "object",
+              "description": "A range of times, in Unix milliseconds. Send any of `gt`, `gte`, `lt` and `lte`.",
+              "properties": {
+                "gt": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "After this time."
+                },
+                "gte": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "At or after this time."
+                },
+                "lt": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Before this time."
+                },
+                "lte": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "At or before this time."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "`desc`: newest first. `asc`: oldest first.",
+            "schema": {
+              "type": "string",
+              "enum": ["desc", "asc"],
+              "default": "desc"
+            }
+          },
+          {
+            "name": "expand",
+            "in": "query",
+            "required": false,
+            "description": "Fields to expand on each event: `expand[]=data.node` (the node just after the event), and its own fields, `data.node.parent`.\n\nSend one `expand[]` per path. A path goes at most 4 levels deep; at most 20 paths per request. An expanded field appears beside its `_id` field, which is always there; one not expanded is absent.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 20
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/StartingAfter"
+          },
+          {
+            "$ref": "#/components/parameters/EndingBefore"
+          },
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of events.",
+            "headers": {
+              "Request-Id": {
+                "$ref": "#/components/headers/Request-Id"
+              },
+              "Agent-Graph-Version": {
+                "$ref": "#/components/headers/Agent-Graph-Version"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventList"
+                },
+                "examples": {
+                  "events": {
+                    "value": {
+                      "object": "list",
+                      "url": "/api/v1/graphs/gph_k3P9xQ2mWt7a/events",
+                      "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+                      "has_more": true,
+                      "data": [
+                        {
+                          "id": "evt_01M4G3G0E4H6TW2C9Z5RB1KQ0E",
+                          "object": "event",
+                          "type": "status",
+                          "created": 1791541903812,
+                          "graph_id": "gph_k3P9xQ2mWt7a",
+                          "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                          "source": {
+                            "provider": "claude-code",
+                            "provider_version": "2.1.260",
+                            "adapter": "claude-code@1"
+                          },
+                          "payload": {
+                            "state": "working",
+                            "summary": "Reading the auth middleware"
+                          },
+                          "changes": [
+                            {
+                              "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                              "created": false,
+                              "fields": {
+                                "summary": {
+                                  "from": null,
+                                  "to": "Reading the auth middleware"
+                                },
+                                "headline": {
+                                  "from": "Searching for callers",
+                                  "to": "Reading the auth middleware"
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "id": "evt_01M4G2FMPN7KD3N1PZ0QX8RM4A",
+                          "object": "event",
+                          "type": "agent.spawned",
+                          "created": 1791540843221,
+                          "graph_id": "gph_k3P9xQ2mWt7a",
+                          "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                          "source": {
+                            "provider": "claude-code",
+                            "provider_version": "2.1.260",
+                            "adapter": "claude-code@1"
+                          },
+                          "payload": {
+                            "agent_type": "Explore",
+                            "purpose": "Find every caller of the old session store"
+                          },
+                          "changes": [
+                            {
+                              "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                              "created": true,
+                              "fields": {
+                                "state": {
+                                  "from": null,
+                                  "to": "working"
+                                },
+                                "parent_id": {
+                                  "from": null,
+                                  "to": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw"
+                                }
+                              }
+                            },
+                            {
+                              "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                              "created": false,
+                              "fields": {
+                                "child_count": {
+                                  "from": 2,
+                                  "to": 3
+                                },
+                                "descendant_count": {
+                                  "from": 4,
+                                  "to": 5
+                                },
+                                "blocked": {
+                                  "from": null,
+                                  "to": {
+                                    "on_ids": [
+                                      "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE"
+                                    ],
+                                    "starting": 0,
+                                    "node_count": 1,
+                                    "open_tasks": 0,
+                                    "cycle": false
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "source": "curl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/events \\\n  -u $AGENT_GRAPH_KEY: \\\n  -d order=asc \\\n  -d starting_after=evt_01M4G2FMPN7KD3N1PZ0QX8RM4A"
+          }
+        ]
+      }
+    },
+    "/graphs/{graph_id}/events/{event_id}": {
+      "get": {
+        "operationId": "retrieveEvent",
+        "tags": ["Events"],
+        "summary": "Retrieve an event",
+        "description": "Retrieves one event, with every change it made. `expand[]=node` adds its node as it stood just after it. An event older than the graph's retained history is `410 outside_retention_window`.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/GraphId"
+          },
+          {
+            "$ref": "#/components/parameters/EventId"
+          },
+          {
+            "name": "expand",
+            "in": "query",
+            "required": false,
+            "description": "Fields to expand: `node`, and its own fields, `node.parent`.\n\nSend one `expand[]` per path. A path goes at most 4 levels deep; at most 20 paths per request. An expanded field appears beside its `_id` field, which is always there; one not expanded is absent.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The event.",
+            "headers": {
+              "Request-Id": {
+                "$ref": "#/components/headers/Request-Id"
+              },
+              "Agent-Graph-Version": {
+                "$ref": "#/components/headers/Agent-Graph-Version"
+              },
+              "RateLimit-Limit": {
+                "$ref": "#/components/headers/RateLimit-Limit"
+              },
+              "RateLimit-Remaining": {
+                "$ref": "#/components/headers/RateLimit-Remaining"
+              },
+              "RateLimit-Reset": {
+                "$ref": "#/components/headers/RateLimit-Reset"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                },
+                "examples": {
+                  "event": {
+                    "value": {
+                      "id": "evt_01M4G2FMPN7KD3N1PZ0QX8RM4A",
+                      "object": "event",
+                      "type": "agent.spawned",
+                      "created": 1791540843221,
+                      "graph_id": "gph_k3P9xQ2mWt7a",
+                      "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                      "source": {
+                        "provider": "claude-code",
+                        "provider_version": "2.1.260",
+                        "adapter": "claude-code@1"
+                      },
+                      "payload": {
+                        "agent_type": "Explore",
+                        "purpose": "Find every caller of the old session store"
+                      },
+                      "changes": [
+                        {
+                          "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+                          "created": true,
+                          "fields": {
+                            "state": {
+                              "from": null,
+                              "to": "working"
+                            },
+                            "parent_id": {
+                              "from": null,
+                              "to": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw"
+                            }
+                          }
+                        },
+                        {
+                          "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+                          "created": false,
+                          "fields": {
+                            "child_count": {
+                              "from": 2,
+                              "to": 3
+                            },
+                            "descendant_count": {
+                              "from": 4,
+                              "to": 5
+                            },
+                            "blocked": {
+                              "from": null,
+                              "to": {
+                                "on_ids": [
+                                  "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE"
+                                ],
+                                "starting": 0,
+                                "node_count": 1,
+                                "open_tasks": 0,
+                                "cycle": false
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "source": "curl -G https://agentgraph.chofter.com/api/v1/graphs/gph_k3P9xQ2mWt7a/events/evt_01M4G2FMPN7KD3N1PZ0QX8RM4A \\\n  -u $AGENT_GRAPH_KEY: \\\n  -d \"expand[]=node\""
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Your API key as a bearer token: `Authorization: Bearer ag_sk_live_…`. The API also takes it as the username of HTTP Basic auth, with no password (`curl -u ag_sk_live_…:`)."
+      }
+    },
+    "parameters": {
+      "GraphId": {
+        "name": "graph_id",
+        "in": "path",
+        "required": true,
+        "description": "The graph's id, `gph_…`. The id in a share's link works too: `/l/k3P9xQ2mWt7a` is `gph_k3P9xQ2mWt7a`.",
+        "schema": {
+          "type": "string",
+          "pattern": "^gph_[0-9A-Za-z]{12}$",
+          "example": "gph_k3P9xQ2mWt7a"
+        }
+      },
+      "NodeId": {
+        "name": "node_id",
+        "in": "path",
+        "required": true,
+        "description": "The node's id, `node_…`.",
+        "schema": {
+          "type": "string",
+          "pattern": "^node_[A-Za-z0-9_-]+$",
+          "example": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE"
+        }
+      },
+      "EventId": {
+        "name": "event_id",
+        "in": "path",
+        "required": true,
+        "description": "The event's id, `evt_…`.",
+        "schema": {
+          "type": "string",
+          "pattern": "^evt_[0-9A-HJKMNP-TV-Z]{26}$",
+          "example": "evt_01M4G2FMPN7KD3N1PZ0QX8RM4A"
+        }
+      },
+      "AsOf": {
+        "name": "as_of",
+        "in": "query",
+        "required": false,
+        "description": "Answer as of this point in the graph's history: an event id (`evt_…`, the state just after that event) or a Unix time in milliseconds (the state after the last event at or before it). Leave it out for now.\n\nMust be within the graph's `retention`, else `410 outside_retention_window`. To read several pages or objects at one moment, pass the `as_of_event_id` of the first response.",
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^evt_[0-9A-HJKMNP-TV-Z]{26}$",
+              "title": "Event id"
+            },
+            {
+              "type": "integer",
+              "format": "int64",
+              "title": "Unix time (ms)"
+            }
+          ]
+        },
+        "example": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1"
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "How many objects to return, from 1 to 1,000.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        }
+      },
+      "StartingAfter": {
+        "name": "starting_after",
+        "in": "query",
+        "required": false,
+        "description": "A cursor: an object id from the list. Returns the page after it. Pass the last `id` of the page you have to get the next one.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "EndingBefore": {
+        "name": "ending_before",
+        "in": "query",
+        "required": false,
+        "description": "A cursor: an object id from the list. Returns the page before it. Pass the first `id` of the page you have to get the previous one.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IfNoneMatch": {
+        "name": "If-None-Match",
+        "in": "header",
+        "required": false,
+        "description": "The `ETag` of a response you have. If nothing has changed, the reply is `304 Not Modified`, with no body.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "headers": {
+      "Request-Id": {
+        "description": "A unique id for this request, `req_…`. Include it if you contact us about a request.",
+        "schema": {
+          "type": "string",
+          "example": "req_8Vx2KqL0mT4pRb"
+        }
+      },
+      "Agent-Graph-Version": {
+        "description": "The API version that answered the request.",
+        "schema": {
+          "type": "string",
+          "example": "2026-10-09"
+        }
+      },
+      "RateLimit-Limit": {
+        "description": "Requests this key may make each second.",
+        "schema": {
+          "type": "integer",
+          "example": 25
+        }
+      },
+      "RateLimit-Remaining": {
+        "description": "Requests left in the current window.",
+        "schema": {
+          "type": "integer",
+          "example": 24
+        }
+      },
+      "RateLimit-Reset": {
+        "description": "Seconds until the window resets.",
+        "schema": {
+          "type": "integer",
+          "example": 1
+        }
+      },
+      "ETag": {
+        "description": "An opaque version of this response. Send it back as `If-None-Match` to get `304 Not Modified` while it's unchanged.",
+        "schema": {
+          "type": "string",
+          "example": "W/\"3f1c-a91e0d\""
+        }
+      },
+      "Retry-After": {
+        "description": "Seconds to wait before trying again.",
+        "schema": {
+          "type": "integer",
+          "example": 1
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request was invalid: a parameter is missing, unknown or invalid, or an expansion isn't allowed.",
+        "headers": {
+          "Request-Id": {
+            "$ref": "#/components/headers/Request-Id"
+          },
+          "Agent-Graph-Version": {
+            "$ref": "#/components/headers/Agent-Graph-Version"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "parameter_invalid": {
+                "value": {
+                  "error": {
+                    "type": "invalid_request_error",
+                    "code": "parameter_invalid",
+                    "message": "Invalid limit: must be between 1 and 1000.",
+                    "param": "limit",
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#parameter_invalid"
+                  }
+                }
+              },
+              "expand_too_deep": {
+                "value": {
+                  "error": {
+                    "type": "invalid_request_error",
+                    "code": "expand_too_deep",
+                    "message": "The path children.children.children.children.children goes 5 levels deep; at most 4 are allowed.",
+                    "param": "expand",
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#expand_too_deep"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "No API key was sent, or the one sent is invalid or revoked.",
+        "headers": {
+          "Request-Id": {
+            "$ref": "#/components/headers/Request-Id"
+          },
+          "Agent-Graph-Version": {
+            "$ref": "#/components/headers/Agent-Graph-Version"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "api_key_invalid": {
+                "value": {
+                  "error": {
+                    "type": "authentication_error",
+                    "code": "api_key_invalid",
+                    "message": "Invalid API key: ag_sk_live_****Ne8L.",
+                    "param": null,
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#api_key_invalid"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The API key can't read this graph.",
+        "headers": {
+          "Request-Id": {
+            "$ref": "#/components/headers/Request-Id"
+          },
+          "Agent-Graph-Version": {
+            "$ref": "#/components/headers/Agent-Graph-Version"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "api_key_restricted": {
+                "value": {
+                  "error": {
+                    "type": "permission_error",
+                    "code": "api_key_restricted",
+                    "message": "This restricted key can't read gph_k3P9xQ2mWt7a.",
+                    "param": null,
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#api_key_restricted"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No such object for this key, or the node doesn't exist yet at `as_of`.",
+        "headers": {
+          "Request-Id": {
+            "$ref": "#/components/headers/Request-Id"
+          },
+          "Agent-Graph-Version": {
+            "$ref": "#/components/headers/Agent-Graph-Version"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "resource_missing": {
+                "value": {
+                  "error": {
+                    "type": "invalid_request_error",
+                    "code": "resource_missing",
+                    "message": "No such node: node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU.",
+                    "param": "node_id",
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#resource_missing"
+                  }
+                }
+              },
+              "node_not_yet_created": {
+                "value": {
+                  "error": {
+                    "type": "invalid_request_error",
+                    "code": "node_not_yet_created",
+                    "message": "The node node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE is created by evt_01M4G2FMPN7KD3N1PZ0QX8RM4A, after as_of.",
+                    "param": "as_of",
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#node_not_yet_created",
+                    "first_event_id": "evt_01M4G2FMPN7KD3N1PZ0QX8RM4A"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Gone": {
+        "description": "`as_of` is before the graph's retained history.",
+        "headers": {
+          "Request-Id": {
+            "$ref": "#/components/headers/Request-Id"
+          },
+          "Agent-Graph-Version": {
+            "$ref": "#/components/headers/Agent-Graph-Version"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "outside_retention_window": {
+                "value": {
+                  "error": {
+                    "type": "invalid_request_error",
+                    "code": "outside_retention_window",
+                    "message": "This graph holds events from evt_01M4FXYWR82B8XK0V5QJ7M1N3R to evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1.",
+                    "param": "as_of",
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#outside_retention_window",
+                    "first_event_id": "evt_01M4FXYWR82B8XK0V5QJ7M1N3R",
+                    "last_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Too many requests. Wait for `Retry-After` seconds.",
+        "headers": {
+          "Request-Id": {
+            "$ref": "#/components/headers/Request-Id"
+          },
+          "Agent-Graph-Version": {
+            "$ref": "#/components/headers/Agent-Graph-Version"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/Retry-After"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "rate_limit": {
+                "value": {
+                  "error": {
+                    "type": "rate_limit_error",
+                    "code": "rate_limit",
+                    "message": "Too many requests. Try again in 1 second.",
+                    "param": null,
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#rate_limit"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "Something went wrong on our side. Every request is read-only, so it's safe to retry.",
+        "headers": {
+          "Request-Id": {
+            "$ref": "#/components/headers/Request-Id"
+          },
+          "Agent-Graph-Version": {
+            "$ref": "#/components/headers/Agent-Graph-Version"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "api_error": {
+                "value": {
+                  "error": {
+                    "type": "api_error",
+                    "code": "api_error",
+                    "message": "Something went wrong. Try again, and include the Request-Id if it keeps happening.",
+                    "param": null,
+                    "doc_url": "https://agentgraph.chofter.com/docs/api/errors#api_error"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "NotModified": {
+        "description": "Nothing has changed since the `ETag` sent in `If-None-Match`. There's no body, and the request doesn't count towards the rate limit.",
+        "headers": {
+          "Request-Id": {
+            "$ref": "#/components/headers/Request-Id"
+          },
+          "ETag": {
+            "$ref": "#/components/headers/ETag"
+          }
+        }
+      }
+    },
+    "schemas": {
+      "NodeState": {
+        "type": "string",
+        "enum": [
+          "working",
+          "input_required",
+          "idle",
+          "completed",
+          "failed",
+          "canceled"
+        ],
+        "description": "What a node is doing.\n\n- `working`: doing something.\n- `input_required`: waiting on a person (`attention` says what for).\n- `idle`: a session between turns, waiting for its next prompt.\n- `completed`, `failed`, `canceled`: finished."
+      },
+      "NodeKind": {
+        "type": "string",
+        "enum": ["session", "agent"],
+        "description": "`session`: one run of a coding agent (Claude Code, Codex, Cursor, …). `agent`: an agent started inside a session, by it or by another agent."
+      },
+      "Graph": {
+        "type": "object",
+        "title": "Graph",
+        "description": "One of your account's live shares, and how its nodes stand at `as_of_event_id`.",
+        "required": [
+          "id",
+          "object",
+          "as_of_event_id",
+          "source",
+          "url",
+          "created",
+          "last_event",
+          "retention",
+          "counts"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the graph, `gph_…`.",
+            "example": "gph_k3P9xQ2mWt7a"
+          },
+          "object": {
+            "type": "string",
+            "const": "graph",
+            "description": "String representing the object's type: always `graph`."
+          },
+          "as_of_event_id": {
+            "type": "string",
+            "description": "The event this graph's `counts` are as of. Pass it as `as_of` to read other objects at the same moment."
+          },
+          "source": {
+            "type": "string",
+            "enum": ["watch", "paste", "upload"],
+            "description": "How the graph was shared. `watch` is a live share from `agent-graph watch-remote`; this version of the API returns only those."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Where to see the graph in the viewer. Only the account that owns it can open it."
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the share was made, in Unix milliseconds."
+          },
+          "last_event": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When its most recent event happened, in Unix milliseconds."
+          },
+          "retention": {
+            "$ref": "#/components/schemas/Retention"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/GraphCounts"
+          }
+        },
+        "example": {
+          "id": "gph_k3P9xQ2mWt7a",
+          "object": "graph",
+          "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+          "source": "watch",
+          "url": "https://agentgraph.chofter.com/l/k3P9xQ2mWt7a",
+          "created": 1790959209012,
+          "last_event": 1791541907912,
+          "retention": {
+            "first_event_id": "evt_01M4FXYWR82B8XK0V5QJ7M1N3R",
+            "last_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+            "first_event_created": 1791536100104,
+            "last_event_created": 1791541907912,
+            "event_count": 1638
+          },
+          "counts": {
+            "nodes": 214,
+            "sessions": 9,
+            "agents": 205,
+            "stale": 1,
+            "blocked": 6,
+            "by_state": {
+              "working": 7,
+              "input_required": 1,
+              "idle": 3,
+              "completed": 198,
+              "failed": 4,
+              "canceled": 1
+            }
+          }
+        }
+      },
+      "Retention": {
+        "type": "object",
+        "title": "Retention",
+        "description": "The span of history the site holds for this graph now, and so the range `as_of` can take. A live share keeps between 1,000 and 2,000 events, trimmed from the start as new ones arrive.",
+        "required": [
+          "first_event_id",
+          "last_event_id",
+          "first_event_created",
+          "last_event_created",
+          "event_count"
+        ],
+        "properties": {
+          "first_event_id": {
+            "type": "string",
+            "description": "The oldest event you can read, or ask `as_of`."
+          },
+          "last_event_id": {
+            "type": "string",
+            "description": "The newest event."
+          },
+          "first_event_created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the oldest event happened, in Unix milliseconds."
+          },
+          "last_event_created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the newest event happened, in Unix milliseconds."
+          },
+          "event_count": {
+            "type": "integer",
+            "description": "How many events are held."
+          }
+        }
+      },
+      "GraphCounts": {
+        "type": "object",
+        "title": "Graph counts",
+        "description": "How many nodes the graph has, by kind and state.",
+        "required": [
+          "nodes",
+          "sessions",
+          "agents",
+          "stale",
+          "blocked",
+          "by_state"
+        ],
+        "properties": {
+          "nodes": {
+            "type": "integer",
+            "description": "Every node."
+          },
+          "sessions": {
+            "type": "integer",
+            "description": "Nodes of kind `session`."
+          },
+          "agents": {
+            "type": "integer",
+            "description": "Nodes of kind `agent`."
+          },
+          "stale": {
+            "type": "integer",
+            "description": "Nodes that are `stale`: working, but silent too long."
+          },
+          "blocked": {
+            "type": "integer",
+            "description": "Unfinished nodes waiting on another node."
+          },
+          "by_state": {
+            "type": "object",
+            "description": "Nodes in each state.",
+            "required": [
+              "working",
+              "input_required",
+              "idle",
+              "completed",
+              "failed",
+              "canceled"
+            ],
+            "properties": {
+              "working": {
+                "type": "integer"
+              },
+              "input_required": {
+                "type": "integer"
+              },
+              "idle": {
+                "type": "integer"
+              },
+              "completed": {
+                "type": "integer"
+              },
+              "failed": {
+                "type": "integer"
+              },
+              "canceled": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "Node": {
+        "type": "object",
+        "title": "Node",
+        "description": "A session or an agent, as it stood at `as_of_event_id`.\n\nFields ending `_id` or `_ids` are always present, as ids. The fields beside them without that ending (`parent`, `root`, …), and `children`, `descendants`, `tasks`, `spawns`, `waits` and `messages`, appear only when expanded.",
+        "required": [
+          "id",
+          "object",
+          "as_of_event_id",
+          "graph_id",
+          "provider_ref",
+          "provider",
+          "kind",
+          "parent_id",
+          "root_id",
+          "session_id",
+          "requested_by_id",
+          "depth",
+          "state",
+          "stale",
+          "attention",
+          "title",
+          "summary",
+          "headline",
+          "purpose",
+          "agent_type",
+          "background",
+          "link_method",
+          "spawn_call_id",
+          "cwd",
+          "created",
+          "ended",
+          "last_event",
+          "child_count",
+          "descendant_count",
+          "background_agent_count",
+          "task_counts",
+          "blocked"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the node within its graph: `node_` and the base64url of `provider_ref`."
+          },
+          "object": {
+            "type": "string",
+            "const": "node",
+            "description": "String representing the object's type: always `node`."
+          },
+          "as_of_event_id": {
+            "type": "string",
+            "description": "The event this node is shown as of."
+          },
+          "graph_id": {
+            "type": "string",
+            "description": "The graph it belongs to."
+          },
+          "provider_ref": {
+            "type": "string",
+            "description": "The id the agent tool gave it: `<provider>:<session>` for a session, `<provider>:<session>/<agent>` for an agent. Not an id in this API: use it to match the node to the tool's own records."
+          },
+          "provider": {
+            "type": "string",
+            "description": "The agent tool: `claude-code`, `codex`, `cursor`, or another that reports to Agent Graph.",
+            "example": "claude-code"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NodeKind"
+          },
+          "parent_id": {
+            "type": ["string", "null"],
+            "description": "The node it sits under: the agent or session that started it. `null` for a root."
+          },
+          "parent": {
+            "$ref": "#/components/schemas/Node",
+            "description": "The parent node. Present only when expanded."
+          },
+          "root_id": {
+            "type": "string",
+            "description": "The top of its tree: follow `parent_id` until it's `null`. A session started by another session is in that session's tree. A root's `root_id` is its own `id`."
+          },
+          "root": {
+            "$ref": "#/components/schemas/Node",
+            "description": "The root node. Present only when expanded."
+          },
+          "session_id": {
+            "type": "string",
+            "description": "The session it runs in: itself, for a session; for an agent, the nearest session above it."
+          },
+          "session": {
+            "$ref": "#/components/schemas/Node",
+            "description": "The session node. Present only when expanded."
+          },
+          "requested_by_id": {
+            "type": ["string", "null"],
+            "description": "The node whose spawn request started it, when known. Usually the parent; `null` for a session nothing started, or an agent no request was matched to."
+          },
+          "requested_by": {
+            "$ref": "#/components/schemas/Node",
+            "description": "The node that requested it. Present only when expanded."
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How far below its root it is: 0 for a root."
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeState"
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "`working`, waiting on nothing, and silent for 30 minutes: it may have hung or crashed. Measured against `as_of`, not now."
+          },
+          "attention": {
+            "type": ["string", "null"],
+            "description": "While `input_required`: what the person is being asked. Untrusted text."
+          },
+          "title": {
+            "type": ["string", "null"],
+            "description": "The session's name, as its tool shows it. It can change. Untrusted text."
+          },
+          "summary": {
+            "type": ["string", "null"],
+            "description": "Its own latest status line, if it reports one. Untrusted text."
+          },
+          "headline": {
+            "type": ["string", "null"],
+            "description": "One line on what it's doing now: `summary`, else the task in progress. Untrusted text."
+          },
+          "purpose": {
+            "type": ["string", "null"],
+            "description": "Why it was started, from the request that started it. Untrusted text."
+          },
+          "agent_type": {
+            "type": ["string", "null"],
+            "description": "For an agent, its type, as the tool names it (`Explore`, `general-purpose`, …)."
+          },
+          "background": {
+            "type": ["boolean", "null"],
+            "description": "Whether it was started in the background, so its requester carries on without waiting. `null` when unknown."
+          },
+          "link_method": {
+            "type": ["string", "null"],
+            "enum": ["env", "run", "process", "suggested", null],
+            "description": "For a session started by another, how that was worked out: `env` (it inherited its parent's identity), `run` (`agent-graph run` started it), `process` (its parent's agent is among its processes) or `suggested` (it took a name its parent suggested)."
+          },
+          "spawn_call_id": {
+            "type": ["string", "null"],
+            "description": "The tool call, in its requester's session, that started it: matches a `spawns[].call_id` on `requested_by`."
+          },
+          "cwd": {
+            "type": ["string", "null"],
+            "description": "The directory it runs in, when reported."
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it started (or was first seen), in Unix milliseconds."
+          },
+          "ended": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "When it finished, in Unix milliseconds. `null` while it hasn't."
+          },
+          "last_event": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it last had an event, in Unix milliseconds."
+          },
+          "child_count": {
+            "type": "integer",
+            "description": "How many nodes sit directly under it."
+          },
+          "descendant_count": {
+            "type": "integer",
+            "description": "How many nodes sit under it, at any depth: the size of `descendants`."
+          },
+          "background_agent_count": {
+            "type": "integer",
+            "description": "Helpers its tool ran on its own between turns (memory extraction, summaries, prompt suggestions). They report nothing about what they're for, so they're counted, not made nodes."
+          },
+          "task_counts": {
+            "$ref": "#/components/schemas/TaskCounts"
+          },
+          "blocked": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Blocked"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it's waiting on, if anything. `null` when it's waiting on nothing, or has finished."
+          },
+          "children": {
+            "$ref": "#/components/schemas/NodeList",
+            "description": "The nodes directly under it, oldest first: the first 100, and a `url` for the rest. Present only when expanded."
+          },
+          "descendants": {
+            "$ref": "#/components/schemas/NodeList",
+            "description": "Every node under it, at any depth, as one flat list in tree order: each parent before its children, siblings oldest first. The first 1,000, and a `url` for the rest. Present only when expanded."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Task"
+            },
+            "description": "Its task list, in the tool's order. Present only when expanded."
+          },
+          "spawns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Spawn"
+            },
+            "description": "The children it has asked for, oldest first. Present only when expanded."
+          },
+          "waits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Wait"
+            },
+            "description": "What it has waited on and is waiting on, oldest first. Present only when expanded."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "description": "Messages it has sent and received, oldest first. Present only when expanded."
+          }
+        },
+        "example": {
+          "id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+          "object": "node",
+          "as_of_event_id": "evt_01M4G3G4E8Q9R2M5X4T6W8Y0B1",
+          "graph_id": "gph_k3P9xQ2mWt7a",
+          "provider_ref": "claude-code:5f2c1e9a-8d1b-4b6e-9a51-0f6f2c7d3e10/a3fd07c2b19e4d61",
+          "provider": "claude-code",
+          "kind": "agent",
+          "parent_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+          "root_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+          "session_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+          "requested_by_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+          "depth": 1,
+          "state": "working",
+          "stale": false,
+          "attention": null,
+          "title": null,
+          "summary": "Reading the auth middleware",
+          "headline": "Reading the auth middleware",
+          "purpose": "Find every caller of the old session store",
+          "agent_type": "Explore",
+          "background": false,
+          "link_method": null,
+          "spawn_call_id": "toolu_01HxV9qT3mJb7d2KcL5nRw8E",
+          "cwd": "/Users/dev/work/api",
+          "created": 1791540843221,
+          "ended": null,
+          "last_event": 1791541903812,
+          "child_count": 1,
+          "descendant_count": 1,
+          "background_agent_count": 0,
+          "task_counts": {
+            "total": 4,
+            "pending": 1,
+            "in_progress": 1,
+            "completed": 2,
+            "open": 2
+          },
+          "blocked": {
+            "on_ids": [
+              "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2I4MWMyMmUwOWY3YTNjNTU"
+            ],
+            "starting": 0,
+            "node_count": 1,
+            "open_tasks": 5,
+            "cycle": false
+          }
+        }
+      },
+      "TaskCounts": {
+        "type": "object",
+        "title": "Task counts",
+        "description": "Its tasks, by status.",
+        "required": ["total", "pending", "in_progress", "completed", "open"],
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "in_progress": {
+            "type": "integer"
+          },
+          "completed": {
+            "type": "integer"
+          },
+          "open": {
+            "type": "integer",
+            "description": "Not completed: `pending` and `in_progress`."
+          }
+        }
+      },
+      "Blocked": {
+        "type": "object",
+        "title": "Blocked",
+        "description": "What stands between a node and carrying on.",
+        "required": ["on_ids", "starting", "node_count", "open_tasks", "cycle"],
+        "properties": {
+          "on_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The nodes it's waiting on directly."
+          },
+          "on": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            },
+            "description": "Those nodes. Present only when `blocked.on` is expanded."
+          },
+          "starting": {
+            "type": "integer",
+            "description": "Children it has asked for that haven't started yet."
+          },
+          "node_count": {
+            "type": "integer",
+            "description": "Every unfinished node it's waiting on, directly or through others, with their children."
+          },
+          "open_tasks": {
+            "type": "integer",
+            "description": "Open tasks across those nodes: the work left before it can carry on."
+          },
+          "cycle": {
+            "type": "boolean",
+            "description": "Its waits lead back to itself: nothing in the loop can ever finish."
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "title": "Task",
+        "description": "One item on a node's task list.",
+        "required": ["id", "text", "active_text", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The tool's id for the task, unique within the node."
+          },
+          "text": {
+            "type": "string",
+            "description": "What the task is. Untrusted text."
+          },
+          "active_text": {
+            "type": ["string", "null"],
+            "description": "How the tool words it while it's in progress (`Running the tests`). Untrusted text."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "completed"]
+          }
+        }
+      },
+      "Spawn": {
+        "type": "object",
+        "title": "Spawn",
+        "description": "A child a node asked for.",
+        "required": [
+          "call_id",
+          "kind",
+          "agent_type",
+          "purpose",
+          "background",
+          "run",
+          "title",
+          "child_id",
+          "returned",
+          "requested"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "description": "The tool call that asked for it."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["agent", "session"],
+            "description": "`agent`: an agent in the same session. `session`: a separate session, e.g. `codex exec` run from a shell."
+          },
+          "agent_type": {
+            "type": ["string", "null"]
+          },
+          "purpose": {
+            "type": ["string", "null"],
+            "description": "Untrusted text."
+          },
+          "background": {
+            "type": "boolean",
+            "description": "If false, the requester is blocked until the call returns."
+          },
+          "run": {
+            "type": ["boolean", "null"],
+            "description": "Whether it's through `agent-graph run`, when known."
+          },
+          "title": {
+            "type": ["string", "null"],
+            "description": "For a session, the name it was to be given."
+          },
+          "child_id": {
+            "type": ["string", "null"],
+            "description": "The node it started, once matched. Before the call returns this can be a best guess, corrected when it does."
+          },
+          "returned": {
+            "type": "boolean",
+            "description": "Whether the call has returned."
+          },
+          "requested": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it was asked for, in Unix milliseconds."
+          }
+        }
+      },
+      "Wait": {
+        "type": "object",
+        "title": "Wait",
+        "description": "A time a node waited on another.",
+        "required": [
+          "id",
+          "kind",
+          "on_id",
+          "reason",
+          "open",
+          "started",
+          "ended"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The wait's id, unique within the node."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["spawn", "explicit"],
+            "description": "`spawn`: waiting for a child it asked for, until the call returns. `explicit`: any other wait the tool reported."
+          },
+          "on_id": {
+            "type": ["string", "null"],
+            "description": "The node waited on. `null` while a requested child hasn't started."
+          },
+          "reason": {
+            "type": ["string", "null"],
+            "description": "Untrusted text."
+          },
+          "open": {
+            "type": "boolean",
+            "description": "Whether it's still waiting."
+          },
+          "started": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it started waiting, in Unix milliseconds."
+          },
+          "ended": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "When it stopped, in Unix milliseconds."
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "title": "Message",
+        "description": "A message between two nodes.",
+        "required": [
+          "id",
+          "direction",
+          "peer_id",
+          "peer_name",
+          "reply_to_message_id",
+          "summary",
+          "body",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The tool's id for the message."
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["sent", "received"]
+          },
+          "peer_id": {
+            "type": ["string", "null"],
+            "description": "The node on the other side, when it's one in this graph."
+          },
+          "peer_name": {
+            "type": ["string", "null"],
+            "description": "The tool's name for the other side, when it isn't a node in this graph."
+          },
+          "reply_to_message_id": {
+            "type": ["string", "null"],
+            "description": "The message it answers."
+          },
+          "summary": {
+            "type": ["string", "null"],
+            "description": "Untrusted text."
+          },
+          "body": {
+            "type": ["string", "null"],
+            "description": "The whole message, only if the share was made with body capture on. Untrusted text."
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it was sent, in Unix milliseconds."
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "title": "Event",
+        "description": "One thing that happened in a graph, and every change it made to its nodes.",
+        "required": [
+          "id",
+          "object",
+          "type",
+          "created",
+          "graph_id",
+          "node_id",
+          "source",
+          "payload",
+          "changes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the event, `evt_…`. Sorts by time."
+          },
+          "object": {
+            "type": "string",
+            "const": "event",
+            "description": "String representing the object's type: always `event`."
+          },
+          "type": {
+            "type": "string",
+            "description": "What happened. See [event types](#tag/Events). More may be added: ignore those you don't recognise.",
+            "enum": [
+              "session.started",
+              "session.ended",
+              "agent.spawned",
+              "agent.finished",
+              "status",
+              "tasks.updated",
+              "task.upserted",
+              "task.deleted",
+              "spawn.requested",
+              "spawn.returned",
+              "wait.started",
+              "wait.ended",
+              "message.sent",
+              "activity"
+            ]
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it happened, in Unix milliseconds."
+          },
+          "graph_id": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The node it's about."
+          },
+          "node": {
+            "$ref": "#/components/schemas/Node",
+            "description": "That node, as it stood just after this event. Present only when expanded."
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "What the agent tool reported, by `type`: see [event types](#tag/Events). Ids in it are the provider's own. Text in it is untrusted."
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeChange"
+            },
+            "description": "Every node this event changed, starting with `node_id`. Empty when it changed nothing (a repeated status, say)."
+          }
+        },
+        "example": {
+          "id": "evt_01M4G2FMPN7KD3N1PZ0QX8RM4A",
+          "object": "event",
+          "type": "agent.spawned",
+          "created": 1791540843221,
+          "graph_id": "gph_k3P9xQ2mWt7a",
+          "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+          "source": {
+            "provider": "claude-code",
+            "provider_version": "2.1.260",
+            "adapter": "claude-code@1"
+          },
+          "payload": {
+            "agent_type": "Explore",
+            "purpose": "Find every caller of the old session store"
+          },
+          "changes": [
+            {
+              "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE",
+              "created": true,
+              "fields": {
+                "state": {
+                  "from": null,
+                  "to": "working"
+                },
+                "parent_id": {
+                  "from": null,
+                  "to": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw"
+                }
+              }
+            },
+            {
+              "node_id": "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw",
+              "created": false,
+              "fields": {
+                "child_count": {
+                  "from": 2,
+                  "to": 3
+                },
+                "descendant_count": {
+                  "from": 4,
+                  "to": 5
+                },
+                "blocked": {
+                  "from": null,
+                  "to": {
+                    "on_ids": [
+                      "node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEwL2EzZmQwN2MyYjE5ZTRkNjE"
+                    ],
+                    "starting": 0,
+                    "node_count": 1,
+                    "open_tasks": 0,
+                    "cycle": false
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "EventSource": {
+        "type": "object",
+        "title": "Event source",
+        "description": "What reported the event.",
+        "required": ["provider", "provider_version", "adapter"],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "example": "claude-code"
+          },
+          "provider_version": {
+            "type": ["string", "null"],
+            "description": "The agent tool's version, when it says."
+          },
+          "adapter": {
+            "type": "string",
+            "description": "The Agent Graph adapter that recorded it, and its version."
+          }
+        }
+      },
+      "NodeChange": {
+        "type": "object",
+        "title": "Node change",
+        "description": "How one event changed one node.",
+        "required": ["node_id", "created", "fields"],
+        "properties": {
+          "node_id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether the event created it. Its `fields` then go from `null`."
+          },
+          "fields": {
+            "type": "object",
+            "description": "Each [node](#tag/Nodes) field that changed, by name, from what to what. Derived fields count (`child_count`, `descendant_count`, `blocked`, `headline`, `task_counts`). `stale` doesn't, as it changes with time rather than events, and nor do expandable fields.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldChange"
+            }
+          }
+        }
+      },
+      "FieldChange": {
+        "type": "object",
+        "title": "Field change",
+        "required": ["from", "to"],
+        "properties": {
+          "from": {
+            "description": "The value before the event."
+          },
+          "to": {
+            "description": "The value after it."
+          }
+        }
+      },
+      "GraphList": {
+        "type": "object",
+        "title": "Graphs list",
+        "description": "A page of graphs.",
+        "required": ["object", "url", "as_of_event_id", "has_more", "data"],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "url": {
+            "type": "string",
+            "description": "The URL for this list, with every parameter that defined it (including `as_of`). Add `starting_after` to get the next page."
+          },
+          "as_of_event_id": {
+            "type": ["string", "null"],
+            "description": "Always `null`: each graph has its own history, so each graph carries its own `as_of_event_id`."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Whether there are more after this page."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Graph"
+            }
+          }
+        }
+      },
+      "NodeList": {
+        "type": "object",
+        "title": "Nodes list",
+        "description": "A page of nodes.",
+        "required": ["object", "url", "as_of_event_id", "has_more", "data"],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "url": {
+            "type": "string",
+            "description": "The URL for this list, with every parameter that defined it (including `as_of`). Add `starting_after` to get the next page."
+          },
+          "as_of_event_id": {
+            "type": ["string", "null"],
+            "description": "The event the list is as of. Keep it as `as_of` for every page."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Whether there are more after this page."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            }
+          }
+        }
+      },
+      "EventList": {
+        "type": "object",
+        "title": "Events list",
+        "description": "A page of events.",
+        "required": ["object", "url", "as_of_event_id", "has_more", "data"],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "url": {
+            "type": "string",
+            "description": "The URL for this list, with every parameter that defined it (including `as_of`). Add `starting_after` to get the next page."
+          },
+          "as_of_event_id": {
+            "type": ["string", "null"],
+            "description": "The event the list is as of. Keep it as `as_of` for every page."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Whether there are more after this page."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          }
+        }
+      },
+      "NodeSearchResult": {
+        "type": "object",
+        "title": "Node search result",
+        "description": "One page of search results, best match first. Pass `next_page` as `page` for the next.",
+        "required": [
+          "object",
+          "url",
+          "as_of_event_id",
+          "has_more",
+          "next_page",
+          "total_count",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "search_result"
+          },
+          "url": {
+            "type": "string",
+            "description": "The URL this result came from."
+          },
+          "as_of_event_id": {
+            "type": "string",
+            "description": "The event the search ran as of. Every page of one search runs as of the same event."
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_page": {
+            "type": ["string", "null"],
+            "description": "The cursor for the next page, or `null` on the last page."
+          },
+          "total_count": {
+            "type": "integer",
+            "description": "How many nodes match in all."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "title": "Error",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["type", "code", "message", "param", "doc_url"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "invalid_request_error",
+                  "authentication_error",
+                  "permission_error",
+                  "rate_limit_error",
+                  "api_error"
+                ],
+                "description": "The kind of error."
+              },
+              "code": {
+                "type": "string",
+                "description": "A short string saying exactly what went wrong: see [errors](#section/Errors). More may be added.",
+                "example": "resource_missing"
+              },
+              "message": {
+                "type": "string",
+                "description": "What went wrong, for a person to read. It may change: branch on `code`, not on this."
+              },
+              "param": {
+                "type": ["string", "null"],
+                "description": "The parameter the error is about, if any."
+              },
+              "doc_url": {
+                "type": "string",
+                "format": "uri",
+                "description": "Where this error code is explained."
+              },
+              "first_event_id": {
+                "type": "string",
+                "description": "With `outside_retention_window`: the oldest event the graph holds. With `node_not_yet_created`: the event that creates the node."
+              },
+              "last_event_id": {
+                "type": "string",
+                "description": "With `outside_retention_window`: the newest event the graph holds."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

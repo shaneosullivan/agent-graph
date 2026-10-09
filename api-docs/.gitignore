@@ -1,0 +1,7 @@
+node_modules/
+.astro/
+dist/
+# Made by scripts/prepare.mjs from ../site/openapi.json and ../site/app.
+src/content/docs/index.md
+src/assets/
+public/favicon.svg

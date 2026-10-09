@@ -13,3 +13,6 @@ firestore-debug.log
 # Copied from ../docs/troubleshooting.json by scripts/copy-help.mjs
 /lib/troubleshooting.json
 /public/version.json
+
+# The API reference, built from ../api-docs by scripts/build-api-docs.mjs
+/public/docs/reference/

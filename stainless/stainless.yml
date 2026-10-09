@@ -1,0 +1,243 @@
+# yaml-language-server: $schema=https://app.stainless.com/config.schema.json
+
+# Stainless configuration for the Agent Graph API: how site/openapi.json
+# becomes SDKs and reference docs, with the local `stlc` CLI. This directory
+# is an stlc workspace (workspace.json); generated output goes to sdks/ and
+# build manifests to builds/, neither committed. Reference:
+# https://www.stainless.com/docs/reference/config
+
+edition: 2026-01-30
+
+organization:
+  name: agent-graph
+  docs: https://agentgraph.chofter.com/docs/api
+  contact: https://agentgraph.chofter.com/contact
+  security_contact: https://agentgraph.chofter.com/contact
+
+settings:
+  license: MIT
+  # The generated tests run against a mock server (Prism) built from the
+  # spec, which is known to misbehave; off until the SDKs are published.
+  disable_mock_tests: true
+
+environments:
+  production: https://agentgraph.chofter.com/api/v1
+
+targets:
+  typescript:
+    edition: typescript.2025-10-10
+    package_name: "@chofter/agent-graph-api"
+    publish:
+      npm: false
+
+client_settings:
+  opts:
+    api_key:
+      type: string
+      nullable: false
+      read_env: AGENT_GRAPH_API_KEY
+      auth:
+        security_scheme: BearerAuth
+      description: >-
+        A secret (`ag_sk_live_…`) or restricted (`ag_rk_live_…`) key, made on
+        https://agentgraph.chofter.com/account. Keep it on your server.
+      example: ag_sk_live_51Hx7Qm2Vb9Kd4Tz0Ws3Ne8L
+    api_version:
+      type: string
+      nullable: true
+      send_in_header: Agent-Graph-Version
+      description: >-
+        The API version to use, e.g. `2026-10-09`. Leave it unset to use the
+        version the key is pinned to.
+      example: "2026-10-09"
+
+# `expand[]=parent&expand[]=children`, `state[]=working`, `created[gte]=…`:
+# the API reads arrays and ranges with brackets, as Stripe's does.
+query_settings:
+  array_format: brackets
+  nested_format: brackets
+
+pagination:
+  # Lists: Stripe-style cursors, an object's id in `starting_after` or
+  # `ending_before`, and `has_more`.
+  - name: cursor_page
+    type: cursor_id
+    request:
+      starting_after:
+        type: string
+        x-stainless-pagination-property:
+          purpose: next_cursor_id_param
+      ending_before:
+        type: string
+        x-stainless-pagination-property:
+          purpose: previous_cursor_id_param
+      limit:
+        type: integer
+    response:
+      data:
+        type: array
+        x-stainless-pagination-property:
+          purpose: items
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+              x-stainless-pagination-property:
+                purpose: cursor_item_id
+          required:
+            - id
+      has_more:
+        type: boolean
+
+  # Search: ranked results, so an opaque `next_page` cursor passed back as
+  # `page`, null on the last page.
+  - name: search_page
+    type: cursor
+    request:
+      page:
+        type: string
+        x-stainless-pagination-property:
+          purpose: next_cursor_param
+      limit:
+        type: integer
+    response:
+      data:
+        type: array
+        x-stainless-pagination-property:
+          purpose: items
+        items:
+          type: object
+          additionalProperties: true
+      next_page:
+        type: string
+        nullable: true
+        x-stainless-pagination-property:
+          purpose: next_cursor_field
+
+resources:
+  graphs:
+    description: |-
+      A graph is one of your account's live shares: the sessions and agents `agent-graph watch-remote` streams from a machine, kept on the site while it's in use, and deleted after a week with no new events.
+
+      Retrieve a graph to see what it holds (`retention`), how big it is, and how its nodes stand (`counts`), now or as of any retained event.
+    models:
+      graph: "#/components/schemas/Graph"
+      retention: "#/components/schemas/Retention"
+      graph_counts: "#/components/schemas/GraphCounts"
+    methods:
+      list:
+        endpoint: get /graphs
+        paginated: cursor_page
+      retrieve: get /graphs/{graph_id}
+
+    subresources:
+      nodes:
+        description: |-
+          A node is a session (one run of a coding agent) or an agent it started. Nodes form trees:
+
+          ~~~
+          session        claude-code:5f2c1e…            depth 0, parent_id null
+          ├─ agent       claude-code:5f2c1e…/a3fd07…    depth 1
+          │  └─ agent    claude-code:5f2c1e…/b81c22…    depth 2
+          └─ agent       claude-code:5f2c1e…/c90d13…    depth 1
+          ~~~
+
+          Every node says where it sits: `parent_id`, `root_id` (the top of its tree, following sessions that started other sessions), `session_id` (the session it runs in) and `depth`.
+
+          **State.** A node's `state` is one of:
+
+          | State | Meaning |
+          | --- | --- |
+          | `working` | Doing something. |
+          | `input_required` | Waiting on a person: a permission prompt, a question, a plan to approve. `attention` says what's asked. |
+          | `idle` | A session whose turn is over, alive and waiting for its next prompt. |
+          | `completed` | Finished. |
+          | `failed` | Finished with an error. |
+          | `canceled` | Stopped before it finished. |
+
+          Waiting on another node isn't a state: a node can be `working` and `blocked` at once. `blocked` says what it's waiting on, directly (`on_ids`) and in all (how many nodes, how many open tasks among them), and whether the waits form a cycle that can never finish. A `working` node with no events for 30 minutes, and nothing it's waiting on, is `stale`: it may have hung or crashed.
+        models:
+          node: "#/components/schemas/Node"
+          node_state: "#/components/schemas/NodeState"
+          node_kind: "#/components/schemas/NodeKind"
+          blocked: "#/components/schemas/Blocked"
+          task_counts: "#/components/schemas/TaskCounts"
+          task: "#/components/schemas/Task"
+          spawn: "#/components/schemas/Spawn"
+          wait: "#/components/schemas/Wait"
+          message: "#/components/schemas/Message"
+        methods:
+          list:
+            endpoint: get /graphs/{graph_id}/nodes
+            paginated: cursor_page
+          search:
+            endpoint: get /graphs/{graph_id}/nodes/search
+            paginated: search_page
+          retrieve: get /graphs/{graph_id}/nodes/{node_id}
+
+      events:
+        description: |-
+          An event is one thing that happened in a graph. Events are immutable and ordered by `id`, which sorts by time.
+
+          Each event has the `payload` its agent tool reported, and `changes`: every node the event changed, and for each, the fields that changed, from what to what. A node's derived fields count too: an agent being spawned changes its parent's `child_count`, and every ancestor's `descendant_count`.
+
+          List events `starting_after` the last one you saw to follow a graph cheaply, or with `order=asc` from any point to replay its history.
+
+          **Event types**
+
+          | Type | `payload` | When |
+          | --- | --- | --- |
+          | `session.started` | `cwd?`, `source?` (`startup`, `resume`, …), `title?`, `link_method?` | A session starts or resumes. |
+          | `session.ended` | `reason?` | A session exits. |
+          | `agent.spawned` | `agent_type?`, `purpose?`, `background?` | An agent starts. |
+          | `agent.finished` | `status` (`completed`, `failed`, `canceled`), `summary?` | An agent stops. |
+          | `status` | `state`, `summary?`, `title?` | A node's state or status line changes. |
+          | `tasks.updated` | `items`: `[{id, text, active_text?, status}]` | A to-do tool sent its whole list, which replaces the node's. |
+          | `task.upserted` | `id`, `text?`, `active_text?`, `status?` | One task was created or changed. |
+          | `task.deleted` | `id` | A task was removed. |
+          | `spawn.requested` | `call_id`, `kind` (`agent`, `session`), `agent_type?`, `purpose?`, `background` | A node asked for a child to start. Unless `background`, it's blocked until the call returns. |
+          | `spawn.returned` | `call_id`, `child?`, `outcome?` | That call returned. |
+          | `wait.started` | `wait_id`, `on` (a provider node id), `reason?` | A node blocked on another for some other reason. |
+          | `wait.ended` | `wait_id`, `outcome?` | That block cleared. |
+          | `message.sent` | `message_id`, `to`, `reply_to?`, `summary?`, `body?` | One node sent another a message. |
+          | `activity` | `tool`, `label?` | A tool call, when the share records them. |
+
+          Ids inside `payload` are the provider's own (as in `provider_ref`), exactly as the agent tool reported them; use `node_id` and `changes` for API ids. More types may be added: ignore those you don't recognise.
+        models:
+          event: "#/components/schemas/Event"
+          event_source: "#/components/schemas/EventSource"
+          node_change: "#/components/schemas/NodeChange"
+          field_change: "#/components/schemas/FieldChange"
+        methods:
+          list:
+            endpoint: get /graphs/{graph_id}/events
+            paginated: cursor_page
+          retrieve: get /graphs/{graph_id}/events/{event_id}
+
+readme:
+  example_requests:
+    default:
+      type: request
+      endpoint: get /graphs/{graph_id}/nodes/{node_id}
+      params:
+        graph_id: gph_k3P9xQ2mWt7a
+        node_id: node_Y2xhdWRlLWNvZGU6NWYyYzFlOWEtOGQxYi00YjZlLTlhNTEtMGY2ZjJjN2QzZTEw
+        expand:
+          - parent
+          - children
+    headline:
+      type: request
+      endpoint: get /graphs/{graph_id}/nodes
+      params:
+        graph_id: gph_k3P9xQ2mWt7a
+        state:
+          - working
+        stale: true
+    pagination:
+      type: request
+      endpoint: get /graphs/{graph_id}/events
+      params:
+        graph_id: gph_k3P9xQ2mWt7a
+        order: asc
+        limit: 100

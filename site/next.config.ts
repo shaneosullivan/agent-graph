@@ -21,6 +21,18 @@ const nextConfig: NextConfig = {
   env: {NEXT_PUBLIC_BUILD_ID: buildId()},
   // Logs are only read and written through the API, never exposed directly.
   poweredByHeader: false,
+  async rewrites() {
+    // The API reference: a static site in public/docs/reference, built by
+    // ../api-docs, each page an index.html in its own directory. A file that
+    // exists (a script, a stylesheet) is served before these apply.
+    return [
+      {source: "/docs/reference", destination: "/docs/reference/index.html"},
+      {
+        source: "/docs/reference/:path*",
+        destination: "/docs/reference/:path*/index.html",
+      },
+    ];
+  },
   async headers() {
     return [
       {

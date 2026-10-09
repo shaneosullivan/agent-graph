@@ -21,7 +21,8 @@ export const metadata: Metadata = {
 
 /**
  * The page's contents: its two parts, the getting-started platforms, the
- * reference's sections and its commands. Beside the page on a wide screen;
+ * reference's sections and its commands; then the API reference, a page of
+ * its own. Beside the page on a wide screen;
  * on a phone, in the header's menu (SiteMenu), not above the page.
  */
 function DocsContents() {
@@ -46,6 +47,11 @@ function DocsContents() {
           <code>{c.name}</code>
         </a>
       ))}
+      {/* A page of its own: the HTTP API's reference, a static site built
+          from ../api-docs (scripts/build-api-docs.mjs). */}
+      <a href="/docs/reference" className="docs-nav-part">
+        API reference
+      </a>
     </>
   );
 }
