@@ -6,6 +6,11 @@
 //
 // --if-missing (for `dev`): only if there's no build yet, so starting the dev
 // server stays quick. Run `npm --prefix ../api-docs run build` to rebuild.
+//
+// Not on Windows: @stainless/sdk-json, which reads the spec, starts its
+// worker from a Windows path where it needs a URL, and fails. The site is
+// deployed from Linux, where it works; on Windows, /docs/reference is left
+// out.
 
 import {execFileSync} from "node:child_process";
 import {existsSync} from "node:fs";
@@ -19,16 +24,18 @@ const built = resolve(site, "public/docs/reference/index.html");
 if (process.argv.includes("--if-missing") && existsSync(built)) {
   process.exit(0);
 }
+if (process.platform === "win32") {
+  console.log(
+    "Not building the API reference (/docs/reference): it can't be built on Windows.",
+  );
+  process.exit(0);
+}
 if (!existsSync(resolve(docs, "package.json"))) {
   console.error(`Can't find ${docs}`);
   process.exit(1);
 }
 
-// On Windows npm is npm.cmd, which Node (since the CVE-2024-27980 fix) refuses
-// to spawn without a shell (EINVAL). The args are fixed, so a shell is safe.
-const win = process.platform === "win32";
-const run = args =>
-  execFileSync("npm", args, {cwd: docs, stdio: "inherit", shell: win});
+const run = args => execFileSync("npm", args, {cwd: docs, stdio: "inherit"});
 
 if (!existsSync(resolve(docs, "node_modules"))) {
   run(["ci", "--no-audit", "--no-fund"]);

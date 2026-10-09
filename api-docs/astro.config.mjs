@@ -26,20 +26,6 @@ function openReferenceSidebar(items) {
   return items;
 }
 
-/**
- * The loader makes a directory from createCodegenDir().pathname, which on
- * Windows is "/C:/..." and becomes "C:\C:\...". Hand it a real path instead.
- */
-function windowsSafe(load) {
-  return opts =>
-    load({
-      ...opts,
-      createCodegenDir: () => ({
-        pathname: fileURLToPath(opts.createCodegenDir()),
-      }),
-    });
-}
-
 export default defineConfig({
   site: "https://agentgraph.chofter.com",
   base: "/docs/reference",
@@ -59,20 +45,20 @@ export default defineConfig({
       customCss: ["./theme.css"],
       disableCredits: true,
       header: {
-        links: [{label: "Agent Graph", link: "https://agentgraph.chofter.com/"}],
+        links: [
+          {label: "Agent Graph", link: "https://agentgraph.chofter.com/"},
+        ],
       },
       apiReference: {
         stainlessProject: "agent-graph",
         // Made here, from the spec and config, not fetched from Stainless.
-        loadSDKJSONFiles: windowsSafe(
-          fileSystemSDKJSONLoader({
-            specPath: fileURLToPath(new URL("site/openapi.json", repo)),
-            configFilePath: fileURLToPath(
-              new URL("stainless/stainless.yml", repo),
-            ),
-            languages: ["http", "typescript"],
-          }),
-        ),
+        loadSDKJSONFiles: fileSystemSDKJSONLoader({
+          specPath: fileURLToPath(new URL("site/openapi.json", repo)),
+          configFilePath: fileURLToPath(
+            new URL("stainless/stainless.yml", repo),
+          ),
+          languages: ["http", "typescript"],
+        }),
         defaultLanguage: "http",
         propertySettings: {collapseDescription: false, expandDepth: 1},
       },
