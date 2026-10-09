@@ -24,9 +24,11 @@ if (!existsSync(resolve(docs, "package.json"))) {
   process.exit(1);
 }
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+// On Windows npm is npm.cmd, which Node (since the CVE-2024-27980 fix) refuses
+// to spawn without a shell (EINVAL). The args are fixed, so a shell is safe.
+const win = process.platform === "win32";
 const run = args =>
-  execFileSync(npm, args, {cwd: docs, stdio: "inherit", shell: false});
+  execFileSync("npm", args, {cwd: docs, stdio: "inherit", shell: win});
 
 if (!existsSync(resolve(docs, "node_modules"))) {
   run(["ci", "--no-audit", "--no-fund"]);

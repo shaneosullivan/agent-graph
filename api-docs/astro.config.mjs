@@ -1,6 +1,7 @@
 // The API reference, at https://agentgraph.chofter.com/docs/reference: a
 // static site, built into the site's public/ (site/next.config.ts serves
 // it), from site/openapi.json and stainless/stainless.yml.
+import {fileURLToPath} from "node:url";
 import {defineConfig} from "astro/config";
 import {generateAPIReferenceItems, stainlessDocs} from "@stainless-api/docs";
 import {fileSystemSDKJSONLoader} from "@stainless-api/docs/plugin";
@@ -25,10 +26,24 @@ function openReferenceSidebar(items) {
   return items;
 }
 
+/**
+ * The loader makes a directory from createCodegenDir().pathname, which on
+ * Windows is "/C:/..." and becomes "C:\C:\...". Hand it a real path instead.
+ */
+function windowsSafe(load) {
+  return opts =>
+    load({
+      ...opts,
+      createCodegenDir: () => ({
+        pathname: fileURLToPath(opts.createCodegenDir()),
+      }),
+    });
+}
+
 export default defineConfig({
   site: "https://agentgraph.chofter.com",
   base: "/docs/reference",
-  outDir: new URL("site/public/docs/reference/", repo).pathname,
+  outDir: fileURLToPath(new URL("site/public/docs/reference/", repo)),
   trailingSlash: "ignore",
   // @stainless-api/docs ships .tsx sources, compiled here; without this
   // they're built for the classic JSX runtime, and fail with "React is not
@@ -49,11 +64,15 @@ export default defineConfig({
       apiReference: {
         stainlessProject: "agent-graph",
         // Made here, from the spec and config, not fetched from Stainless.
-        loadSDKJSONFiles: fileSystemSDKJSONLoader({
-          specPath: new URL("site/openapi.json", repo).pathname,
-          configFilePath: new URL("stainless/stainless.yml", repo).pathname,
-          languages: ["http", "typescript"],
-        }),
+        loadSDKJSONFiles: windowsSafe(
+          fileSystemSDKJSONLoader({
+            specPath: fileURLToPath(new URL("site/openapi.json", repo)),
+            configFilePath: fileURLToPath(
+              new URL("stainless/stainless.yml", repo),
+            ),
+            languages: ["http", "typescript"],
+          }),
+        ),
         defaultLanguage: "http",
         propertySettings: {collapseDescription: false, expandDepth: 1},
       },
