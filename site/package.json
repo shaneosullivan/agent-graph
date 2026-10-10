@@ -18,9 +18,8 @@
     "build-d3": "node scripts/build-d3.mjs && node scripts/sync-viewer.mjs",
     "build-examples": "node scripts/build-examples.mjs",
     "build-api-docs": "node scripts/build-api-docs.mjs",
-    "build-showcase": "node scripts/build-showcase.mjs",
-    "predev": "node scripts/copy-help.mjs && node scripts/sync-viewer.mjs --if-present && node scripts/write-version.mjs && node scripts/build-api-docs.mjs --if-missing && node scripts/build-showcase.mjs --if-missing",
-    "prebuild": "node scripts/copy-help.mjs && node scripts/sync-viewer.mjs --if-present && node scripts/write-version.mjs && node scripts/build-api-docs.mjs && node scripts/build-showcase.mjs",
+    "predev": "node scripts/copy-help.mjs && node scripts/sync-viewer.mjs --if-present && node scripts/write-version.mjs && node scripts/build-api-docs.mjs --if-missing",
+    "prebuild": "node scripts/copy-help.mjs && node scripts/sync-viewer.mjs --if-present && node scripts/write-version.mjs && node scripts/build-api-docs.mjs",
     "pretypecheck": "node scripts/copy-help.mjs",
     "emulators": "firebase emulators:start --only firestore,auth --project demo-agent-graph",
     "test:api": "node --test tests/api.test.mjs tests/accounts.test.mjs tests/api-v1-site.test.mjs",
@@ -30,6 +29,7 @@
     "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/auth.test.mts tests/unlock.test.mts tests/viewer.test.mjs tests/wasm.test.mjs tests/site-source.test.mjs tests/trim.test.mts tests/cron.test.mts tests/billing.test.mts tests/analytics.test.mts tests/release.test.mts tests/app-version.test.mts tests/examples.test.mts tests/watching.test.mts tests/api-v1-parts.test.mts tests/api-v1-model.test.mts tests/api-v1.test.mts tests/showcase.test.mts"
   },
   "dependencies": {
+    "d3": "^7.9.0",
     "firebase": "12.19.0",
     "firebase-admin": "^14.5.0",
     "next": "^16.3.6",
@@ -38,6 +38,7 @@
     "stripe": "^22.6.2"
   },
   "devDependencies": {
+    "@types/d3": "^7.4.3",
     "@types/node": "^22.20.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

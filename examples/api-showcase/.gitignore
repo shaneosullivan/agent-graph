@@ -1,8 +1,0 @@
-node_modules/
-.next/
-next-env.d.ts
-*.tsbuildinfo
-# Your API key lives here: never commit it.
-.env
-.env.local
-out/

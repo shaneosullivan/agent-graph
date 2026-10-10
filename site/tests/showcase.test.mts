@@ -2,17 +2,26 @@
 // API it calls in-process faked.
 
 import assert from "node:assert/strict";
+import {register} from "node:module";
 import {test} from "node:test";
 
-import {type Dispatch, showcaseProxy} from "../lib/showcase.ts";
+import type {Dispatch} from "../lib/showcase.ts";
+
+register("../scripts/resolve-ts.mjs", import.meta.url);
+const {mineProxy, showcaseProxy} = await import("../lib/showcase.ts");
 
 const KEY = "ag_rk_live_demo";
 
 /** A fake API: records what it's asked, and answers `reply`. */
 function api(reply: () => Response) {
-  const asked: Array<{url: string; headers: Headers; path: Array<string>}> = [];
-  const dispatch: Dispatch = async (req, path) => {
-    asked.push({url: req.url, headers: req.headers, path});
+  const asked: Array<{
+    url: string;
+    headers: Headers;
+    path: Array<string>;
+    as?: {uid: string; kind: string; graphs: Array<string> | null};
+  }> = [];
+  const dispatch: Dispatch = async (req, path, as) => {
+    asked.push({url: req.url, headers: req.headers, path, as});
     return reply();
   };
   return {asked, dispatch};
@@ -137,4 +146,49 @@ test("a 304 is passed back without a body", async () => {
   assert.equal(res.status, 304);
   assert.equal(await res.text(), "");
   assert.equal(res.headers.get("etag"), 'W/"abc"');
+});
+
+test("a browser that isn't logged in can't read its own graphs", async () => {
+  const {asked, dispatch} = api(ok);
+  const res = await mineProxy(
+    new Request("https://site.test/showcase/api/mine/graphs"),
+    ["graphs"],
+    {uid: null, dispatch},
+  );
+  assert.equal(res.status, 401);
+  assert.equal((await res.json()).error.code, "not_logged_in");
+  assert.equal(asked.length, 0);
+});
+
+test("a logged-in browser reads as its own account, and nothing's cached for anyone else", async () => {
+  const {asked, dispatch} = api(ok);
+  const res = await mineProxy(
+    new Request(
+      "https://site.test/showcase/api/mine/graphs/gph_1?as_of=evt_1",
+      {
+        headers: {Authorization: "Bearer ag_sk_live_someone_elses"},
+      },
+    ),
+    ["graphs", "gph_1"],
+    {uid: "user-1", dispatch},
+  );
+  assert.equal(res.status, 200);
+  const [call] = asked;
+  assert.equal(call.url, "https://site.test/api/v1/graphs/gph_1?as_of=evt_1");
+  assert.equal(call.as?.uid, "user-1");
+  assert.equal(call.as?.kind, "secret");
+  assert.equal(call.as?.graphs, null);
+  assert.notEqual(
+    call.headers.get("authorization"),
+    "Bearer ag_sk_live_someone_elses",
+    "the browser's own Authorization isn't passed on",
+  );
+  assert.equal(res.headers.get("cache-control"), "private, no-cache");
+
+  const other = await mineProxy(
+    new Request("https://site.test/showcase/api/mine/account"),
+    ["account"],
+    {uid: "user-1", dispatch},
+  );
+  assert.equal(other.status, 404);
 });
