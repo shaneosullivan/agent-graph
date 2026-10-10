@@ -1,5 +1,7 @@
 # Example logs
 
+`api-showcase/` is something else: a Next.js app that reads your own graphs through the Agent Graph API, and shows what you can build on them. See [its README](api-showcase/README.md).
+
 `logs/events/` holds made-up event logs for 23 sessions. They cover normal work and the edge cases Agent Graph has to handle. Every event is timestamped relative to **2026-09-25 12:00:00 UTC**. Set `AGENT_GRAPH_NOW` to that time when you open them, so "hung" and "5 minutes ago" mean the same thing whenever you look.
 
 ## Look at them
