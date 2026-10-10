@@ -849,28 +849,273 @@
   color: var(--accent-2);
 }
 
+/* The graph of waits, as a list, where it's too narrow to draw. */
+.showcase .wait-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.showcase .wait-list li {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+.showcase .wait-list li.loop {
+  border-color: rgba(255, 95, 109, 0.45);
+}
+.showcase .wait-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+}
+.showcase .wait-pill i {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+}
+.showcase .wait-pill span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.showcase .wait-pill small {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.showcase .wait-arrow {
+  padding-left: 12px;
+  color: var(--blocked);
+  font-size: 12px;
+}
+.showcase .wait-list li.loop .wait-arrow {
+  color: var(--bad);
+}
+
+/* The phone layout's own parts: hidden until it's a phone. */
+.showcase .topbar,
+.showcase .menu-scrim,
+.showcase .menu-close {
+  display: none;
+}
+
+/* Nothing in a column may push it wider than the screen: a chart is drawn
+   at its column's width, so a column sized by its chart never shrinks. */
+.showcase .main > *,
+.showcase .stack > *,
+.showcase .grid > * {
+  min-width: 0;
+}
+.showcase svg.chart {
+  max-width: 100%;
+}
+.showcase .call {
+  grid-template-columns: 52px minmax(0, 1fr) auto auto;
+}
+
 @media (max-width: 1100px) {
   .showcase .grid.two,
   .showcase .grid.three,
   .showcase .grid.side,
   .showcase .explainer {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
+
 @media (max-width: 780px) {
   .showcase .shell {
-    grid-template-columns: 1fr;
+    display: block;
   }
+
+  /* A bar across the top: where you are, and the menu. */
+  .showcase .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px 10px 16px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    border-bottom: 1px solid var(--line);
+    background: rgba(9, 11, 17, 0.88);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .showcase .topbar .brand-mark {
+    width: 28px;
+    height: 28px;
+    flex: none;
+  }
+  .showcase .topbar-title {
+    min-width: 0;
+    flex: 1;
+    line-height: 1.2;
+  }
+  .showcase .topbar-title b {
+    display: block;
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .showcase .topbar-title small {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .showcase .menu-open,
+  .showcase .menu-close {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    flex: none;
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .showcase .menu-open svg,
+  .showcase .menu-close svg {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    fill: none;
+  }
+
+  /* The sidebar, as a drawer from the left. */
   .showcase .sidebar {
-    position: static;
-    height: auto;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 50;
+    width: min(320px, 86vw);
+    height: 100dvh;
+    padding: max(18px, env(safe-area-inset-top)) 16px
+      max(18px, env(safe-area-inset-bottom));
+    background: var(--bg-2);
+    border-right: 1px solid var(--line-2);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform 0.22s ease,
+      visibility 0s linear 0.22s;
+    overscroll-behavior: contain;
   }
+  .showcase .sidebar.open {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.22s ease;
+    box-shadow: 0 0 60px rgba(0, 0, 0, 0.6);
+  }
+  .showcase .sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .showcase .nav-link {
+    padding: 11px 10px;
+    font-size: 15px;
+  }
+  .showcase .menu-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: block;
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s ease;
+  }
+  .showcase .menu-scrim.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .showcase .main {
-    padding: 22px 16px 60px;
+    padding: 16px 16px 60px;
   }
   .showcase .source-toggle {
     position: static;
     width: fit-content;
-    margin: 0 0 16px auto;
+    margin: 0 0 14px auto;
+  }
+  .showcase .explainer {
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .showcase .explainer h1 {
+    font-size: 26px;
+  }
+  .showcase .explainer .lede {
+    font-size: 15.5px;
+  }
+  .showcase .panel {
+    padding: 14px 14px;
+  }
+  .showcase .grid,
+  .showcase .stack {
+    gap: 14px;
+  }
+  .showcase .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .showcase .tile {
+    padding: 12px 13px;
+  }
+  .showcase .tile .value {
+    font-size: 24px;
+  }
+  /* Code that can't wrap scrolls in its own box, not the page. */
+  .showcase .calls-used code,
+  .showcase pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .showcase .call {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  .showcase .call > :nth-child(3) {
+    display: none;
+  }
+
+  /* A node's details: a sheet from the bottom, over what was tapped. */
+  .showcase .drawer {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 45;
+    top: auto;
+    max-height: 72dvh;
+    border-radius: 18px 18px 0 0;
+    border-bottom: 0;
+    padding-bottom: max(18px, env(safe-area-inset-bottom));
+    box-shadow: 0 -20px 60px rgba(0, 0, 0, 0.6);
+    overscroll-behavior: contain;
+  }
+  .showcase .kv {
+    grid-template-columns: 96px minmax(0, 1fr);
   }
 }

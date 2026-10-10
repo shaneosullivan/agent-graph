@@ -12,6 +12,7 @@ import {
   Tile,
 } from "@/app/showcase/_components/ui";
 import {GraphPage} from "@/app/showcase/_lib/graph";
+import {usePhone} from "@/app/showcase/_lib/useWidth";
 import {useApi, useLoad} from "@/app/showcase/_lib/client";
 import {
   now as clockNow,
@@ -28,6 +29,7 @@ export default function Page() {
 
 function Bottlenecks({graph}: {graph: string}) {
   const {get} = useApi();
+  const phone = usePhone();
   const [selected, setSelected] = useState<string | null>(null);
 
   const {data, error, loading} = useLoad(async () => {
@@ -178,9 +180,9 @@ function Bottlenecks({graph}: {graph: string}) {
             <div className="panel">
               <h2>Who&rsquo;s waiting on whom</h2>
               <p className="sub">
-                Arrows point from a waiting node down to what it waits on; what
-                everything waits for is at the bottom. Click a node for its
-                details.
+                {phone
+                  ? "Each wait: a waiting node, and what it waits on. Tap one for its details."
+                  : "Arrows point from a waiting node down to what it waits on; what everything waits for is at the bottom. Click a node for its details."}
               </p>
               <WaitGraph waiting={data.blocked} onPick={setSelected} />
             </div>

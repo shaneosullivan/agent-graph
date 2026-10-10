@@ -74,6 +74,17 @@ export function WaitGraph({
 
   // Each row of nodes wraps to the width there is.
   const perLine = Math.max(1, Math.floor((width + GAP_X) / (BOX_W + GAP_X)));
+  const cyclic = new Set(waiting.filter(w => w.blocked?.cycle).map(w => w.id));
+
+  // Too narrow for two side by side (a phone): every arrow would run
+  // through the boxes between its ends, so each wait's a line of its own.
+  if (perLine < 2) {
+    return (
+      <div ref={ref}>
+        <WaitList nodes={nodes} edges={edges} cyclic={cyclic} onPick={onPick} />
+      </div>
+    );
+  }
   const pos = new Map<string, {x: number; y: number}>();
   let y = 8;
   for (const row of rows) {
@@ -92,7 +103,6 @@ export function WaitGraph({
   }
   const height = y - GAP_Y + 16;
 
-  const cyclic = new Set(waiting.filter(w => w.blocked?.cycle).map(w => w.id));
   const waitedOn = new Map<string, number>();
   for (const e of edges) {
     waitedOn.set(e.to, (waitedOn.get(e.to) ?? 0) + 1);
@@ -213,5 +223,49 @@ export function WaitGraph({
       </svg>
       {tip}
     </div>
+  );
+}
+
+/** Each wait, a line of its own: who's waiting, and on what. */
+function WaitList({
+  nodes,
+  edges,
+  cyclic,
+  onPick,
+}: {
+  nodes: Map<string, AgentNode>;
+  edges: Array<{from: string; to: string}>;
+  cyclic: Set<string>;
+  onPick?: (id: string) => void;
+}) {
+  const pill = (id: string) => {
+    const n = nodes.get(id)!;
+    return (
+      <button
+        type="button"
+        className="wait-pill"
+        onClick={() => onPick?.(id)}
+        style={{borderColor: cyclic.has(id) ? "var(--bad)" : undefined}}>
+        <i style={{background: STATES[n.state].color}} />
+        <span>{nodeName(n)}</span>
+        <small>{STATES[n.state].label}</small>
+      </button>
+    );
+  };
+  return (
+    <ul className="wait-list">
+      {edges.map((e, i) => {
+        const loop = cyclic.has(e.from) && cyclic.has(e.to);
+        return (
+          <li key={i} className={loop ? "loop" : undefined}>
+            {pill(e.from)}
+            <span className="wait-arrow">
+              {loop ? "waits on, in a loop" : "waits on"} ↓
+            </span>
+            {pill(e.to)}
+          </li>
+        );
+      })}
+    </ul>
   );
 }

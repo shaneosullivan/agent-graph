@@ -1,6 +1,6 @@
 "use client";
 
-import {useEffect, useState} from "react";
+import {useEffect, useState, useSyncExternalStore} from "react";
 
 /**
  * A ref for an element, and its width as it changes, so a chart can be
@@ -23,4 +23,20 @@ export function useWidth<T extends HTMLElement = HTMLDivElement>(
     return () => seen.disconnect();
   }, [el]);
   return {ref, width};
+}
+
+/** The width below which the showcase is laid out for a phone (showcase.css). */
+const PHONE = "(max-width: 780px)";
+
+/** Whether the showcase is laid out for a phone now. */
+export function usePhone(): boolean {
+  return useSyncExternalStore(
+    change => {
+      const query = matchMedia(PHONE);
+      query.addEventListener("change", change);
+      return () => query.removeEventListener("change", change);
+    },
+    () => matchMedia(PHONE).matches,
+    () => false,
+  );
 }

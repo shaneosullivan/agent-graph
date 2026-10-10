@@ -4,6 +4,7 @@ import {useRouter, useSearchParams} from "next/navigation";
 import {useState} from "react";
 
 import {NodeDrawer} from "@/app/showcase/_components/NodeDrawer";
+import {usePhone} from "@/app/showcase/_lib/useWidth";
 import {TreeView} from "@/app/showcase/_components/TreeView";
 import {
   ErrorBox,
@@ -63,11 +64,13 @@ function Explorer({graph}: {graph: string}) {
   }, [graph, root]);
 
   // A new root is the node picked (set as it renders: React's way to reset
-  // state when a prop changes).
+  // state when a prop changes); not on a phone, where its details would
+  // cover the tree.
+  const phone = usePhone();
   const [selectedFor, setSelectedFor] = useState(root);
   if (selectedFor !== root) {
     setSelectedFor(root);
-    setSelected(root && root !== EVERYTHING ? root : null);
+    setSelected(root && root !== EVERYTHING && !phone ? root : null);
   }
 
   const pick = (id: string) =>

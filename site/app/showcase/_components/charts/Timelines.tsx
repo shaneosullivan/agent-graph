@@ -111,7 +111,9 @@ export function Gantt({
   const {tip, show, hide} = useTooltip();
   const {ref, width} = useWidth();
   const row = 18;
-  const labelW = 210;
+  // Names take a fixed column, or on a narrow screen (a phone) a share of
+  // it, so the bars keep most of the width.
+  const labelW = width < 560 ? Math.round(width * 0.38) : 210;
   const height = nodes.length * row + 28;
   const end = d3.max(nodes, n => n.ended ?? n.last_event) ?? now;
   const start = Math.min(
@@ -172,7 +174,10 @@ export function Gantt({
                   fill: n.kind === "session" ? "var(--text)" : "var(--muted)",
                 }}>
                 {(n.kind === "session" ? "" : "↳ ") +
-                  truncate(nodeName(n), 26 - n.depth * 2)}
+                  truncate(
+                    nodeName(n),
+                    Math.floor((labelW - 8 - n.depth * 12) / 7) - 2,
+                  )}
               </text>
               <rect
                 x={x(Math.max(start, n.created))}
