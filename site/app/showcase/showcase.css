@@ -909,6 +909,21 @@
   color: var(--bad);
 }
 
+/* A choice as a dropdown, with its label (on a phone, in place of chips). */
+.showcase .picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.showcase .picker > span {
+  flex: none;
+  font-size: 13px;
+}
+.showcase .picker select {
+  flex: 1;
+  min-width: 0;
+}
+
 /* The phone layout's own parts: hidden until it's a phone. */
 .showcase .topbar,
 .showcase .menu-scrim,
@@ -1117,5 +1132,21 @@
   }
   .showcase .kv {
     grid-template-columns: 96px minmax(0, 1fr);
+  }
+  /* 16px, or a phone zooms in on a field when it's tapped. */
+  .showcase input,
+  .showcase select {
+    font-size: 16px;
+  }
+  .showcase .tree-tools {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+  .showcase .tree-tools select {
+    flex: 1;
+    min-width: 0;
+  }
+  .showcase .tree-tools .spacer {
+    display: none;
   }
 }

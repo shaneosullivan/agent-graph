@@ -73,8 +73,9 @@ function Explorer({graph}: {graph: string}) {
     setSelected(root && root !== EVERYTHING && !phone ? root : null);
   }
 
+  // Picking a tree changes the address, but not where you are on the page.
   const pick = (id: string) =>
-    router.replace(graphHref(graph, "explorer", {root: id}));
+    router.replace(graphHref(graph, "explorer", {root: id}), {scroll: false});
 
   return (
     <>
@@ -114,35 +115,53 @@ function Explorer({graph}: {graph: string}) {
         ]}
       />
       {roots.error ? <ErrorBox error={roots.error} /> : null}
-      <div className="row" style={{marginBottom: 14, gap: 8}}>
-        <span className="faint" style={{fontSize: 13}}>
-          Tree:
-        </span>
-        <button
-          className={`chip ${root === EVERYTHING ? "on" : ""}`}
-          onClick={() => pick(EVERYTHING)}>
-          ✦ Everything
-        </button>
-        {roots.data?.slice(0, 14).map(r => (
+      {phone ? (
+        <label className="picker" style={{marginBottom: 14}}>
+          <span className="faint">Tree</span>
+          <select
+            value={root ?? EVERYTHING}
+            onChange={e => pick(e.target.value)}>
+            <option value={EVERYTHING}>✦ Everything</option>
+            {roots.data?.map(r => (
+              <option key={r.id} value={r.id}>
+                {nodeName(r).slice(0, 40)}
+                {r.descendant_count ? ` (+${r.descendant_count})` : ""} ·{" "}
+                {STATES[r.state].label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <div className="row" style={{marginBottom: 14, gap: 8}}>
+          <span className="faint" style={{fontSize: 13}}>
+            Tree:
+          </span>
           <button
-            key={r.id}
-            className={`chip ${root === r.id ? "on" : ""}`}
-            onClick={() => pick(r.id)}>
-            <span
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: "50%",
-                background: STATES[r.state].color,
-              }}
-            />
-            {nodeName(r).slice(0, 28)}
-            {r.descendant_count ? (
-              <span className="faint">+{r.descendant_count}</span>
-            ) : null}
+            className={`chip ${root === EVERYTHING ? "on" : ""}`}
+            onClick={() => pick(EVERYTHING)}>
+            ✦ Everything
           </button>
-        ))}
-      </div>
+          {roots.data?.slice(0, 14).map(r => (
+            <button
+              key={r.id}
+              className={`chip ${root === r.id ? "on" : ""}`}
+              onClick={() => pick(r.id)}>
+              <span
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: STATES[r.state].color,
+                }}
+              />
+              {nodeName(r).slice(0, 28)}
+              {r.descendant_count ? (
+                <span className="faint">+{r.descendant_count}</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="grid side">
         <div className="panel">
           <div className="row" style={{marginBottom: 12}}>

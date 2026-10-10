@@ -10,6 +10,7 @@ import {
   nodeLine,
   nodeName,
 } from "@/app/showcase/_lib/format";
+import {usePhone} from "@/app/showcase/_lib/useWidth";
 import type {AgentNode} from "@/app/showcase/_lib/types";
 
 type Item = {node: AgentNode | null; id: string; kids: Array<Item>};
@@ -76,6 +77,7 @@ export function TreeView({
   const forest = useMemo(() => forestOf(nodes), [nodes]);
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [zoom, setZoom] = useState(1);
+  const phone = usePhone();
 
   // Start folded below a depth, each time a different tree arrives.
   // (Set as it renders, not in an effect: React's way to reset state when
@@ -147,26 +149,45 @@ export function TreeView({
     });
 
   const all = layout.laid.descendants().filter(d => d.data.node);
+  const unfoldAll = () => setFolded(new Set());
+  const foldToSessions = () =>
+    setFolded(
+      new Set(
+        nodes.filter(n => n.depth >= 1 && n.child_count > 0).map(n => n.id),
+      ),
+    );
 
   return (
     <div>
-      <div className="row" style={{marginBottom: 10}}>
-        <button className="btn" onClick={() => setFolded(new Set())}>
-          Unfold all
-        </button>
-        <button
-          className="btn"
-          onClick={() =>
-            setFolded(
-              new Set(
-                nodes
-                  .filter(n => n.depth >= 1 && n.child_count > 0)
-                  .map(n => n.id),
-              ),
-            )
-          }>
-          Fold to sessions
-        </button>
+      <div className="row tree-tools" style={{marginBottom: 10}}>
+        {phone ? (
+          // On a phone, the folding's a menu, beside the zoom.
+          <select
+            value=""
+            aria-label="Fold or unfold"
+            onChange={e => {
+              if (e.target.value === "unfold") {
+                unfoldAll();
+              } else if (e.target.value === "sessions") {
+                foldToSessions();
+              }
+            }}>
+            <option value="" disabled>
+              Fold…
+            </option>
+            <option value="unfold">Unfold all</option>
+            <option value="sessions">Fold to sessions</option>
+          </select>
+        ) : (
+          <>
+            <button className="btn" onClick={unfoldAll}>
+              Unfold all
+            </button>
+            <button className="btn" onClick={foldToSessions}>
+              Fold to sessions
+            </button>
+          </>
+        )}
         <div className="spacer" />
         <button
           className="btn"
@@ -196,7 +217,12 @@ export function TreeView({
           opacity: pending ? 0.55 : 1,
           transition: "opacity 0.2s",
         }}>
-        <svg width={width * zoom} height={svgHeight * zoom} className="chart">
+        {/* Its own width, scrolled sideways in this box: not squeezed to it. */}
+        <svg
+          width={width * zoom}
+          height={svgHeight * zoom}
+          className="chart"
+          style={{maxWidth: "none"}}>
           <g transform={`scale(${zoom})`}>
             {layout.laid
               .links()

@@ -17,6 +17,7 @@ import {
   Tile,
 } from "@/app/showcase/_components/ui";
 import {GraphPage} from "@/app/showcase/_lib/graph";
+import {usePhone} from "@/app/showcase/_lib/useWidth";
 import {useApi, useLoad} from "@/app/showcase/_lib/client";
 import {
   now as clockNow,
@@ -58,6 +59,7 @@ export default function Page() {
 
 function Performance({graph}: {graph: string}) {
   const {getAll} = useApi();
+  const phone = usePhone();
   const [selected, setSelected] = useState<string | null>(null);
   const [rows, setRows] = useState(GANTT_ROWS);
   const [windowMs, setWindowMs] = useState<number | null>(null);
@@ -239,19 +241,34 @@ function Performance({graph}: {graph: string}) {
               </ul>
             </div>
 
-            <div className="row" style={{gap: 8}}>
-              <span className="faint" style={{fontSize: 13}}>
-                Time window:
-              </span>
-              {WINDOWS.map(w => (
-                <button
-                  key={w.label}
-                  className={`chip ${span === w.ms ? "on" : ""}`}
-                  onClick={() => setWindowMs(w.ms)}>
-                  {w.label}
-                </button>
-              ))}
-            </div>
+            {phone ? (
+              <label className="picker">
+                <span className="faint">Time window</span>
+                <select
+                  value={WINDOWS.findIndex(w => w.ms === span)}
+                  onChange={e => setWindowMs(WINDOWS[+e.target.value].ms)}>
+                  {WINDOWS.map((w, i) => (
+                    <option key={w.label} value={i}>
+                      {w.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <div className="row" style={{gap: 8}}>
+                <span className="faint" style={{fontSize: 13}}>
+                  Time window:
+                </span>
+                {WINDOWS.map(w => (
+                  <button
+                    key={w.label}
+                    className={`chip ${span === w.ms ? "on" : ""}`}
+                    onClick={() => setWindowMs(w.ms)}>
+                    {w.label}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="panel">
               <h2>Timeline</h2>
