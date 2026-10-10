@@ -443,3 +443,17 @@ test("deleting an account takes its keys", async () => {
   assert.equal(res.status, 204, await res.clone().text());
   await apiFails("/graphs", key, 401, "api_key_invalid");
 });
+
+test("the API showcase is served at /showcase, and its proxy needs the demo's key", async () => {
+  for (const path of ["/showcase", "/showcase/g/explorer?graph=gph_x"]) {
+    const res = await fetch(`${BASE}${path}`);
+    assert.equal(res.status, 200, path);
+    assert.match(res.headers.get("content-type") ?? "", /text\/html/, path);
+    assert.match(await res.text(), /\/showcase\/_next\//, path);
+  }
+  // Under CI, SHOWCASE_API_KEY isn't set (scripts/ci-api-test.sh).
+  if (process.env.SHOWCASE_API_KEY) return;
+  const res = await fetch(`${BASE}/showcase/api/ag/graphs`);
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).error.code, "showcase_not_configured");
+});

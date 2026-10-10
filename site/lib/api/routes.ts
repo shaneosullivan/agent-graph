@@ -86,3 +86,39 @@ export const unknown = (req: Request) =>
     },
     handlerDeps,
   );
+
+/**
+ * Answers a GET for `/api/v1/<path>` without a route: the same endpoints,
+ * found the way app/api/v1/… finds them, so another route can call the API
+ * in-process (app/showcase/api/ag/…, the showcase's proxy).
+ */
+export function dispatch(req: Request, path: Array<string>): Promise<Response> {
+  const params = <K extends string>(p: Record<K, string>) => ({
+    params: Promise.resolve(p),
+  });
+  const [top, graph_id, kind, id, ...rest] = path;
+  if (top === "graphs" && !rest.length) {
+    if (graph_id === undefined) {
+      return listGraphs(req);
+    }
+    if (kind === undefined) {
+      return retrieveGraph(req, params({graph_id}));
+    }
+    if (kind === "nodes") {
+      if (id === undefined) {
+        return listNodes(req, params({graph_id}));
+      }
+      if (id === "search") {
+        return searchNodes(req, params({graph_id}));
+      }
+      return retrieveNode(req, params({graph_id, node_id: id}));
+    }
+    if (kind === "events") {
+      if (id === undefined) {
+        return listEvents(req, params({graph_id}));
+      }
+      return retrieveEvent(req, params({graph_id, event_id: id}));
+    }
+  }
+  return unknown(req);
+}

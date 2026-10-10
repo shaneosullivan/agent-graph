@@ -58,8 +58,14 @@ export async function deleteIdleLogs(opts: {
   budgetMs: number;
   /** Logs per query. */
   page?: number;
+  /**
+   * Accounts whose logs are kept however idle: the demo account the API
+   * showcase reads (lib/showcase.ts), whose graphs are fixed.
+   */
+  keepOwners?: Array<string>;
 }): Promise<{checked: number; deleted: number; done: boolean}> {
   const size = opts.page ?? PAGE;
+  const keep = new Set(opts.keepOwners ?? []);
   const started = Date.now();
   const now = opts.now ?? Date.now();
   const saved = await state().get();
@@ -77,7 +83,12 @@ export async function deleteIdleLogs(opts: {
       .get();
     for (let i = 0; i < page.docs.length; i += AT_ONCE) {
       const group = page.docs.slice(i, i + AT_ONCE);
-      const idle = await Promise.all(group.map(log => isIdle(log, since, now)));
+      const idle = await Promise.all(
+        group.map(
+          async log =>
+            !keep.has(log.get("owner")) && (await isIdle(log, since, now)),
+        ),
+      );
       for (const [j, gone] of idle.entries()) {
         checked++;
         if (gone && (await deleteIfIdle(group[j].id, since, now))) {

@@ -26,6 +26,9 @@ export STRIPE_MONTHLY_LABEL="${STRIPE_MONTHLY_LABEL:-\$5 a month}"
 export STRIPE_YEARLY_LABEL="${STRIPE_YEARLY_LABEL:-\$50 a year}"
 export FREE_TRIAL_DAYS="${FREE_TRIAL_DAYS:-7}"
 
+# No demo account for the API showcase (/showcase): its proxy says so.
+unset SHOWCASE_API_KEY
+
 # An admin, who can see /admin (tests/accounts.test.mjs makes the account).
 export ADMIN_EMAILS="${ADMIN_EMAILS:-admin@agent-graph.test}"
 

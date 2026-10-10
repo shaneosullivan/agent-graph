@@ -25,6 +25,7 @@ const nextConfig: NextConfig = {
   // reads from public/: a function has only what it's told it needs.
   outputFileTracingIncludes: {
     "/api/v1/**": ["./public/viewer/agent_graph.wasm"],
+    "/showcase/api/**": ["./public/viewer/agent_graph.wasm"],
   },
   async rewrites() {
     // The API reference: a static site in public/docs/reference, built by
@@ -35,6 +36,14 @@ const nextConfig: NextConfig = {
       {
         source: "/docs/reference/:path*",
         destination: "/docs/reference/:path*/index.html",
+      },
+      // The API showcase: a static export in public/showcase, built from
+      // ../examples/api-showcase by scripts/build-showcase.mjs, each page an
+      // .html file. Its proxy, /showcase/api/…, is a route of the site's own.
+      {source: "/showcase", destination: "/showcase/index.html"},
+      {
+        source: "/showcase/:path((?!api/).*)",
+        destination: "/showcase/:path.html",
       },
     ];
   },

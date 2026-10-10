@@ -15,6 +15,7 @@ const eslintConfig = defineConfig([
     "public/viewer/**",
     "lib/viewer-shell.ts",
     "public/docs/reference/**",
+    "public/showcase/**",
   ]),
   {
     files: ["**/*.{ts,tsx}"],

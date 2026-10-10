@@ -52,6 +52,11 @@ function DocsContents() {
       <a href="/docs/reference" className="docs-nav-part">
         API reference
       </a>
+      {/* The API showcase: a demo account's graph, read through the API
+          (scripts/build-showcase.mjs). */}
+      <a href="/showcase" className="docs-nav-part">
+        API showcase
+      </a>
     </>
   );
 }

@@ -16,3 +16,6 @@ firestore-debug.log
 
 # The API reference, built from ../api-docs by scripts/build-api-docs.mjs
 /public/docs/reference/
+
+# The API showcase, built from ../examples/api-showcase by scripts/build-showcase.mjs
+/public/showcase/

@@ -53,9 +53,10 @@ async function setup() {
     return id;
   }
   const exists = async id => (await doc(id).get()).exists;
+  const own = (id, owner) => doc(id).update({owner});
   const chunkCount = async id =>
     (await doc(id).collection("chunks").get()).size;
-  return {store, cleanup, state, log, exists, chunkCount, Timestamp};
+  return {store, cleanup, state, log, own, exists, chunkCount, Timestamp};
 }
 
 test(
@@ -414,5 +415,23 @@ test(
       db.recursiveDelete = recursiveDelete;
       await firestore().recursiveDelete(old);
     }
+  },
+);
+
+test(
+  "the logs of an account it's told to keep (the showcase's demo) are kept however idle",
+  {skip, timeout: 60_000},
+  async () => {
+    const {cleanup, state, log, own, exists, Timestamp} = await setup();
+    await state.set({since: Timestamp.fromMillis(Date.now() - 30 * DAY)});
+    const demo = `demo-${newId()}`;
+    const kept = await log([20, 19]);
+    await own(kept, demo);
+    const other = await log([20, 19]);
+    await own(other, `someone-${newId()}`);
+
+    await cleanup.deleteIdleLogs({budgetMs: 30_000, keepOwners: [demo]});
+    assert.equal(await exists(kept), true);
+    assert.equal(await exists(other), false);
   },
 );
