@@ -924,6 +924,28 @@
   min-width: 0;
 }
 
+/* Zooming a chart: two buttons, a magnifying glass in each. */
+.showcase .zoom {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.showcase .zoom .btn {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+}
+.showcase .zoom svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
 /* The phone layout's own parts: hidden until it's a phone. */
 .showcase .topbar,
 .showcase .menu-scrim,
@@ -1142,7 +1164,11 @@
     flex-wrap: nowrap;
     gap: 8px;
   }
-  .showcase .tree-tools select {
+  /* The "click a node" hint beside a chart: on a phone it's only clutter. */
+  .showcase .grid.side > .panel.muted {
+    display: none;
+  }
+  .showcase .tree-tools .picker {
     flex: 1;
     min-width: 0;
   }

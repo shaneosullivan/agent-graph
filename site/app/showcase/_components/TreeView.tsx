@@ -149,35 +149,42 @@ export function TreeView({
     });
 
   const all = layout.laid.descendants().filter(d => d.data.node);
-  const unfoldAll = () => setFolded(new Set());
-  const foldToSessions = () =>
-    setFolded(
-      new Set(
-        nodes.filter(n => n.depth >= 1 && n.child_count > 0).map(n => n.id),
-      ),
+  // Folded from depth `d` down: what's shown is `d` levels under each
+  // session. (0: nothing folded.)
+  const foldedFrom = (d: number) =>
+    new Set(
+      d
+        ? nodes.filter(n => n.depth >= d && n.child_count > 0).map(n => n.id)
+        : [],
     );
+  const unfoldAll = () => setFolded(new Set());
+  const foldToSessions = () => setFolded(foldedFrom(1));
+  // How deep it's shown now, if it's one of those (else it's been folded
+  // by hand): what the phone's Depth menu says.
+  const sameAs = (a: Set<string>) =>
+    a.size === folded.size && [...a].every(id => folded.has(id));
+  const depth = [0, 1, 2].find(d => sameAs(foldedFrom(d))) ?? "custom";
 
   return (
     <div>
       <div className="row tree-tools" style={{marginBottom: 10}}>
         {phone ? (
-          // On a phone, the folding's a menu, beside the zoom.
-          <select
-            value=""
-            aria-label="Fold or unfold"
-            onChange={e => {
-              if (e.target.value === "unfold") {
-                unfoldAll();
-              } else if (e.target.value === "sessions") {
-                foldToSessions();
-              }
-            }}>
-            <option value="" disabled>
-              Fold…
-            </option>
-            <option value="unfold">Unfold all</option>
-            <option value="sessions">Fold to sessions</option>
-          </select>
+          // On a phone, how deep the tree's shown is a menu, beside the zoom.
+          <label className="picker">
+            <span className="faint">Depth</span>
+            <select
+              value={String(depth)}
+              onChange={e => setFolded(foldedFrom(Number(e.target.value)))}>
+              <option value="0">Every level</option>
+              <option value="1">Sessions + 1 level</option>
+              <option value="2">Sessions + 2 levels</option>
+              {depth === "custom" ? (
+                <option value="custom" disabled>
+                  As you&rsquo;ve folded it
+                </option>
+              ) : null}
+            </select>
+          </label>
         ) : (
           <>
             <button className="btn" onClick={unfoldAll}>
@@ -189,21 +196,24 @@ export function TreeView({
           </>
         )}
         <div className="spacer" />
-        <button
-          className="btn"
-          onClick={() => setZoom(z => Math.max(0.4, z - 0.15))}
-          aria-label="Zoom out">
-          −
-        </button>
-        <span className="faint mono" style={{width: 44, textAlign: "center"}}>
-          {Math.round(zoom * 100)}%
-        </span>
-        <button
-          className="btn"
-          onClick={() => setZoom(z => Math.min(1.8, z + 0.15))}
-          aria-label="Zoom in">
-          +
-        </button>
+        <div className="zoom">
+          <button
+            className="btn"
+            onClick={() => setZoom(z => Math.max(0.4, z - 0.15))}
+            disabled={zoom <= 0.4}
+            aria-label="Zoom out"
+            title="Zoom out">
+            <Magnifier plus={false} />
+          </button>
+          <button
+            className="btn"
+            onClick={() => setZoom(z => Math.min(1.8, z + 0.15))}
+            disabled={zoom >= 1.8}
+            aria-label="Zoom in"
+            title="Zoom in">
+            <Magnifier plus />
+          </button>
+        </div>
       </div>
       <div
         style={{
@@ -338,6 +348,17 @@ export function TreeView({
         </svg>
       </div>
     </div>
+  );
+}
+
+/** A magnifying glass, with a minus or a plus in it. */
+function Magnifier({plus}: {plus: boolean}) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <circle cx="10.5" cy="10.5" r="6.5" />
+      <path d="M15.5 15.5 20 20M7.5 10.5h6" />
+      {plus ? <path d="M10.5 7.5v6" /> : null}
+    </svg>
   );
 }
 
