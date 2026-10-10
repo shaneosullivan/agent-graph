@@ -10,6 +10,7 @@ import {
   NodeRow,
 } from "@/app/showcase/_components/ui";
 import {GraphPage} from "@/app/showcase/_lib/graph";
+import {usePhone} from "@/app/showcase/_lib/useWidth";
 import {AgentGraphError, useApi} from "@/app/showcase/_lib/client";
 import {nodeName} from "@/app/showcase/_lib/format";
 import type {AgentNode, SearchResult} from "@/app/showcase/_lib/types";
@@ -37,6 +38,7 @@ export default function Page() {
 
 function Search({graph}: {graph: string}) {
   const {get} = useApi();
+  const phone = usePhone();
   const [query, setQuery] = useState(EXAMPLES[0].q);
   const [withRoot, setWithRoot] = useState(true);
   const [result, setResult] = useState<SearchResult<AgentNode> | null>(null);
@@ -149,20 +151,45 @@ function Search({graph}: {graph: string}) {
               />{" "}
               with each tree&rsquo;s root (<code>expand[]=data.root</code>)
             </label>
-            <div className="row" style={{marginTop: 14, gap: 8}}>
-              {EXAMPLES.map(x => (
-                <button
-                  key={x.q}
-                  className={`chip ${query === x.q ? "on" : ""}`}
-                  title={x.q}
-                  onClick={() => {
-                    setQuery(x.q);
-                    run(x.q);
+            {phone ? (
+              // On a phone, the examples are a menu: it runs the one picked.
+              <label className="picker" style={{marginTop: 14}}>
+                <span className="faint">Example</span>
+                <select
+                  value={EXAMPLES.findIndex(x => x.q === query)}
+                  onChange={e => {
+                    const x = EXAMPLES[Number(e.target.value)];
+                    if (x) {
+                      setQuery(x.q);
+                      run(x.q);
+                    }
                   }}>
-                  {x.why}
-                </button>
-              ))}
-            </div>
+                  <option value={-1} disabled>
+                    Your own query
+                  </option>
+                  {EXAMPLES.map((x, i) => (
+                    <option key={x.q} value={i}>
+                      {x.why}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <div className="row" style={{marginTop: 14, gap: 8}}>
+                {EXAMPLES.map(x => (
+                  <button
+                    key={x.q}
+                    className={`chip ${query === x.q ? "on" : ""}`}
+                    title={x.q}
+                    onClick={() => {
+                      setQuery(x.q);
+                      run(x.q);
+                    }}>
+                    {x.why}
+                  </button>
+                ))}
+              </div>
+            )}
             {queryError ? (
               <div className="callout warn" style={{marginTop: 14}}>
                 <span>✎</span>
