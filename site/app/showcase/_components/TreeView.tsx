@@ -10,7 +10,7 @@ import {
   nodeLine,
   nodeName,
 } from "@/app/showcase/_lib/format";
-import {usePhone} from "@/app/showcase/_lib/useWidth";
+import {usePhone, useWidth} from "@/app/showcase/_lib/useWidth";
 import type {AgentNode} from "@/app/showcase/_lib/types";
 
 type Item = {node: AgentNode | null; id: string; kids: Array<Item>};
@@ -23,13 +23,40 @@ const TOP = 16;
 const NAME_CHARS = 28;
 const SUB_CHARS = 32;
 
-/** Where a node's label ends, roughly (so lines leave from there, not through it). */
-function labelEnd(n: AgentNode): number {
-  const chars = Math.max(
-    Math.min(nodeName(n).length, NAME_CHARS) * 6.9,
-    Math.min(nodeLine(n).length, SUB_CHARS) * 6.1,
-  );
-  return Math.min(COL - 30, radius(n) + 14 + chars);
+/** Roughly how wide a character of a name, and of what it's doing, is drawn. */
+const NAME_PX = 6.9;
+const SUB_PX = 6.1;
+/** A line's height, in a name and in what it's doing. */
+const NAME_LH = 14;
+const SUB_LH = 13;
+
+/** A label's lines: its name's, and what it's doing's. */
+type Label = {name: Array<string>; sub: Array<string>};
+
+/**
+ * `text` in at most `lines` lines of at most `chars` characters, broken
+ * between words where it can, and cut short with "…" if it doesn't fit.
+ */
+function wrap(text: string, chars: number, lines: number): Array<string> {
+  const out: Array<string> = [];
+  let rest = text.trim();
+  while (rest && out.length < lines) {
+    if (rest.length <= chars) {
+      out.push(rest);
+      rest = "";
+      break;
+    }
+    if (out.length === lines - 1) {
+      out.push(truncate(rest, chars));
+      rest = "";
+      break;
+    }
+    const space = rest.lastIndexOf(" ", chars);
+    const cut = space > chars / 3 ? space : chars;
+    out.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
+  }
+  return out;
 }
 
 /** Nodes as a forest: each under its parent (by `parent_id`), oldest first, as the API lists them in tree order. */
@@ -78,6 +105,40 @@ export function TreeView({
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [zoom, setZoom] = useState(1);
   const phone = usePhone();
+  const {ref: boxRef, width: boxWidth} = useWidth();
+
+  // On a phone, a session's name and what it's doing each wrap to two
+  // lines, in at most 30% of the box's width, so the tree is narrower;
+  // every other label is a line of each, as on a wider screen.
+  const wrapPx = Math.max(84, Math.round(boxWidth * 0.3));
+  const labelOf = (n: AgentNode): Label => {
+    const line = nodeLine(n);
+    if (phone && n.kind === "session") {
+      return {
+        name: wrap(nodeName(n), Math.floor(wrapPx / NAME_PX), 2),
+        sub: line ? wrap(line, Math.floor(wrapPx / SUB_PX), 2) : [],
+      };
+    }
+    return {
+      name: [truncate(nodeName(n), NAME_CHARS)],
+      sub: line ? [truncate(line, SUB_CHARS)] : [],
+    };
+  };
+  /** How tall a node's label is. */
+  const labelHeight = (n: AgentNode) => {
+    const l = labelOf(n);
+    return l.name.length * NAME_LH + l.sub.length * SUB_LH;
+  };
+  /** Where a node's label ends, roughly (so lines leave from there, not through it). */
+  const labelEnd = (n: AgentNode): number => {
+    const l = labelOf(n);
+    const chars = Math.max(
+      ...l.name.map(t => t.length * NAME_PX),
+      ...l.sub.map(t => t.length * SUB_PX),
+    );
+    const end = radius(n) + 14 + chars;
+    return phone ? end : Math.min(COL - 30, end);
+  };
 
   // Start folded below a depth, each time a different tree arrives.
   // (Set as it renders, not in an effect: React's way to reset state when
@@ -102,7 +163,16 @@ export function TreeView({
     const tree = d3
       .tree<Item>()
       .nodeSize([ROW, COL])
-      .separation((a, b) => (a.parent === b.parent ? 1 : 1.25));
+      .separation((a, b) => {
+        const base = a.parent === b.parent ? 1 : 1.25;
+        if (!phone || !a.data.node || !b.data.node) {
+          return base;
+        }
+        // Room for two wrapped labels, one above the other.
+        const need =
+          (labelHeight(a.data.node) + labelHeight(b.data.node)) / 2 + 8;
+        return Math.max(base, need / ROW);
+      });
     const laid = tree(root);
     let minX = Infinity;
     let maxX = -Infinity;
@@ -113,7 +183,9 @@ export function TreeView({
       maxY = Math.max(maxY, d.y);
     });
     return {laid, minX, maxX, maxY};
-  }, [forest, folded]);
+    // labelHeight changes only with these.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forest, folded, phone, wrapPx]);
 
   const q = query.trim().toLowerCase();
   const matches = (n: AgentNode) =>
@@ -122,10 +194,29 @@ export function TreeView({
       .toLowerCase()
       .includes(q);
 
-  const width = layout.maxY + COL + 40;
+  // Each level's column: COL wide; or on a phone, as wide as its widest
+  // label needs, and the curve to the next level.
+  const depths = layout.laid.height;
+  const columnOf = (depth: number) => {
+    if (!phone) {
+      return COL;
+    }
+    const ends = layout.laid
+      .descendants()
+      .filter(d => d.depth === depth && d.data.node)
+      .map(d => labelEnd(d.data.node!) + (folded.has(d.data.id) ? 30 : 0));
+    return Math.max(120, ...ends) + 48;
+  };
+  const xs = [0, 30];
+  for (let depth = 1; depth < depths; depth++) {
+    xs.push(xs[depth] + columnOf(depth));
+  }
+  const width = phone
+    ? xs[depths] + columnOf(depths) - 20
+    : layout.maxY + COL + 40;
   const svgHeight = layout.maxX - layout.minX + ROW * 2 + TOP;
   const at = (d: d3.HierarchyPointNode<Item>): [number, number] => [
-    d.y - COL + 30,
+    xs[d.depth],
     d.x - layout.minX + ROW + TOP,
   ];
   const link = (l: d3.HierarchyPointLink<Item>) => {
@@ -216,6 +307,7 @@ export function TreeView({
         </div>
       </div>
       <div
+        ref={boxRef}
         style={{
           height: Math.min(height, svgHeight * zoom + 4),
           minHeight: 120,
@@ -258,15 +350,16 @@ export function TreeView({
               const dim = !matches(n);
               const isSel = selected === n.id;
               const flashing = flash?.has(n.id);
-              const line = nodeLine(n);
+              const label = labelOf(n);
               const lx = r + 8;
-              const ly = line ? -2 : 4;
+              // The label's lines, centred on the dot.
+              const ly = -labelHeight(n) / 2 + 10;
               return (
                 <g
                   key={n.id}
                   className={`tree-node ${flashing ? "flash" : ""}`}
                   style={{
-                    transform: `translate(${d.y - COL + 30}px, ${d.x - layout.minX + ROW + TOP}px)`,
+                    transform: `translate(${at(d)[0]}px, ${at(d)[1]}px)`,
                     transition:
                       "transform 0.45s cubic-bezier(.2,.8,.2,1), opacity 0.3s",
                     opacity: dim ? 0.22 : 1,
@@ -328,16 +421,27 @@ export function TreeView({
                       x={lx}
                       y={ly}
                       fontWeight={n.kind === "session" ? 650 : 450}>
-                      {truncate(nodeName(n), NAME_CHARS)}
-                      {hidden ? (
-                        <tspan fill={color} fontWeight={650}>
-                          {"  "}+{hidden}
+                      {label.name.map((t, i) => (
+                        <tspan key={i} x={lx} dy={i ? NAME_LH : 0}>
+                          {t}
+                          {hidden && i === label.name.length - 1 ? (
+                            <tspan fill={color} fontWeight={650}>
+                              {"  "}+{hidden}
+                            </tspan>
+                          ) : null}
                         </tspan>
-                      ) : null}
+                      ))}
                     </text>
-                    {line ? (
-                      <text className="tree-sub" x={lx} y={ly + 14}>
-                        {truncate(line, SUB_CHARS)}
+                    {label.sub.length ? (
+                      <text
+                        className="tree-sub"
+                        x={lx}
+                        y={ly + label.name.length * NAME_LH}>
+                        {label.sub.map((t, i) => (
+                          <tspan key={i} x={lx} dy={i ? SUB_LH : 0}>
+                            {t}
+                          </tspan>
+                        ))}
                       </text>
                     ) : null}
                   </g>
