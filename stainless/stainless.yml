@@ -41,7 +41,7 @@ client_settings:
       description: >-
         A secret (`ag_sk_live_…`) or restricted (`ag_rk_live_…`) key, made on
         https://agentgraph.chofter.com/account. Keep it on your server.
-      example: ag_sk_live_51Hx7Qm2Vb9Kd4Tz0Ws3Ne8L
+      example: ag_sk_live_51Hx7Qm2Vb9Kd4Tz0Ws3Ne8LrPq4Xa9T
     api_version:
       type: string
       nullable: true

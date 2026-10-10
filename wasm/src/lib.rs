@@ -20,6 +20,21 @@
 //!   (`"site"` or `"local"`, see `timeline::Environment`) and is required.
 //! - `{"op": "info"}`
 //!
+//! For the site's API (site/lib/api), which needs every node, not a page's
+//! view of one tree:
+//!
+//! - `{"op": "events"}`: the log's events, in the order they're applied
+//!   (not the keyframe it may start from), each as it was sent, with its
+//!   time in `ms`; and whether it starts from a keyframe (`base`).
+//! - `{"op": "state", "until": …, "now_ms": …, "stale_minutes": …}`: every
+//!   node, and the roots, after the events up to and including `until` (or
+//!   all of them), judged at `now_ms` (or, given `until`, that event's
+//!   time; otherwise the last event's).
+//! - `{"op": "changes", "from": i, "to": j, "stale_minutes": …}`: the nodes
+//!   as they were before event `i` (`before`), then, for each event from
+//!   `i` to `j` (indexes into `events`), the nodes it changed, whole, and
+//!   those it removed, each judged at its own event's time.
+//!
 //! Cutting a log to send to the site (its last two keyframes' worth:
 //! `keyframe::Trimmer`) is done a step at a time, so a page (a worker) can
 //! show how far along it is: `trim_start`, `trim_step` until it's done
@@ -35,7 +50,7 @@ use std::time::{Duration, SystemTime};
 
 use agent_graph::event::{Envelope, Payload};
 use agent_graph::keyframe::Trimmer;
-use agent_graph::reducer::{self, KEYFRAME_PARTS, is_keyframe};
+use agent_graph::reducer::{self, KEYFRAME_PARTS, Options, Replay, is_keyframe};
 use agent_graph::timeline::{self, ApiError, Environment, Timed};
 use serde::Deserialize;
 
@@ -241,6 +256,21 @@ enum Request {
         stale_minutes: f64,
     },
     Info,
+    Events,
+    State {
+        #[serde(default)]
+        until: Option<String>,
+        #[serde(default)]
+        now_ms: Option<f64>,
+        #[serde(default = "default_stale")]
+        stale_minutes: f64,
+    },
+    Changes {
+        from: usize,
+        to: usize,
+        #[serde(default = "default_stale")]
+        stale_minutes: f64,
+    },
 }
 
 fn default_stale() -> f64 {
@@ -276,6 +306,17 @@ pub fn answer(request: &str) -> String {
                 "last_event_ms": log.events.last().map(|t| ms(t.at)),
             })
             .to_string()),
+            Request::Events => Ok(events_json(&log.events)),
+            Request::State {
+                until,
+                now_ms,
+                stale_minutes,
+            } => state(&log, until.as_deref(), now_ms, minutes(stale_minutes)),
+            Request::Changes {
+                from,
+                to,
+                stale_minutes,
+            } => changes(&log.events, from, to, minutes(stale_minutes)),
         };
         match result {
             Ok(json) => json,
@@ -283,6 +324,112 @@ pub fn answer(request: &str) -> String {
             Err(ApiError::Failed(msg)) => error(500, &msg),
         }
     })
+}
+
+/// The log's events, as `{"base": …, "events": [...]}` (see `Request::Events`).
+fn events_json(events: &[Timed]) -> String {
+    let (base, rest) = timeline::split_base(events);
+    let list: Vec<serde_json::Value> = rest
+        .iter()
+        .map(|t| {
+            let mut e = serde_json::to_value(&*t.event).expect("serializable");
+            e["ms"] = ms(t.at).into();
+            e
+        })
+        .collect();
+    serde_json::json!({ "base": base.is_some(), "events": list }).to_string()
+}
+
+/// Every node after the events up to `until` (see `Request::State`).
+fn state(
+    log: &Log,
+    until: Option<&str>,
+    now_ms: Option<f64>,
+    stale_after: Duration,
+) -> Result<String, ApiError> {
+    let events = &log.events;
+    let (slice, at) = match until {
+        None => (&events[..], events.last().map(|t| t.at)),
+        Some(id) => {
+            let pos = events
+                .iter()
+                .position(|t| t.event.id == id && !is_keyframe(&t.event))
+                .ok_or_else(|| ApiError::NotFound(format!("no event {id}")))?;
+            (&events[..=pos], Some(events[pos].at))
+        }
+    };
+    let now = match now_ms {
+        Some(ms) if ms >= 0.0 => SystemTime::UNIX_EPOCH + Duration::from_millis(ms as u64),
+        _ => at.unwrap_or(SystemTime::UNIX_EPOCH),
+    };
+    let (base, rest) = timeline::split_base(slice);
+    let graph = reducer::reduce_from(
+        base,
+        rest.iter().map(|t| (*t.event).clone()).collect(),
+        &Options { now, stale_after },
+    );
+    Ok(serde_json::json!({
+        "nodes": graph.nodes,
+        "roots": graph.roots,
+        "events": rest.len(),
+    })
+    .to_string())
+}
+
+/// What each event from `from` to `to` changed (see `Request::Changes`).
+fn changes(
+    events: &[Timed],
+    from: usize,
+    to: usize,
+    stale_after: Duration,
+) -> Result<String, ApiError> {
+    let (base, rest) = timeline::split_base(events);
+    if from > to || to >= rest.len() {
+        return Err(ApiError::NotFound(format!(
+            "no events {from} to {to} of {}",
+            rest.len()
+        )));
+    }
+    let mut replay = Replay::new(base);
+    for t in &rest[..from] {
+        replay.apply(&t.event);
+    }
+    let then = match from {
+        0 => events.first().filter(|_| base.is_some()).map(|t| t.at),
+        _ => Some(rest[from - 1].at),
+    }
+    .unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut prev = replay.graph(&Options {
+        now: then,
+        stale_after,
+    });
+    let before = serde_json::to_value(&prev.nodes).expect("serializable");
+    let mut out = Vec::with_capacity(to - from + 1);
+    for t in &rest[from..=to] {
+        replay.apply(&t.event);
+        let graph = replay.graph(&Options {
+            now: t.at,
+            stale_after,
+        });
+        let changed: Vec<&reducer::Node> = graph
+            .nodes
+            .values()
+            .filter(|n| prev.nodes.get(&n.id) != Some(*n))
+            .collect();
+        let removed: Vec<&str> = prev
+            .nodes
+            .keys()
+            .filter(|id| !graph.nodes.contains_key(*id))
+            .map(String::as_str)
+            .collect();
+        out.push(serde_json::json!({
+            "id": t.event.id,
+            "changed": changed,
+            "removed": removed,
+        }));
+        prev = graph;
+    }
+    Ok(serde_json::json!({ "before": before, "events": out }).to_string())
 }
 
 /// The moment to judge staleness from: the page's clock for a live log, or,
@@ -542,6 +689,113 @@ mod tests {
         append_text(&busy(3));
         append_text(&restart.replace(r#""restart":true,"#, ""));
         assert_eq!(query(r#"{"op":"info"}"#)["events"], 3);
+    }
+
+    /// The nodes `changes` gives, applied in turn to its `before`, are the
+    /// nodes `state` gives at each event: from the start of a log, partway
+    /// through, and from a keyframe a trimmed log starts at.
+    #[test]
+    fn changes_add_up_to_each_state() {
+        let (_, trimmed) = trim(&busy(47), 10);
+        for text in [busy(47), trimmed] {
+            reset();
+            append_text(&text);
+            let events = query(r#"{"op":"events"}"#)["events"].clone();
+            let n = events.as_array().unwrap().len();
+            for from in [0, n / 2] {
+                let to = n - 1;
+                let out = query(&format!(r#"{{"op":"changes","from":{from},"to":{to}}}"#));
+                let mut nodes = out["before"].as_object().unwrap().clone();
+                if from > 0 {
+                    let id = events[from - 1]["id"].as_str().unwrap();
+                    let then = query(&format!(r#"{{"op":"state","until":"{id}"}}"#));
+                    assert_eq!(serde_json::Value::Object(nodes.clone()), then["nodes"]);
+                }
+                for (i, step) in out["events"].as_array().unwrap().iter().enumerate() {
+                    let id = events[from + i]["id"].as_str().unwrap();
+                    assert_eq!(step["id"], id);
+                    for node in step["changed"].as_array().unwrap() {
+                        nodes.insert(node["id"].as_str().unwrap().to_string(), node.clone());
+                    }
+                    for gone in step["removed"].as_array().unwrap() {
+                        nodes.remove(gone.as_str().unwrap());
+                    }
+                    let want = query(&format!(r#"{{"op":"state","until":"{id}"}}"#));
+                    assert_eq!(
+                        serde_json::Value::Object(nodes.clone()),
+                        want["nodes"],
+                        "after {id}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `events` lists what's applied, in order, without the keyframe a log
+    /// starts from; `state` is every node, at an event or now, judged when
+    /// asked.
+    #[test]
+    fn events_and_state() {
+        reset();
+        append_text(LINES);
+        let events = query(r#"{"op":"events"}"#);
+        assert_eq!(events["base"], false);
+        let list = events["events"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["id"], "01K0000000000000000000000A");
+        assert_eq!(list[0]["type"], "session.started");
+        assert_eq!(list[0]["ms"], 1_790_330_400_000u64);
+        assert_eq!(list[1]["data"]["state"], "working");
+
+        let now = query(r#"{"op":"state"}"#);
+        assert_eq!(now["nodes"]["claude-code:s"]["state"], "working");
+        assert_eq!(now["roots"], serde_json::json!(["claude-code:s"]));
+        assert_eq!(now["events"], 2);
+        let first = query(r#"{"op":"state","until":"01K0000000000000000000000A"}"#);
+        assert_eq!(first["nodes"]["claude-code:s"]["state"], "idle");
+        assert_eq!(first["events"], 1);
+        // Judged an hour later, working and silent is stale.
+        let later = query(r#"{"op":"state","now_ms":1790334001000}"#);
+        assert_eq!(later["nodes"]["claude-code:s"]["stale"], true);
+        assert_eq!(now["nodes"]["claude-code:s"]["stale"], false);
+        assert_eq!(query(r#"{"op":"state","until":"nope"}"#)["status"], 404);
+
+        let (_, trimmed) = trim(&busy(47), 10);
+        reset();
+        append_text(&trimmed);
+        let events = query(r#"{"op":"events"}"#);
+        assert_eq!(events["base"], true);
+        assert_eq!(events["events"].as_array().unwrap().len(), 17);
+        assert!(
+            events["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["type"] != "keyframe")
+        );
+        assert_eq!(query(r#"{"op":"changes","from":3,"to":2}"#)["status"], 404);
+        assert_eq!(query(r#"{"op":"changes","from":0,"to":17}"#)["status"], 404);
+    }
+
+    /// An event that changes nothing (the same status again) changes no node.
+    #[test]
+    fn a_repeat_changes_nothing() {
+        reset();
+        append_text(LINES);
+        append_text(
+            &LINES
+                .replace("0000000B", "0000000C")
+                .replace("10:00:01", "10:00:02"),
+        );
+        let out = query(r#"{"op":"changes","from":1,"to":2}"#);
+        let steps = out["events"].as_array().unwrap();
+        assert_eq!(steps[0]["changed"].as_array().unwrap().len(), 1);
+        // (Its last event moved on, so the node changed: but only that.)
+        assert_eq!(
+            steps[1]["changed"][0]["last_event_at"],
+            "2026-09-25T10:00:02.000Z"
+        );
+        assert_eq!(steps[1]["removed"].as_array().unwrap().len(), 0);
     }
 
     #[test]

@@ -33,7 +33,7 @@ A live share (`agent-graph watch-remote`) belongs to an account, and only its ow
 
 - **Logging in** (`app/login`) is Firebase Authentication in the browser: Google, or an email and password (with account creation and password reset). The browser talks to Firebase directly, so signing in costs the site nothing but one request, and Firebase limits password guesses itself. The sign-in is traded for the site's own session cookie (`__session`, HttpOnly, two weeks: `lib/auth.ts`), which the server checks; the browser's Firebase sign-in is then dropped. A second cookie, holding nothing, tells the header to show Account rather than Log in.
 - **The CLI** logs in through the browser too, as an OAuth client on the same computer would, with PKCE (`lib/accounts.ts`, `src/account.rs`): it opens `/login?cli=<port>&state=…&challenge=…`, and once logged in (and asked to connect it) the page sends the browser to `http://127.0.0.1:<port>/callback` with a one-time code, which the CLI trades, with its secret, for a token of its own. It sends the token to make a share (`Authorization: Bearer`), which is then its account's.
-- **What's stored:** `users/{uid}` is made when an account first logs in to the site, and holds its email, when it was made (`createdAt`), last logged in (`lastLoginAt`: in a browser, or the CLI on a computer) and last shared live (`lastWatchAt`), and that latest share's id, sealed (the database never holds a log's id in the clear); `cli-tokens/{sha256}` each computer's login, and `cli-codes/{sha256}` codes not yet traded, by their SHA-256, never as they are. A share's owner is in its metadata, and bound into its tag.
+- **What's stored:** `users/{uid}` is made when an account first logs in to the site, and holds its email, when it was made (`createdAt`), last logged in (`lastLoginAt`: in a browser, or the CLI on a computer) and last shared live (`lastWatchAt`), and that latest share's id, sealed (the database never holds a log's id in the clear); `cli-tokens/{sha256}` each computer's login, and `cli-codes/{sha256}` codes not yet traded, by their SHA-256, never as they are; and `api-keys/{sha256}` its keys to the graph API (below), the same way. A share's owner is in its metadata, and bound into its tag.
 - **Paying** (`lib/billing.ts`, `lib/stripe.ts`), once Stripe's set up (`STRIPE.md`); without it, sharing live is free, and every account is `active`:
   - An account is made `unpaid`, and can share live for its first `FREE_TRIAL_DAYS` days anyway.
   - After that, only once it subscribes (`active`), monthly or yearly, on its account page, with Stripe Checkout. `STRIPE_MODE` says whether that's Stripe's test mode or live.
@@ -105,6 +105,16 @@ Firestore's security rules (`firestore.rules`) deny all direct access; only the 
 - **Cost:** a fraction of a millisecond per chunk.
 - **Not encrypted:** the metadata (when a log was created, how it was shared, the password _hash_, how many bytes it stores) and the chunk ids and lengths, which reveal a log's size. (When a log was created isn't authenticated either; nothing depends on it.)
 - **The server can still read logs.** It holds the key; this isn't end-to-end encryption.
+
+## The graph API
+
+`/api/v1` is a read-only REST API to an account's live shares, for its own servers and the AI systems they run: each graph's nodes and events, at any point in its retained history. `openapi.json` is its contract, and its reference is built from it at `/docs/reference` (`../api-docs`).
+
+- **Keys** (`lib/api/keys.ts`) are made and revoked on the account page (`app/account/api-keys.tsx`, `/api/account/api-keys`): `ag_sk_live_…` reads every graph the account owns, `ag_rk_live_…` only those chosen for it. They're stored by their SHA-256, and a revoked one stops working at once. A CLI login or API token isn't one.
+- **Reading a graph** runs the viewer's own reducer, the same `public/viewer/agent_graph.wasm`, on the server (`lib/api/reducer.ts`), so the API and the viewer always agree. Its `events`, `state` and `changes` requests are the API's (`../wasm/src/lib.rs`). Each server instance keeps the logs it's read (`lib/api/source.ts`), and reads only the chunks stored since, one query per request; it reads each whole again every 10 minutes, as live shares trim their starts.
+- **What each event changed** is worked out from the nodes the reducer says it changed (`lib/api/changes.ts`), with what that does to where nodes sit (counts of what's under them, a moved subtree's root and depth).
+- **Requests** (`lib/api/handler.ts`): a key, as a bearer token or Basic auth's username; a rate limit of 25 a second in bursts of 100, kept per server instance; an `ETag` on every reply (a `304` doesn't count against the limit); errors in one shape (`lib/api/errors.ts`). The endpoints are `lib/api/v1.ts`, with storage passed in.
+- **Tests:** `tests/api-v1*.test.mts` (unit: the endpoints, against a fake store holding the example logs), and `tests/api-v1-site.test.mjs` (against the running site and the emulators, with `test:api`).
 
 ## Develop
 

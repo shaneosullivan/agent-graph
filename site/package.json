@@ -22,11 +22,11 @@
     "prebuild": "node scripts/copy-help.mjs && node scripts/sync-viewer.mjs --if-present && node scripts/write-version.mjs && node scripts/build-api-docs.mjs",
     "pretypecheck": "node scripts/copy-help.mjs",
     "emulators": "firebase emulators:start --only firestore,auth --project demo-agent-graph",
-    "test:api": "node --test tests/api.test.mjs tests/accounts.test.mjs",
+    "test:api": "node --test tests/api.test.mjs tests/accounts.test.mjs tests/api-v1-site.test.mjs",
     "test:store": "node --experimental-strip-types --no-warnings --test --test-concurrency=1 tests/store.test.mjs tests/cleanup.test.mjs",
     "migrate:storage-ids": "node --experimental-strip-types --no-warnings scripts/migrate-storage-ids.mjs",
     "test:ci": "firebase emulators:exec --only firestore,auth --project demo-agent-graph 'bash scripts/ci-api-test.sh'",
-    "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/auth.test.mts tests/unlock.test.mts tests/viewer.test.mjs tests/wasm.test.mjs tests/site-source.test.mjs tests/trim.test.mts tests/cron.test.mts tests/billing.test.mts tests/analytics.test.mts tests/release.test.mts tests/app-version.test.mts tests/examples.test.mts tests/watching.test.mts"
+    "test:unit": "node --experimental-strip-types --no-warnings --test tests/encryption.test.mts tests/auth.test.mts tests/unlock.test.mts tests/viewer.test.mjs tests/wasm.test.mjs tests/site-source.test.mjs tests/trim.test.mts tests/cron.test.mts tests/billing.test.mts tests/analytics.test.mts tests/release.test.mts tests/app-version.test.mts tests/examples.test.mts tests/watching.test.mts tests/api-v1-parts.test.mts tests/api-v1-model.test.mts tests/api-v1.test.mts"
   },
   "dependencies": {
     "firebase": "12.19.0",

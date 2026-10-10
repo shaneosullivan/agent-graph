@@ -12,6 +12,7 @@ import {
 import {count} from "./analytics";
 import {deleteBreakagesOf} from "./cloud-diagnostics";
 import {safeEqual} from "./crypto";
+import {deleteKeysOf} from "./api/keys";
 import {openLogId, sealLogId} from "./encryption";
 import {firestore} from "./firebase";
 
@@ -157,11 +158,12 @@ export async function setSubscription(
 /**
  * Deletes what's kept for account `uid` (but its live shares, which
  * lib/cleanup.ts's deleteLogsOf deletes, and its login, which Firebase
- * keeps): its computers' logins, any login codes waiting, its clouds'
- * diagnostics reports, and its document.
+ * keeps): its computers' logins, any login codes waiting, its API keys,
+ * its clouds' diagnostics reports, and its document.
  */
 export async function deleteAccountRecords(uid: string): Promise<void> {
   await deleteBreakagesOf(uid);
+  await deleteKeysOf(uid);
   for (const collection of [tokens(), codes()]) {
     const mine = await collection.where("uid", "==", uid).get();
     await Promise.all(mine.docs.map(doc => doc.ref.delete()));

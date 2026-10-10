@@ -17,6 +17,7 @@ const SECTIONS = [
   {id: "live-sharing", label: "Live sharing", icon: <LiveIcon />},
   {id: "computers", label: "Computers", icon: <LaptopIcon />},
   {id: "api-tokens", label: "API tokens", icon: <KeyIcon />},
+  {id: "api-keys", label: "API keys", icon: <KeyIcon />},
   {id: "delete", label: "Delete account", icon: <AlertIcon />, danger: true},
 ];
 

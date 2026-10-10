@@ -9,6 +9,7 @@ import {
   type Subscription as Sub,
   subscriptionOf,
 } from "@/lib/accounts";
+import {keysOf} from "@/lib/api/keys";
 import {currentUser} from "@/lib/auth";
 import {breakagesOf} from "@/lib/cloud-diagnostics";
 import {type Billing, billingConfig, type Standing} from "@/lib/billing";
@@ -19,6 +20,7 @@ import {CopyCommand} from "../copy-command";
 import {SiteFooter} from "../site-footer";
 import {SiteHeader} from "../site-header";
 import {AccountNav} from "./account-nav";
+import {ApiKeys} from "./api-keys";
 import {
   ApiTokens,
   Computers,
@@ -67,7 +69,9 @@ export default async function Account({
     redirect("/account");
   }
   const billing = billingConfig();
-  const {computers, shares, sub, standing, hidden, now} = await load(user.uid);
+  const {computers, shares, keys, sub, standing, hidden, now} = await load(
+    user.uid,
+  );
   const machines = computers.filter(c => c.kind === "computer");
   const tokens = computers.filter(c => c.kind === "api");
   const running = shares.filter(s => now - s.at <= ALIVE_FOR_MS);
@@ -191,6 +195,25 @@ export default async function Account({
                 <ApiTokens tokens={tokens} />
               </Panel>
 
+              <Panel
+                id="api-keys"
+                icon={<KeyIcon />}
+                title="API keys"
+                description="Read-only keys to the graph API, for your own servers and the AI systems they run: they read your live shares' graphs, and nothing else. Keep them secret.">
+                <ApiKeys
+                  keys={keys.map(k => ({
+                    id: k.id,
+                    name: k.name,
+                    kind: k.kind,
+                    graphs: k.graphs?.map(g => `gph_${g}`) ?? null,
+                    shown: k.shown,
+                    createdAt: k.createdAt,
+                    usedAt: k.usedAt,
+                  }))}
+                  shares={shares.map(s => ({id: s.id, host: s.host}))}
+                />
+              </Panel>
+
               {hidden.length ? (
                 <Panel
                   id="cloud-problems"
@@ -227,14 +250,15 @@ export default async function Account({
 
 /** What the page shows of account `uid`, as of now (and when that is). */
 async function load(uid: string) {
-  const [computers, shares, sub, standing, hidden] = await Promise.all([
+  const [computers, shares, keys, sub, standing, hidden] = await Promise.all([
     computersOf(uid),
     sharesOf(uid),
+    keysOf(uid),
     subscriptionOf(uid),
     standingOf(uid),
     breakagesOf(uid, true),
   ]);
-  return {computers, shares, sub, standing, hidden, now: Date.now()};
+  return {computers, shares, keys, sub, standing, hidden, now: Date.now()};
 }
 
 /** One of the account's panels: its title and what it's for, then its body. */

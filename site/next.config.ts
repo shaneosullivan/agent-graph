@@ -21,6 +21,11 @@ const nextConfig: NextConfig = {
   env: {NEXT_PUBLIC_BUILD_ID: buildId()},
   // Logs are only read and written through the API, never exposed directly.
   poweredByHeader: false,
+  // The graph API runs the viewer's reducer (lib/api/reducer.ts), which it
+  // reads from public/: a function has only what it's told it needs.
+  outputFileTracingIncludes: {
+    "/api/v1/**": ["./public/viewer/agent_graph.wasm"],
+  },
   async rewrites() {
     // The API reference: a static site in public/docs/reference, built by
     // ../api-docs, each page an index.html in its own directory. A file that

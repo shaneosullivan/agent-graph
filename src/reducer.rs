@@ -54,7 +54,7 @@ pub enum NodeKind {
     Agent,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Node {
     pub id: String,
     pub kind: NodeKind,
@@ -311,6 +311,12 @@ impl Replay {
 
     pub fn apply(&mut self, e: &Envelope) {
         self.0.apply(e);
+    }
+
+    /// The graph the events applied so far make, judged at `opts.now`, as
+    /// `reduce` would make it from them. The replay carries on unchanged.
+    pub fn graph(&self, opts: &Options) -> Graph {
+        self.0.clone().finish(opts)
     }
 
     /// A keyframe of the state now: the state's JSON, packed

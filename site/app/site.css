@@ -1224,6 +1224,31 @@ body {
 .site .token-made p {
   margin: 6px 0;
 }
+/* Keys to the graph API, on the account page (app/account/api-keys.tsx):
+   what one can read, under its name. */
+.site .key-kind {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.site .key-kind legend {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.site .key-kind label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.site .key-kind .key-graph {
+  margin-left: 22px;
+  flex-wrap: wrap;
+}
 
 /* After deleting an account (app/deleted-notice.tsx). */
 .site .deleted-notice {
