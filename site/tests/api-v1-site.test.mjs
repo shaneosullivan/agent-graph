@@ -444,7 +444,15 @@ test("deleting an account takes its keys", async () => {
   await apiFails("/graphs", key, 401, "api_key_invalid");
 });
 
-test("the API showcase is served at /showcase, and its proxies need a key or a login", async () => {
+/** POST /api/showcase/key, as the showcase asks it. */
+const showcaseKeyOf = (source, headers = {}) =>
+  fetch(`${BASE}/api/showcase/key`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json", ...FROM_SITE, ...headers},
+    body: JSON.stringify({source}),
+  });
+
+test("the API showcase is served at /showcase, and hands out keys only as it should", async () => {
   for (const path of ["/showcase", "/showcase/g/explorer?graph=gph_x"]) {
     const res = await fetch(`${BASE}${path}`);
     assert.equal(res.status, 200, path);
@@ -452,27 +460,41 @@ test("the API showcase is served at /showcase, and its proxies need a key or a l
     assert.match(await res.text(), /Agent Graph API · showcase/, path);
   }
   // Without a login, there's no account of one's own to read.
-  const mine = await fetch(`${BASE}/showcase/api/mine/graphs`);
+  const mine = await showcaseKeyOf("mine");
   assert.equal(mine.status, 401);
   assert.equal((await mine.json()).error.code, "not_logged_in");
+  // Nor for another site.
+  const elsewhere = await showcaseKeyOf("demo", {Origin: "https://evil.test"});
+  assert.equal(elsewhere.status, 403);
   // Under CI, SHOWCASE_API_KEY isn't set (scripts/ci-api-test.sh).
   if (process.env.SHOWCASE_API_KEY) return;
-  const res = await fetch(`${BASE}/showcase/api/ag/graphs`);
-  assert.equal(res.status, 503);
-  assert.equal((await res.json()).error.code, "showcase_not_configured");
+  const demo = await showcaseKeyOf("demo");
+  assert.equal(demo.status, 503);
+  assert.equal((await demo.json()).error.code, "showcase_not_configured");
 });
 
-test("a logged-in browser reads its own graphs through the showcase", async () => {
+test("a logged-in browser is given a key to its own graphs, which isn't listed", async () => {
   const owner = await withCli();
   const log = await liveShare(owner);
-  const res = await fetch(`${BASE}/showcase/api/mine/graphs`, {
-    headers: {Cookie: owner.cookie},
-  });
+  const res = await showcaseKeyOf("mine", {Cookie: owner.cookie});
   assert.equal(res.status, 200, await res.clone().text());
-  assert.equal(res.headers.get("cache-control"), "private, no-cache");
-  const list = await res.json();
+  assert.equal(res.headers.get("cache-control"), "no-store");
+  const {key, expires} = await res.json();
+  assert.match(key, /^ag_sk_live_/);
+  const hour = 60 * 60 * 1000;
+  assert.ok(Math.abs(expires - (Date.now() + hour)) < 5 * 60 * 1000);
+
+  const graphs = await fetch(`${BASE}/api/v1/graphs`, {
+    headers: {Authorization: `Bearer ${key}`},
+  });
+  assert.equal(graphs.status, 200, await graphs.clone().text());
   assert.deepEqual(
-    list.data.map(g => g.id),
+    (await graphs.json()).data.map(g => g.id),
     [`gph_${log.id}`],
   );
+
+  const listed = await fetch(`${BASE}/api/account/api-keys`, {
+    headers: {Cookie: owner.cookie},
+  });
+  assert.deepEqual((await listed.json()).keys, [], "not on the account page");
 });

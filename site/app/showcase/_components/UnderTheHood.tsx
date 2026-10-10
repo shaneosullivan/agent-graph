@@ -32,11 +32,11 @@ export function UnderTheHood({apiUrl}: {apiUrl: string}) {
       </summary>
       <div className="hood-body">
         <p className="muted" style={{fontSize: 13, marginTop: 0}}>
-          Each row is one request to <code>{apiUrl}</code>, made by the
-          site&rsquo;s server{" "}
+          Each row is one request to <code>{apiUrl}</code>, made by this page,
+          in your browser,{" "}
           {source === "demo"
             ? "with the demo\u2019s key"
-            : "as your account, as you\u2019re logged in"}
+            : "with a key made for your account when you switched, which lasts an hour"}
           . Click one to copy it as a <code>curl</code> command and run it
           yourself, with a key of your own.
         </p>

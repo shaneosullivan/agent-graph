@@ -1,7 +1,9 @@
 "use client";
 
-// Calling the Agent Graph API from the browser, by way of the site's proxy
-// (app/showcase/api/ag), which adds the demo account's key. Every call is recorded, so each
+// Calling the Agent Graph API from the browser, as any integration would:
+// GET https://agentgraph.chofter.com/api/v1/…, with a key in the
+// Authorization header. (Here, the site's own /api/v1, and a key it hands
+// the page when it starts: keyFor, below.) Every call is recorded, so each
 // page can show exactly what it asked the API for, and how to ask it
 // yourself.
 
@@ -16,7 +18,7 @@ import {
 } from "react";
 
 import {setNow} from "./format";
-import {API_BASES, useSource} from "./source";
+import {type Source, useSource} from "./source";
 import type {ApiErrorBody, Graph, List} from "./types";
 
 export type Query = Record<
@@ -103,6 +105,58 @@ export function useCallLog(): CallLog {
  */
 const pins = new Map<string, Promise<{id: string; at: number} | null>>();
 
+/** The API: this site's own (in production, https://agentgraph.chofter.com/api/v1). */
+const API_URL = "/api/v1";
+
+/**
+ * The key to read `source`'s graphs with, asked for once and kept in
+ * memory (never stored): the demo's, or one made for this browser's account
+ * that lasts an hour (lib/showcase.ts), asked for again as it runs out.
+ * Your own integration would have a key of its own instead: see your
+ * account page, under API keys.
+ */
+const keys = new Map<
+  Source,
+  {key: Promise<string>; expires: number | null | undefined}
+>();
+
+function keyFor(source: Source): Promise<string> {
+  const held = keys.get(source);
+  // One being asked for (expires unknown yet), or one that's good for a while.
+  if (
+    held &&
+    (held.expires === undefined ||
+      held.expires === null ||
+      held.expires - Date.now() > 60_000)
+  ) {
+    return held.key;
+  }
+  const entry: {key: Promise<string>; expires: number | null | undefined} = {
+    key: Promise.resolve(""),
+    expires: undefined,
+  };
+  entry.key = fetch("/api/showcase/key", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source}),
+  })
+    .then(async res => {
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new AgentGraphError(res.status, body);
+      }
+      entry.expires = body.expires;
+      return body.key as string;
+    })
+    .catch(err => {
+      // Asked for again next time.
+      keys.delete(source);
+      throw err;
+    });
+  keys.set(source, entry);
+  return entry.key;
+}
+
 /** The reads of a graph's state at a moment: the graph, its nodes, a node, a search (not its events). */
 const PINNED = /^\/graphs\/([^/]+)(\/nodes(\/[^/]+)?)?$/;
 
@@ -144,14 +198,16 @@ export function useApi() {
         }
       }
       const full = withQuery(path, query);
+      const key = await keyFor(source);
       const started = performance.now();
-      const res = await fetch(`${API_BASES[source]}${full}`, {
-        headers: opts.etag ? {"If-None-Match": opts.etag} : {},
+      const res = await fetch(`${API_URL}${full}`, {
+        headers: {
+          Authorization: `Bearer ${key}`,
+          ...(opts.etag ? {"If-None-Match": opts.etag} : {}),
+        },
         cache: "no-store",
       });
-      const ms =
-        Number(res.headers.get("x-upstream-ms")) ||
-        Math.round(performance.now() - started);
+      const ms = Math.round(performance.now() - started);
       record({
         path: full,
         status: res.status,

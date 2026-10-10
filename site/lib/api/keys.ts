@@ -1,13 +1,20 @@
 // API keys (site/openapi.json, "Authentication"): read-only keys to the
 // graph API, made and revoked on the account page.
 //
-//   api-keys/{sha256}  { uid, kind, graphs, name, last4, version, createdAt, usedAt }
+//   api-keys/{sha256}  { uid, kind, graphs, name, last4, version, createdAt, usedAt,
+//                        browser?, expireAt? }
 //
 // Stored by their SHA-256, as the CLI's tokens are (lib/accounts.ts): the
 // database alone can't be used to read anyone's graphs. A secret key
 // (`ag_sk_live_…`) reads every graph its account owns; a restricted one
 // (`ag_rk_live_…`), only those it was made for (`graphs`, log ids). Each is
 // pinned to the API version current when it was made.
+//
+// A browser key (`browser: true`) is made for a browser that's logged in,
+// for the API showcase to read its account's graphs with
+// (app/api/showcase/key): a secret key that stops working an hour after
+// it's made (`expireAt`, which a Firestore TTL policy can clear away). It
+// isn't listed on the account page, nor counted against MOST_API_KEYS.
 
 import {createHash, randomBytes} from "node:crypto";
 
@@ -44,6 +51,12 @@ export const MOST_API_KEYS = 20;
 export const MOST_KEY_GRAPHS = 50;
 
 export const KEY_PATTERN = /^ag_(sk|rk)_live_[A-Za-z0-9]{32}$/;
+
+/** How long a browser key works for. */
+export const BROWSER_KEY_MS = 60 * 60 * 1000;
+
+/** The most browser keys an account keeps at once: the oldest go first. */
+const MOST_BROWSER_KEYS = 20;
 
 /** How often, at most, a key's `usedAt` is brought up to date. */
 const USED_AT_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -86,8 +99,8 @@ export async function newKey(
     graphs,
   }: {name: string; kind: KeyKind; graphs: Array<string> | null},
 ): Promise<{key: string; info: KeyInfo} | null> {
-  const mine = await keys().where("uid", "==", uid).count().get();
-  if (mine.data().count >= MOST_API_KEYS) {
+  const mine = await keys().where("uid", "==", uid).get();
+  if (mine.docs.filter(d => !d.get("browser")).length >= MOST_API_KEYS) {
     return null;
   }
   const key = `ag_${kind === "secret" ? "sk" : "rk"}_live_${random62(32)}`;
@@ -119,7 +132,51 @@ export async function newKey(
   };
 }
 
-/** The key `secret` is, if it's one that hasn't been revoked. */
+/**
+ * A new browser key for account `uid` (see above): read-only, reading every
+ * graph it owns, for `BROWSER_KEY_MS`. Its others that have stopped
+ * working are deleted, and the oldest if it has too many.
+ */
+export async function newBrowserKey(
+  uid: string,
+  now = Date.now(),
+): Promise<{key: string; expires: number}> {
+  const theirs = (await keys().where("uid", "==", uid).get()).docs
+    .filter(d => d.get("browser"))
+    .sort(
+      (a, b) =>
+        (a.get("createdAt") as Timestamp).toMillis() -
+        (b.get("createdAt") as Timestamp).toMillis(),
+    );
+  const live = theirs.filter(
+    d => (d.get("expireAt") as Timestamp).toMillis() > now,
+  );
+  const gone = [
+    ...theirs.filter(d => !live.includes(d)),
+    ...live.slice(0, Math.max(0, live.length - (MOST_BROWSER_KEYS - 1))),
+  ];
+  await Promise.all(gone.map(d => d.ref.delete()));
+
+  const key = `ag_sk_live_${random62(32)}`;
+  const expires = now + BROWSER_KEY_MS;
+  await keys()
+    .doc(hash(key))
+    .create({
+      uid,
+      kind: "secret",
+      graphs: null,
+      name: "API showcase (a browser)",
+      shown: shownKey(key),
+      version: API_VERSION,
+      createdAt: Timestamp.fromMillis(now),
+      usedAt: null,
+      browser: true,
+      expireAt: Timestamp.fromMillis(expires),
+    });
+  return {key, expires};
+}
+
+/** The key `secret` is, if it's one that hasn't been revoked (or run out). */
 export async function keyOf(secret: string): Promise<Key | null> {
   if (!KEY_PATTERN.test(secret)) {
     return null;
@@ -135,7 +192,11 @@ export async function keyOf(secret: string): Promise<Key | null> {
     graphs: Array<string> | null;
     version?: string;
     usedAt?: Timestamp | null;
+    expireAt?: Timestamp;
   };
+  if (data.expireAt && data.expireAt.toMillis() <= Date.now()) {
+    return null;
+  }
   if (!data.usedAt || Date.now() - data.usedAt.toMillis() > USED_AT_EVERY_MS) {
     await ref.update({usedAt: Timestamp.now()}).catch(() => {});
   }
@@ -152,6 +213,7 @@ export async function keyOf(secret: string): Promise<Key | null> {
 export async function keysOf(uid: string): Promise<Array<KeyInfo>> {
   const snap = await keys().where("uid", "==", uid).get();
   return snap.docs
+    .filter(doc => !doc.get("browser"))
     .map(doc => {
       const d = doc.data();
       return {

@@ -20,9 +20,9 @@ export const metadata: Metadata = {
 const API_URL = `${(process.env.NEXT_PUBLIC_SITE_URL || "https://agentgraph.chofter.com").replace(/\/+$/, "")}/api/v1`;
 
 /**
- * The API showcase: a demo account's graphs, read through the graph API
- * (by way of the site's proxy, app/showcase/api/ag, which holds the demo's
- * key: lib/showcase.ts), with what each view shows, why, and the calls it
+ * The API showcase: a demo account's graphs (or, logged in, your own),
+ * read from the browser through the graph API with a key it's handed
+ * (lib/showcase.ts), with what each view shows, why, and the calls it
  * makes. Its look is its own, scoped to this wrapper (showcase.css).
  */
 export default function ShowcaseLayout({

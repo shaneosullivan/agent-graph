@@ -25,7 +25,6 @@ const nextConfig: NextConfig = {
   // reads from public/: a function has only what it's told it needs.
   outputFileTracingIncludes: {
     "/api/v1/**": ["./public/viewer/agent_graph.wasm"],
-    "/showcase/api/**": ["./public/viewer/agent_graph.wasm"],
   },
   async rewrites() {
     // The API reference: a static site in public/docs/reference, built by

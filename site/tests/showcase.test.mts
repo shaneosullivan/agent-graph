@@ -1,194 +1,63 @@
-// lib/showcase.ts: the API showcase's proxy (/showcase/api/ag/…), with the
-// API it calls in-process faked.
+// lib/showcase.ts: the keys the API showcase reads graphs with, from the
+// browser (POST /api/showcase/key), with making one faked.
 
 import assert from "node:assert/strict";
 import {register} from "node:module";
 import {test} from "node:test";
 
-import type {Dispatch} from "../lib/showcase.ts";
-
 register("../scripts/resolve-ts.mjs", import.meta.url);
-const {mineProxy, showcaseProxy} = await import("../lib/showcase.ts");
+const {showcaseKeyReply} = await import("../lib/showcase.ts");
 
-const KEY = "ag_rk_live_demo";
+const DEMO = "ag_rk_live_demo";
 
-/** A fake API: records what it's asked, and answers `reply`. */
-function api(reply: () => Response) {
-  const asked: Array<{
-    url: string;
-    headers: Headers;
-    path: Array<string>;
-    as?: {uid: string; kind: string; graphs: Array<string> | null};
-  }> = [];
-  const dispatch: Dispatch = async (req, path, as) => {
-    asked.push({url: req.url, headers: req.headers, path, as});
-    return reply();
+/** A fake key maker: records whom it made keys for. */
+function minter() {
+  const made: Array<string> = [];
+  const mint = async (uid: string) => {
+    made.push(uid);
+    return {key: `ag_sk_live_for_${uid}`, expires: 1234};
   };
-  return {asked, dispatch};
+  return {made, mint};
 }
 
-const ok = (headers: Record<string, string> = {}) =>
-  new Response('{"object":"graph"}', {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      ETag: 'W/"abc"',
-      "Request-Id": "req_1",
-      "RateLimit-Remaining": "99",
-      "Cache-Control": "private, no-cache",
-      "Set-Cookie": "nope=1",
-      ...headers,
-    },
-  });
+test("the demo's key is the site's, for anyone", async () => {
+  const {made, mint} = minter();
+  const res = await showcaseKeyReply("demo", {demoKey: DEMO, uid: null, mint});
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {key: DEMO, expires: null});
+  assert.equal(res.headers.get("cache-control"), "no-store");
+  assert.equal(made.length, 0);
+});
 
-test("without a key, it says the showcase isn't set up, and calls nothing", async () => {
-  const {asked, dispatch} = api(ok);
-  const res = await showcaseProxy(
-    new Request("https://site.test/showcase/api/ag/graphs"),
-    ["graphs"],
-    {key: null, dispatch},
-  );
+test("without a demo key, the showcase says it isn't set up", async () => {
+  const {mint} = minter();
+  const res = await showcaseKeyReply("demo", {demoKey: null, uid: "u", mint});
   assert.equal(res.status, 503);
   assert.equal((await res.json()).error.code, "showcase_not_configured");
+});
+
+test("a browser's own key is made for its account, only once it's logged in", async () => {
+  const {made, mint} = minter();
+  const out = await showcaseKeyReply("mine", {demoKey: DEMO, uid: null, mint});
+  assert.equal(out.status, 401);
+  assert.equal((await out.json()).error.code, "not_logged_in");
+  assert.equal(made.length, 0);
+
+  const res = await showcaseKeyReply("mine", {demoKey: DEMO, uid: "u1", mint});
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    key: "ag_sk_live_for_u1",
+    expires: 1234,
+  });
   assert.equal(res.headers.get("cache-control"), "no-store");
-  assert.equal(asked.length, 0);
+  assert.deepEqual(made, ["u1"]);
 });
 
-test("only /graphs is read", async () => {
-  const {asked, dispatch} = api(ok);
-  const res = await showcaseProxy(
-    new Request("https://site.test/showcase/api/ag/account"),
-    ["account"],
-    {key: KEY, dispatch},
-  );
-  assert.equal(res.status, 404);
-  assert.equal(asked.length, 0);
-});
-
-test("it asks the API with the demo's key, and passes back what it should", async () => {
-  const {asked, dispatch} = api(ok);
-  const res = await showcaseProxy(
-    new Request(
-      "https://site.test/showcase/api/ag/graphs/gph_1/nodes?expand[]=parent&limit=5",
-      {headers: {"If-None-Match": 'W/"old"', Authorization: "Bearer theirs"}},
-    ),
-    ["graphs", "gph_1", "nodes"],
-    {key: KEY, dispatch},
-  );
-  assert.equal(asked.length, 1);
-  const [call] = asked;
-  assert.equal(
-    call.url,
-    "https://site.test/api/v1/graphs/gph_1/nodes?expand[]=parent&limit=5",
-  );
-  assert.deepEqual(call.path, ["graphs", "gph_1", "nodes"]);
-  assert.equal(call.headers.get("authorization"), `Bearer ${KEY}`);
-  assert.equal(call.headers.get("if-none-match"), 'W/"old"');
-
-  assert.equal(res.status, 200);
-  assert.equal(await res.text(), '{"object":"graph"}');
-  assert.equal(res.headers.get("etag"), 'W/"abc"');
-  assert.equal(res.headers.get("request-id"), "req_1");
-  assert.equal(res.headers.get("ratelimit-remaining"), "99");
-  assert.match(res.headers.get("x-upstream-ms") ?? "", /^\d+$/);
-  assert.equal(
-    res.headers.get("set-cookie"),
-    null,
-    "only the headers it means to",
-  );
-  assert.match(
-    res.headers.get("cache-control") ?? "",
-    /^public, .*s-maxage=60/,
-  );
-});
-
-test("a fixed point in history is cached for good; an error not at all", async () => {
-  const fixed = api(() =>
-    ok({"Cache-Control": "private, max-age=31536000, immutable"}),
-  );
-  const res = await showcaseProxy(
-    new Request("https://site.test/showcase/api/ag/graphs/gph_1?as_of=evt_1"),
-    ["graphs", "gph_1"],
-    {key: KEY, dispatch: fixed.dispatch},
-  );
-  assert.equal(
-    res.headers.get("cache-control"),
-    "public, max-age=31536000, immutable",
-  );
-
-  const failing = api(
-    () =>
-      new Response('{"error":{}}', {
-        status: 404,
-        headers: {"Cache-Control": "no-store"},
-      }),
-  );
-  const missing = await showcaseProxy(
-    new Request("https://site.test/showcase/api/ag/graphs/gph_x"),
-    ["graphs", "gph_x"],
-    {key: KEY, dispatch: failing.dispatch},
-  );
-  assert.equal(missing.status, 404);
-  assert.equal(missing.headers.get("cache-control"), "no-store");
-});
-
-test("a 304 is passed back without a body", async () => {
-  const {dispatch} = api(
-    () => new Response(null, {status: 304, headers: {ETag: 'W/"abc"'}}),
-  );
-  const res = await showcaseProxy(
-    new Request("https://site.test/showcase/api/ag/graphs", {
-      headers: {"If-None-Match": 'W/"abc"'},
-    }),
-    ["graphs"],
-    {key: KEY, dispatch},
-  );
-  assert.equal(res.status, 304);
-  assert.equal(await res.text(), "");
-  assert.equal(res.headers.get("etag"), 'W/"abc"');
-});
-
-test("a browser that isn't logged in can't read its own graphs", async () => {
-  const {asked, dispatch} = api(ok);
-  const res = await mineProxy(
-    new Request("https://site.test/showcase/api/mine/graphs"),
-    ["graphs"],
-    {uid: null, dispatch},
-  );
-  assert.equal(res.status, 401);
-  assert.equal((await res.json()).error.code, "not_logged_in");
-  assert.equal(asked.length, 0);
-});
-
-test("a logged-in browser reads as its own account, and nothing's cached for anyone else", async () => {
-  const {asked, dispatch} = api(ok);
-  const res = await mineProxy(
-    new Request(
-      "https://site.test/showcase/api/mine/graphs/gph_1?as_of=evt_1",
-      {
-        headers: {Authorization: "Bearer ag_sk_live_someone_elses"},
-      },
-    ),
-    ["graphs", "gph_1"],
-    {uid: "user-1", dispatch},
-  );
-  assert.equal(res.status, 200);
-  const [call] = asked;
-  assert.equal(call.url, "https://site.test/api/v1/graphs/gph_1?as_of=evt_1");
-  assert.equal(call.as?.uid, "user-1");
-  assert.equal(call.as?.kind, "secret");
-  assert.equal(call.as?.graphs, null);
-  assert.notEqual(
-    call.headers.get("authorization"),
-    "Bearer ag_sk_live_someone_elses",
-    "the browser's own Authorization isn't passed on",
-  );
-  assert.equal(res.headers.get("cache-control"), "private, no-cache");
-
-  const other = await mineProxy(
-    new Request("https://site.test/showcase/api/mine/account"),
-    ["account"],
-    {uid: "user-1", dispatch},
-  );
-  assert.equal(other.status, 404);
+test("anything else isn't a source", async () => {
+  const {made, mint} = minter();
+  for (const source of [undefined, "", "theirs", 1]) {
+    const res = await showcaseKeyReply(source, {demoKey: DEMO, uid: "u", mint});
+    assert.equal(res.status, 400);
+  }
+  assert.equal(made.length, 0);
 });

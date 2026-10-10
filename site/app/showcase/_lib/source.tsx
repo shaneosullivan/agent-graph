@@ -2,9 +2,8 @@
 
 // Whose graphs the showcase reads: the demo account's, always to begin
 // with; or, for a browser that's logged in, its own account's, if it
-// switches (the toggle in the Shell). Each through a proxy of its own
-// (lib/showcase.ts): the demo's with the site's key, cached for everyone;
-// the account's by its session, for it alone.
+// switches (the toggle in the Shell). Each with a key of its own
+// (client.tsx `keyFor`).
 
 import {
   createContext,
@@ -18,12 +17,6 @@ import {
 import {setNow} from "./format";
 
 export type Source = "demo" | "mine";
-
-/** Where each source's calls go. */
-export const API_BASES: Record<Source, string> = {
-  demo: "/showcase/api/ag",
-  mine: "/showcase/api/mine",
-};
 
 type Sourcing = {
   source: Source;
