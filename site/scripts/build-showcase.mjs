@@ -53,7 +53,9 @@ const env = {
 };
 
 if (!existsSync(resolve(app, "node_modules"))) {
-  run(["ci", "--no-audit", "--no-fund"]);
+  // Its devDependencies too (TypeScript, which `next build` needs), even
+  // where NODE_ENV=production would leave them out, as on Vercel.
+  run(["ci", "--include=dev", "--no-audit", "--no-fund"]);
 }
 run(["run", "build"]);
 
