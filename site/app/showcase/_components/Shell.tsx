@@ -247,19 +247,21 @@ function GraphNavHere({path}: {path: string}) {
   return <GraphNav graph={useGraph()} path={path} />;
 }
 
-/** Each view of the graph the address names (none to go to until it names one). */
+/** Each view of the graph the address names (or, until it names one, of the first). */
 function GraphNav({graph, path}: {graph: string | null; path: string}) {
   return (
     <>
       <nav className="nav-group">
-        <h4>{graph ? "This graph" : "Pick a graph first"}</h4>
+        <h4>{graph ? "This graph" : "Views"}</h4>
         {SECTIONS.map(s => {
           const view = `/showcase/g${s.slug ? `/${s.slug}` : ""}`;
           return (
             <Link
               key={s.slug}
-              href={graph ? graphHref(graph, s.slug) : "#"}
-              className={`nav-link ${graph && path === view ? "active" : ""} ${graph ? "" : "disabled"}`}>
+              // Without a graph yet, the view opens on the first one
+              // (_lib/graph.tsx).
+              href={graph ? graphHref(graph, s.slug) : view}
+              className={`nav-link ${path === view ? "active" : ""}`}>
               <span className="icon">{s.icon}</span> {s.label}
             </Link>
           );

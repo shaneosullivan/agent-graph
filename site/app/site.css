@@ -249,6 +249,18 @@ body {
   .site .top nav .menu-panel a:focus-visible {
     background: var(--panel-2);
   }
+  /* Pages under a link ("Docs"), indented beneath it. */
+  .site .menu-panel ul.menu-under {
+    margin: 0 0 4px 12px;
+    padding-left: 10px;
+    border-left: 1px solid var(--line);
+  }
+  .site .top nav .menu-panel .menu-under a {
+    padding: 9px 12px;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--muted);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .site .menu-backdrop,
@@ -263,6 +275,55 @@ body {
 }
 .site .top nav a:hover {
   color: var(--text);
+}
+
+/* A header link with more under it ("Docs"): a dropdown, on hover or focus
+   (app/site-header.tsx). On a narrow screen they're in the menu instead. */
+.site .nav-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+.site .nav-dropdown-list {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  z-index: 20;
+  display: none;
+  min-width: 170px;
+  margin-top: 8px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  transform: translateX(-50%);
+}
+/* Bridges the gap to the list, so moving onto it keeps it open. */
+.site .nav-dropdown-list::before {
+  content: "";
+  position: absolute;
+  inset: -10px 0 auto;
+  height: 10px;
+}
+.site .nav-dropdown:hover .nav-dropdown-list,
+.site .nav-dropdown:focus-within .nav-dropdown-list {
+  display: block;
+}
+.site .top nav .nav-dropdown-list a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 7px;
+  white-space: nowrap;
+  color: var(--text);
+}
+.site .top nav .nav-dropdown-list a:hover,
+.site .top nav .nav-dropdown-list a:focus-visible {
+  background: var(--panel-2);
+}
+@media (max-width: 640px) {
+  .site .nav-dropdown {
+    display: none;
+  }
 }
 
 .site .hero {

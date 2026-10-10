@@ -3,8 +3,11 @@
 // Which graph a view is of: `?graph=gph_…` in its address.
 
 import Link from "next/link";
-import {useSearchParams} from "next/navigation";
-import {Suspense} from "react";
+import {usePathname, useRouter, useSearchParams} from "next/navigation";
+import {Suspense, useEffect, useState} from "react";
+
+import {useApi} from "./client";
+import type {Graph, List} from "./types";
 
 /** The graph the address names, if it names one. */
 export function useGraph(): string | null {
@@ -37,11 +40,43 @@ export function GraphPage({
 function WithGraph({render}: {render: (graph: string) => React.ReactNode}) {
   const graph = useGraph();
   if (!graph) {
-    return (
-      <div className="empty">
-        No graph chosen. <Link href="/showcase">Pick one</Link>.
-      </div>
-    );
+    return <FirstGraph />;
   }
   return <>{render(graph)}</>;
+}
+
+/**
+ * A view opened without a graph (from the menu, before one's been picked):
+ * the same view, of the first graph listed.
+ */
+function FirstGraph() {
+  const {get} = useApi();
+  const router = useRouter();
+  const view = usePathname().replace(/^\/showcase\/g\/?/, "");
+  const [none, setNone] = useState(false);
+  useEffect(() => {
+    let live = true;
+    get<List<Graph>>("/graphs", {limit: 1}).then(
+      ({data}) => {
+        const first = data?.data[0]?.id;
+        if (!live) {
+          return;
+        }
+        if (first) {
+          router.replace(graphHref(first, view));
+        } else {
+          setNone(true);
+        }
+      },
+      () => live && setNone(true),
+    );
+    return () => {
+      live = false;
+    };
+  }, [get, router, view]);
+  return none ? (
+    <div className="empty">
+      There&rsquo;s no graph to show yet. <Link href="/showcase">Back</Link>.
+    </div>
+  ) : null;
 }

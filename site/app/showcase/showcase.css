@@ -1,6 +1,15 @@
 /* The API showcase (/showcase): its own look, dark, scoped to its
    wrapper (app/showcase/layout.tsx) so it never reaches the rest of the
    site. */
+
+/* The page it's on: no browser margin around it (the site's own pages lose
+   theirs in site.css, which isn't loaded here), and its dark behind it,
+   where a phone's page bounces past its ends. */
+html:has(.showcase),
+body:has(.showcase) {
+  margin: 0;
+  background: #090b11;
+}
 .showcase {
   --bg: #090b11;
   --bg-2: #0d1018;

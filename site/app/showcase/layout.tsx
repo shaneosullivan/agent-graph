@@ -1,6 +1,6 @@
 import "./showcase.css";
 
-import type {Metadata} from "next";
+import type {Metadata, Viewport} from "next";
 import {Inter, JetBrains_Mono} from "next/font/google";
 
 import {Shell} from "./_components/Shell";
@@ -15,6 +15,9 @@ export const metadata: Metadata = {
   description:
     "What your coding agents' graphs tell you, and what you can build on the Agent Graph API: a demo account's graphs, read through it.",
 };
+
+/** A phone's browser bars, the showcase's dark rather than the site's light. */
+export const viewport: Viewport = {themeColor: "#090b11"};
 
 /** The API, as the curl commands under "Under the hood" call it. */
 const API_URL = `${(process.env.NEXT_PUBLIC_SITE_URL || "https://agentgraph.chofter.com").replace(/\/+$/, "")}/api/v1`;

@@ -1,6 +1,8 @@
 "use client";
 
 import {link} from "@/lib/links";
+
+import type {NavLink} from "./site-header";
 import {
   type ReactNode,
   useEffect,
@@ -20,7 +22,7 @@ export function SiteMenu({
   links,
   children,
 }: {
-  links: Array<{href: string; label: string}>;
+  links: Array<NavLink>;
   children?: ReactNode;
 }) {
   const admin = useSyncExternalStore(
@@ -106,6 +108,17 @@ export function SiteMenu({
               <a {...link(item.href)} onClick={close}>
                 {item.label}
               </a>
+              {"under" in item && item.under ? (
+                <ul className="menu-under">
+                  {item.under.map(u => (
+                    <li key={u.href}>
+                      <a {...link(u.href)} onClick={close}>
+                        {u.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </li>
           ))}
         </ul>
