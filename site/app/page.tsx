@@ -94,7 +94,10 @@ export default function Home() {
                 run it completely locally, it starts a local web server that you
                 use on your computer.
               </p>
-              <YouTubeVideo id="vafHas5qZQg" title="Agent Graph, in action" />
+              <YouTubeVideo
+                id="XCxZLMM4EdI"
+                title="Agent Graph: lead your agentic army"
+              />
               <h3>What about when I'm away from my computer?</h3>
               <p>
                 To keep up with your agents on the move, you simply run{" "}
