@@ -11,6 +11,12 @@ Records how AI coding sessions relate to each other: which session spawned which
 
 Supported so far: **Claude Code**, **Codex** and **Cursor**. Runs on Windows, macOS and Linux.
 
+<p align="center">
+  <a href="https://youtu.be/XCxZLMM4EdI"><img src="https://img.youtube.com/vi/XCxZLMM4EdI/maxresdefault.jpg" width="720" alt="Watch the launch video: Agent Graph, lead your agentic army (1:45, on YouTube)"></a>
+  <br>
+  <a href="https://youtu.be/XCxZLMM4EdI">Watch the launch video</a> (1:45)
+</p>
+
 See [docs/idea.md](docs/idea.md) for the goal and [docs/design.md](docs/design.md) for how it works.
 
 ## Install
