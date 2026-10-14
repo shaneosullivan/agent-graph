@@ -361,7 +361,9 @@ function CursorCloudSteps() {
         the Cursor app). Its hooks install agent-graph on its machine, then
         record the agent and its subagents and share them live: watch them at{" "}
         <a href="/watch">/watch</a>, where they&rsquo;re labelled &ldquo;Cursor
-        cloud&rdquo;, with the names Cursor gives them.
+        cloud&rdquo;, with the names Cursor gives them. Cursor runs no hooks for
+        a new agent&rsquo;s first message, so it&rsquo;s recorded from the
+        second.
         <span className="install-or">
           Nothing at /watch? Ask the agent to run{" "}
           <code>~/.local/bin/agent-graph diagnostics</code>, which also says
