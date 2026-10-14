@@ -28,7 +28,7 @@ Not documented, and not answerable from Codex's source (which has only the clien
 Everything here is done at chatgpt.com/codex (or the Codex app), in a cloud environment for any repository you don't mind a throwaway task in.
 
 1. **Open the environment's configuration** (Environment configuration, for the environment you'll use) and:
-   - under internet access, turn on "Allow Codex to access internet", choose Custom domains only, and add `agentgraph.chofter.com`;
+   - under internet access, turn on "Allow Codex to access internet", choose Custom domains only, and add `agent-graph.net`;
    - add an environment variable `AGENT_GRAPH_PROBE=plain`, and a network secret `AGENT_GRAPH_PROBE_SECRET` with any made-up value (not a real token);
    - set the install script to:
      ```bash
@@ -36,7 +36,7 @@ Everything here is done at chatgpt.com/codex (or the Codex app), in a cloud envi
      (while true; do date >> ~/.agent-graph-probe/alive.txt; sleep 5; done) >/dev/null 2>&1 &
      ```
 2. **Start a task** in that environment with this prompt, and paste its whole answer back to me:
-   > Run each of these shell commands and show me their complete output, without changing anything: `echo HOME=$HOME CODEX_HOME=$CODEX_HOME; id; hostname; env | sort`; `ls -la ~ ~/.codex ~/.agent-graph-probe`; `cat ~/.agent-graph-probe/setup-env.txt`; `tail -3 ~/.agent-graph-probe/alive.txt; date`; `cat ~/.codex/config.toml`; `find ~/.codex -maxdepth 4 | head -50`; `codex --version; which codex`; `ps aux | head -40`; `curl -sS -o /dev/null -w '%{http_code}\n' https://agentgraph.chofter.com/install.sh`; `curl -sS -o /dev/null -w '%{http_code}\n' https://example.com`.
+   > Run each of these shell commands and show me their complete output, without changing anything: `echo HOME=$HOME CODEX_HOME=$CODEX_HOME; id; hostname; env | sort`; `ls -la ~ ~/.codex ~/.agent-graph-probe`; `cat ~/.agent-graph-probe/setup-env.txt`; `tail -3 ~/.agent-graph-probe/alive.txt; date`; `cat ~/.codex/config.toml`; `find ~/.codex -maxdepth 4 | head -50`; `codex --version; which codex`; `ps aux | head -40`; `curl -sS -o /dev/null -w '%{http_code}\n' https://agent-graph.net/install.sh`; `curl -sS -o /dev/null -w '%{http_code}\n' https://example.com`.
 
 That answers 2 to 5, and says whether the network allowlist works as documented. Question 1 (hooks) and 6 (the secret in a header) need step 2's build, and a second task.
 
@@ -47,7 +47,7 @@ That answers 2 to 5, and says whether the network allowlist works as documented.
 - **The install script doesn't see `CODEX_HOME`**: it's only set for the task. Anything the install script writes for Codex must name `/opt/codex` itself.
 - **Network secrets are for the install script only**: `AGENT_GRAPH_PROBE_SECRET` had its real value there, and wasn't in the task's environment at all (no placeholder). Plain environment variables are in both.
 - **What marks Codex's cloud:** `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_web_agent` (also `CODEX_CI=1`), in the task only.
-- **The allowlist works:** `agentgraph.chofter.com` gave 200, `example.com` was refused by the proxy (403). Everything goes through `http://proxy:8080`, with its own CA (`SSL_CERT_FILE`).
+- **The allowlist works:** `agent-graph.net` gave 200, `example.com` was refused by the proxy (403). Everything goes through `http://proxy:8080`, with its own CA (`SSL_CERT_FILE`).
 - HOME is `/root`, running as root; the repository is in `/workspace/<repo>`.
 - **Setup starts from the image each time** the environment is republished: nothing an earlier install script wrote is there.
 
@@ -66,7 +66,7 @@ Then, with every event hooked by hand, synchronous and with no matcher, logging 
 
 ## Step 2: build, by what step 1 found
 
-Two ways in, in order of preference. Both install `agent-graph` in the **install script** (it has internet; the task needn't reach anything but `agentgraph.chofter.com`), and share with `watch-remote`, logged in by `AGENT_GRAPH_TOKEN` from the environment's settings, as Claude Code's cloud does.
+Two ways in, in order of preference. Both install `agent-graph` in the **install script** (it has internet; the task needn't reach anything but `agent-graph.net`), and share with `watch-remote`, logged in by `AGENT_GRAPH_TOKEN` from the environment's settings, as Claude Code's cloud does.
 
 ### A. Hooks, if cloud tasks run them
 
@@ -78,9 +78,9 @@ Two ways in, in order of preference. Both install `agent-graph` in the **install
 
 What you'd set up, all in the environment's configuration at chatgpt.com/codex:
 
-- install script: `curl -fsSL "https://agentgraph.chofter.com/install.sh?cache_bust=$(date +%s)" | sh && ~/.local/bin/agent-graph install codex --cloud`. The address is different every time, so no cache in between hands out an older install script, and so an older release;
+- install script: `curl -fsSL "https://agent-graph.net/install.sh?cache_bust=$(date +%s)" | sh && ~/.local/bin/agent-graph install codex --cloud`. The address is different every time, so no cache in between hands out an older install script, and so an older release;
 - environment variable (or network secret, if step 2's check shows it works in a header): `AGENT_GRAPH_TOKEN=<an API token from your account page>`;
-- internet access: Custom domains only, with `agentgraph.chofter.com`.
+- internet access: Custom domains only, with `agent-graph.net`.
 
 Checking question 1 is then a task in that environment: if the task shows up at `/watch`, hooks run. If not, B.
 

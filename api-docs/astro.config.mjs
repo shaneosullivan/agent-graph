@@ -1,4 +1,4 @@
-// The API reference, at https://agentgraph.chofter.com/docs/reference: a
+// The API reference, at https://agent-graph.net/docs/reference: a
 // static site, built into the site's public/ (site/next.config.ts serves
 // it), from site/openapi.json and stainless/stainless.yml.
 import {fileURLToPath} from "node:url";
@@ -27,7 +27,7 @@ function openReferenceSidebar(items) {
 }
 
 export default defineConfig({
-  site: "https://agentgraph.chofter.com",
+  site: "https://agent-graph.net",
   base: "/docs/reference",
   outDir: fileURLToPath(new URL("site/public/docs/reference/", repo)),
   trailingSlash: "ignore",
@@ -46,7 +46,7 @@ export default defineConfig({
       disableCredits: true,
       header: {
         links: [
-          {label: "Agent Graph", link: "https://agentgraph.chofter.com/"},
+          {label: "Agent Graph", link: "https://agent-graph.net/"},
         ],
       },
       apiReference: {

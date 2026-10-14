@@ -52,7 +52,7 @@ use crate::event::Envelope;
 use crate::keyframe;
 use crate::reducer::{self, KEYFRAME_PART, Replay};
 
-pub const DEFAULT_URL: &str = "https://agentgraph.chofter.com";
+pub const DEFAULT_URL: &str = "https://agent-graph.net";
 /// The most sent in one request; the site rejects bigger bodies.
 pub const MAX_CHUNK: usize = 256 * 1024;
 /// How often to look for new lines.
@@ -2715,7 +2715,7 @@ mod tests {
     #[test]
     fn a_login_is_only_sent_over_https_or_to_this_machine() {
         let private = [
-            "https://agentgraph.chofter.com",
+            "https://agent-graph.net",
             "HTTPS://example.com/",
             "http://localhost",
             "http://localhost:3000/",

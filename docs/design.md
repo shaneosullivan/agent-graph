@@ -463,7 +463,7 @@ The `hostile-text` example checks all of this.
 
 ## 9. Sharing on the web
 
-The site (`site/`, deployed at `https://agentgraph.chofter.com`) is a pastebin for Agent Graph logs. A log can get there two ways, and either way you get a link to a viewer, kept until the log has had no new events for a week (see "Logs not in use are deleted", below):
+The site (`site/`, deployed at `https://agent-graph.net`) is a pastebin for Agent Graph logs. A log can get there two ways, and either way you get a link to a viewer, kept until the log has had no new events for a week (see "Logs not in use are deleted", below):
 - **Paste or upload** it on the home page.
 - **Stream it live** with `agent-graph watch-remote`, to your account: only you can see it, logged in, at `/watch` (your latest live share).
 

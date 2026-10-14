@@ -23,9 +23,9 @@ export default function Privacy() {
         Agent Graph is built to keep what it records to a minimum, and to keep
         it on your computer unless you choose to share it. This page says what
         the <code>agent-graph</code> command records, what this site
-        (agentgraph.chofter.com) stores, who can see it, and how long it&rsquo;s
-        kept. The site is run by {CONTACT.company}, in {CONTACT.country}, which
-        is the controller of the personal data it holds. For questions, email{" "}
+        (agent-graph.net) stores, who can see it, and how long it&rsquo;s kept.
+        The site is run by {CONTACT.company}, in {CONTACT.country}, which is the
+        controller of the personal data it holds. For questions, email{" "}
         <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a>.
       </p>
 

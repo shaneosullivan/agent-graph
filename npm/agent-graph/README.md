@@ -41,12 +41,12 @@ The hooks name the program by its path inside npm's global folder, which upgrade
 | `agent-graph view --open` | Live web view on your machine (port 7777), with a timeline for stepping back through a session. |
 | `agent-graph snapshot` | Saves a PNG of the current session and prints its path. `--out x.svg` for SVG, `--json` for the raw graph. |
 | `agent-graph tree` | One-off text tree (`--all` includes older sessions). |
-| `agent-graph watch-remote` | Shares the graph live to your account at [agentgraph.chofter.com](https://agentgraph.chofter.com/watch), where only you can see it. |
+| `agent-graph watch-remote` | Shares the graph live to your account at [agent-graph.net](https://agent-graph.net/watch), where only you can see it. |
 | `agent-graph run -- <command>` | Runs any command as a node in the graph, e.g. an agent without hooks (`agent-graph run -- aider`). |
 
 Every view flags what needs you (a permission prompt, a question, a plan to approve), agents that have gone quiet while working, and sessions waiting on each other.
 
-`agent-graph --help` gives an overview, and `agent-graph <command> --help` explains a command in full. The same is at [agentgraph.chofter.com/docs](https://agentgraph.chofter.com/docs).
+`agent-graph --help` gives an overview, and `agent-graph <command> --help` explains a command in full. The same is at [agent-graph.net/docs](https://agent-graph.net/docs).
 
 ## Upgrade and remove
 

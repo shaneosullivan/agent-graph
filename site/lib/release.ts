@@ -33,7 +33,7 @@ export function latestRelease(json: unknown = published): Release | null {
 
 /** The public origin, for the commands the site shows. */
 export const SITE_URL = (
-  process.env.NEXT_PUBLIC_SITE_URL || "https://agentgraph.chofter.com"
+  process.env.NEXT_PUBLIC_SITE_URL || "https://agent-graph.net"
 ).replace(/\/+$/, "");
 
 /**

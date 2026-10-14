@@ -26,7 +26,7 @@ try {
           `install @chofter/agent-graph again without that.`
       : `agent-graph: there's no build for ${platform} yet ` +
           `(there are for ${supported.join(", ")}). ` +
-          `See https://agentgraph.chofter.com/#install`,
+          `See https://agent-graph.net/#install`,
   );
   process.exit(1);
 }

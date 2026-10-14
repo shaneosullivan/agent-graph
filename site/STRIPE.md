@@ -86,8 +86,8 @@ Stripe tells the site when a subscription starts, renews, fails to be paid or en
    - `customer.subscription.paused`
    - `customer.subscription.resumed`
 4. Destination type **Webhook endpoint**, and the URL for the mode:
-   - live mode: `https://agentgraph.chofter.com/api/stripe/webhook`
-   - a sandbox: `https://agentgraph.chofter.com/api/stripe/webhook-test`
+   - live mode: `https://agent-graph.net/api/stripe/webhook`
+   - a sandbox: `https://agent-graph.net/api/stripe/webhook-test`
 5. Create it, open it, and reveal the **Signing secret** (`whsec_…`). The live one is `STRIPE_WEBHOOK_SECRET`, and the sandbox's is `STRIPE_TEST_WEBHOOK_SECRET`.
 
 Each endpoint takes only its own mode's events:

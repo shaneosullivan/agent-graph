@@ -655,7 +655,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                     "Installed. Commit .claude/settings.json, then, in your Claude Code cloud \
                      environment's settings (claude.ai/code):\n\
                      \x20 1. Environment variables: AGENT_GRAPH_TOKEN=<an API token from {site}/account>\n\
-                     \x20 2. Network access: Custom, allowing agentgraph.chofter.com and \
+                     \x20 2. Network access: Custom, allowing agent-graph.net and \
                      firebasestorage.googleapis.com\n\
                      Cloud sessions of this project are then shared live, at {site}/watch."
                 );
@@ -675,7 +675,7 @@ fn install_cmd(client: Client, scope: Scope, opts: InstallOptions) -> Result<(),
                  \x20 1. Environment variables: AGENT_GRAPH_TOKEN=<an API token from {site}/account>. \
                  Make it an environment variable, not a secret: a secret reaches only the setup \
                  script, and it's the tasks that share.\n\
-                 \x20 2. Agent internet access: On, with agentgraph.chofter.com in Additional \
+                 \x20 2. Agent internet access: On, with agent-graph.net in Additional \
                  allowed domains, and All methods allowed"
             );
             report_cloud_checks(site, true)?;
@@ -1915,7 +1915,7 @@ mod tests {
 
     #[test]
     fn the_autostart_question_says_which_login_it_uses() {
-        let site = "https://agentgraph.chofter.com";
+        let site = "https://agent-graph.net";
         let account = crate::account::Account {
             site: site.into(),
             token: "t".into(),
@@ -1933,7 +1933,7 @@ mod tests {
         assert!(autostart_question(site, None, false).contains("in your browser"));
         let note = sign_up_note(site);
         assert!(
-            note.contains("sign up at https://agentgraph.chofter.com"),
+            note.contains("sign up at https://agent-graph.net"),
             "{note}"
         );
         assert!(

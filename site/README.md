@@ -1,6 +1,6 @@
 # Agent Graph site
 
-The site behind `https://agentgraph.chofter.com`: a pastebin for Agent Graph logs. You paste or upload a log, or stream one live with `agent-graph watch-remote`, and get a link to a viewer, kept until the log has had no new events for a week. The viewer is the same one `agent-graph view` serves locally, and anyone with the link can step through the log. Logs can be password protected.
+The site behind `https://agent-graph.net`: a pastebin for Agent Graph logs. You paste or upload a log, or stream one live with `agent-graph watch-remote`, and get a link to a viewer, kept until the log has had no new events for a week. The viewer is the same one `agent-graph view` serves locally, and anyone with the link can step through the log. Logs can be password protected.
 
 It's a Next.js app with Firestore for storage. The viewer's graph logic isn't reimplemented here: it's the Rust reducer, compiled to WebAssembly and run in the browser.
 
@@ -175,7 +175,7 @@ npm run test:ci
    firebase deploy --only firestore:rules --project <project-id>
    ```
 2. **Service account:** in Firebase, go to Project settings → Service accounts and generate a new private key. It needs the **Firebase Authentication Admin** role as well as Firestore's (the site makes and checks session cookies with it).
-3. **Accounts:** in Firebase Authentication, enable the **Email/Password** and **Google** sign-in providers, and add `agentgraph.chofter.com` to **Settings → Authorized domains**. Add a web app (Project settings → Your apps) for its settings, below.
+3. **Accounts:** in Firebase Authentication, enable the **Email/Password** and **Google** sign-in providers, and add `agent-graph.net` to **Settings → Authorized domains**. Add a web app (Project settings → Your apps) for its settings, below.
 4. **Vercel:** import the repository and set **Root Directory** to `site`.
 5. **Environment variables:** set these in Vercel.
    - `AGENT_GRAPH_SECRET`: 32+ random bytes. Generate one with:
@@ -185,14 +185,14 @@ npm run test:ci
      Changing it invalidates every write key and viewer cookie.
    - `AGENT_GRAPH_ENCRYPTION_KEY`: another 32 random bytes, generated the same way. **Back it up and never change it**: without it, stored logs can't be decrypted.
    - `FIREBASE_SERVICE_ACCOUNT`: the service account's JSON key, on one line.
-   - `NEXT_PUBLIC_SITE_URL`: `https://agentgraph.chofter.com`
+   - `NEXT_PUBLIC_SITE_URL`: `https://agent-graph.net`
    - `CRON_SECRET`: 32+ random bytes, generated the same way. Vercel Cron sends it to `/api/cron/cleanup` and `/api/cron/analytics` (see `vercel.json`): the daily deletion of logs with no event for a week, and of days' usage counts a year old. Neither does anything without it.
    - `ADMIN_EMAILS`: the addresses, comma-separated, whose accounts can see `/admin` (their email must be verified, as Google's are).
    - `SHOWCASE_API_KEY`: a restricted API key (`ag_rk_live_…`) of the demo account whose graphs `/showcase` shows, for its live shares. It's handed to every browser that opens `/showcase`, so it's public: make it for the demo's shares only. Until it's set, `/showcase` says it isn't set up.
    - Optionally, `ANALYTICS_DISABLED=true`, to count nothing. It's `false` unless set.
    - `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`: the web app's settings, from step 3. They're public by design (they identify the project; what's secret stays on the server), and built into the pages: redeploy after changing them.
    - Optionally, to charge for sharing live: `STRIPE_MODE` (`test` or `production`), that mode's keys and prices (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_MONTHLY` and `STRIPE_PRICE_YEARLY`, or the same with `STRIPE_TEST_` in test mode), `STRIPE_MONTHLY_LABEL`, `STRIPE_YEARLY_LABEL`, and `FREE_TRIAL_DAYS`. Setting up Stripe for them, step by step: `STRIPE.md`.
-6. **Domain:** add `agentgraph.chofter.com` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
+6. **Domain:** add `agent-graph.net` in Vercel, and a `CNAME` record for `agentgraph` pointing at `cname.vercel-dns.com`.
 7. **Optional:** add Firestore TTL policies on the `expireAt` field of the `unlock-attempts` collection, so counts of password guesses and scrypt runs are cleared away once their window is over, of `cli-codes`, for logins the CLI never finished (an expired code is refused either way), and of `api-keys`, for the API showcase's browser keys once they've run out (they're refused either way, and an account keeps at most 20).
 8. **Logs from before storage ids.** Logs created before logs were stored under an HMAC of their id can't be found by the new site until they're copied. Run the migration with the production environment: the same `AGENT_GRAPH_ENCRYPTION_KEY`, and `FIREBASE_SERVICE_ACCOUNT`. It refuses to run without the key, prints the project, and checks that the key decrypts the logs before writing anything.
    1. Before deploying, copy the logs. The old site doesn't see the copies.

@@ -26,8 +26,8 @@ Pick one:
 | | Command |
 |---|---|
 | macOS (Homebrew, also on Linux) | `brew tap chofter/tap && brew trust chofter/tap && brew install --cask chofter/tap/agent-graph` |
-| macOS and Linux | `curl -fsSL https://agentgraph.chofter.com/install.sh \| sh` (no curl? `wget -qO- https://agentgraph.chofter.com/install.sh \| sh`) |
-| Windows (in PowerShell) | `irm https://agentgraph.chofter.com/install.ps1 \| iex` |
+| macOS and Linux | `curl -fsSL https://agent-graph.net/install.sh \| sh` (no curl? `wget -qO- https://agent-graph.net/install.sh \| sh`) |
+| Windows (in PowerShell) | `irm https://agent-graph.net/install.ps1 \| iex` |
 | macOS, Linux and Windows, with Node (npm) | `npm install -g @chofter/agent-graph` |
 | From source (Rust stable) | `cargo install --path .` |
 
@@ -56,12 +56,12 @@ For **Codex**, `agent-graph install codex` does the same:
 
 For **Cursor**, `agent-graph install cursor` adds hooks to `~/.cursor/hooks.json`, keeping everything else there, and the `/agent-graph` command. New chats are recorded from then on, in the Cursor app and its CLI (`agent`): their subagents, todo lists and names. Cursor's hooks don't say when a chat is waiting for you, so what it's waiting on (a command to approve, a question, a plan to review) comes from Cursor's own records of the chat, read while `agent-graph view` or `watch-remote` runs. `agent-graph uninstall cursor` removes it. [docs/cursor.md](docs/cursor.md) has the details.
 
-**In the cloud**, sessions are recorded and shared live, to your account at [agentgraph.chofter.com/watch](https://agentgraph.chofter.com/watch), given an API token from your account page as `AGENT_GRAPH_TOKEN` in the cloud environment's settings:
+**In the cloud**, sessions are recorded and shared live, to your account at [agent-graph.net/watch](https://agent-graph.net/watch), given an API token from your account page as `AGENT_GRAPH_TOKEN` in the cloud environment's settings:
 - **Claude Code's cloud** (claude.ai/code): `agent-graph install claude-code --cloud` adds hooks to the project's `.claude/settings.json`, to commit.
 - **Codex's cloud** (chatgpt.com/codex): the environment's setup script runs the install script, then `~/.local/bin/agent-graph install codex --cloud --yes`, which adds the hooks to Codex's files in the cloud. [docs/codex-cloud.md](docs/codex-cloud.md) has the details.
 - **Cursor's cloud agents**: `agent-graph install cursor --cloud --scope project` adds hooks to the project's `.cursor/hooks.json`, to commit; the token is a secret in Cursor's dashboard (Cloud Agents → Secrets).
 
-The site's [Download section](https://agentgraph.chofter.com/#install) has the steps for each, page by page.
+The site's [Download section](https://agent-graph.net/#install) has the steps for each, page by page.
 
 For Gemini CLI, `install` adds the same command:
 
@@ -71,7 +71,7 @@ For Gemini CLI, `install` adds the same command:
 
 Its own sessions aren't recorded yet; only Claude Code, Codex and Cursor have hooks so far.
 
-`agent-graph --help` gives an overview, and `agent-graph <command> --help` explains a command in full, with examples. The same text is on the web at [agentgraph.chofter.com/docs](https://agentgraph.chofter.com/docs).
+`agent-graph --help` gives an overview, and `agent-graph <command> --help` explains a command in full, with examples. The same text is on the web at [agent-graph.net/docs](https://agent-graph.net/docs).
 
 ## Look at your agents
 
@@ -81,9 +81,9 @@ Its own sessions aren't recorded yet; only Claude Code, Codex and Cursor have ho
 | `agent-graph view --open` | Live web view on port 7777 (it prints a link with a key, `http://127.0.0.1:7777/?key=…`; only that link works; a viewer already running on the port is replaced, so a newer version takes over). Has a timeline slider for stepping back through a session, saves images, and reopens a Claude Code or Codex session, or a chat in Cursor's CLI: in the Claude app or the ChatGPT app if that's where it ran, else in a new terminal window. |
 | `agent-graph snapshot` | Saves a phone-sized PNG of the current session and prints its path, ready for an agent to send you. `--out x.svg` for SVG, `--json` for the raw graph. |
 | `agent-graph tree` | One-off text tree (`--all` includes older sessions). |
-| `agent-graph watch-remote` | Shares the graph live to your account at [agentgraph.chofter.com](https://agentgraph.chofter.com), where only you can see it. See below. |
+| `agent-graph watch-remote` | Shares the graph live to your account at [agent-graph.net](https://agent-graph.net), where only you can see it. See below. |
 | `agent-graph run -- <command>` | Runs any command as a node in the graph, e.g. an agent without hooks (`agent-graph run -- aider`) or a script that starts several agents, which then appear under it. Exits with the command's exit code. |
-| `agent-graph diagnostics` | Checks what recording and sharing need, wherever it's run (your computer, or a coding agent's cloud): each agent's hooks, the data folder, the site, your login, sharing, and updates. Says how to fix anything wrong, with a link to it on [the troubleshooting page](https://agentgraph.chofter.com/troubleshooting); `--json` for the report as JSON. In a cloud, `watch-remote` sends this report to your account as it starts and stops, so a broken cloud says so at /watch. |
+| `agent-graph diagnostics` | Checks what recording and sharing need, wherever it's run (your computer, or a coding agent's cloud): each agent's hooks, the data folder, the site, your login, sharing, and updates. Says how to fix anything wrong, with a link to it on [the troubleshooting page](https://agent-graph.net/troubleshooting); `--json` for the report as JSON. In a cloud, `watch-remote` sends this report to your account as it starts and stops, so a broken cloud says so at /watch. |
 
 ```
 claude-code:e0000002  search-indexer  [working]  Rebuilding the index schema (+1 pending)  tasks 0/2  waiting on 1 node (0 open tasks), Explore a91d0160 looks stuck
@@ -103,7 +103,7 @@ To see all of these at once, open the [example logs](examples/README.md).
 agent-graph watch-remote
 ```
 
-This shares the graph to your account on the site and keeps it updated as your agents work, until you stop it. See it at [agentgraph.chofter.com/watch](https://agentgraph.chofter.com/watch), logged in: it's the same viewer as `view`, and only you can see it. The first time, it opens your browser to log in (with Google, or an email and password), and keeps the login for next time. Sharing live is free for your account's first week; after that, it opens your account page to subscribe, and carries on once you have. You can also paste or upload a log at [agentgraph.chofter.com](https://agentgraph.chofter.com), and share its link with anyone.
+This shares the graph to your account on the site and keeps it updated as your agents work, until you stop it. See it at [agent-graph.net/watch](https://agent-graph.net/watch), logged in: it's the same viewer as `view`, and only you can see it. The first time, it opens your browser to log in (with Google, or an email and password), and keeps the login for next time. Sharing live is free for your account's first week; after that, it opens your account page to subscribe, and carries on once you have. You can also paste or upload a log at [agent-graph.net](https://agent-graph.net), and share its link with anyone.
 
 Run it again later and it carries on with the same share, without sending what the site already has. `--new` starts a new one.
 

@@ -1,5 +1,5 @@
 /** The site's own address, whose links stay in the same tab. */
-const SITE = "https://agentgraph.chofter.com";
+const SITE = "https://agent-graph.net";
 
 /**
  * A link to `href`, as an `<a>`'s attributes: `<a {...link(url)}>`. One to

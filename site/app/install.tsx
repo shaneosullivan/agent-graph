@@ -144,7 +144,7 @@ const ways: Record<Os, Way> = {
  * script's address is different every time (the time, as `cache_bust`), so
  * no cache on the way gives an older one, with an older release.
  */
-const CODEX_CLOUD_SETUP = `curl -fsSL "https://agentgraph.chofter.com/install.sh?cache_bust=$(date +%s)" | sh
+const CODEX_CLOUD_SETUP = `curl -fsSL "https://agent-graph.net/install.sh?cache_bust=$(date +%s)" | sh
 ~/.local/bin/agent-graph install codex --cloud --yes`;
 
 /**
@@ -194,7 +194,7 @@ function CloudSteps() {
           and set network access to Custom, allowing these two domains:
         </span>
         <CopyCommand
-          command={"agentgraph.chofter.com\nfirebasestorage.googleapis.com"}
+          command={"agent-graph.net\nfirebasestorage.googleapis.com"}
         />
         <span className="install-or">
           The environment&rsquo;s setup script can stay empty.
@@ -267,7 +267,7 @@ function CodexCloudSteps() {
         . Keep the <strong>Domain allowlist</strong> as it is, and in{" "}
         <strong>Additional allowed domains</strong> add (after a comma, if there
         are domains there already):
-        <CopyCommand command="agentgraph.chofter.com" />
+        <CopyCommand command="agent-graph.net" />
         <span className="install-or">
           Set <strong>Allowed HTTP Methods</strong> to{" "}
           <strong>All methods</strong>: sharing sends the session with POST

@@ -94,7 +94,7 @@ The hard one: a `claude -p` the session runs in its (Git Bash) shell must link i
 
 ## 9. Sharing at login (`watch-remote --autostart`)
 
-Needs an account on agentgraph.chofter.com (the one you use on your Mac is fine).
+Needs an account on agent-graph.net (the one you use on your Mac is fine).
 
 - [ ] In window 2:
 
@@ -110,7 +110,7 @@ Needs an account on agentgraph.chofter.com (the one you use on your Mac is fine)
   ```
 
   One's command line has `--autostarted` (the supervisor), the other `--background` (the one sharing), and its parent is the supervisor. No new window appeared.
-- [ ] `notepad "$env:USERPROFILE\.agent-graph\watch-remote.log"` shows it sharing. On your phone or Mac, agentgraph.chofter.com/watch shows sullyhome's sessions.
+- [ ] `notepad "$env:USERPROFILE\.agent-graph\watch-remote.log"` shows it sharing. On your phone or Mac, agent-graph.net/watch shows sullyhome's sessions.
 - [ ] Task Manager (Ctrl+Shift+Esc) → **Startup apps**: there's an entry for agent-graph, enabled.
 - [ ] Close window 2 (the PowerShell you ran `--autostart` from). Run the `Get-CimInstance` command again in another window: both processes are still running.
 - [ ] **It's started again after a failure.** Stop the `--background` one (its ProcessId from above): `Stop-Process -Id <ProcessId> -Force`. Within about a minute, the log says `watch-remote stopped (…): starting it again in 60 seconds.`, and a new `--background` process is running under the same supervisor.

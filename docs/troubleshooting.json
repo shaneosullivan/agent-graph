@@ -84,9 +84,9 @@
       "problem": "Sharing sends what's recorded to the site, and nothing answers there: no network, a firewall, or a proxy in the way.",
       "fix": "Check this computer can open the site in a browser. Behind a proxy, `HTTPS_PROXY` must be set for `agent-graph` too.",
       "clouds": {
-        "Claude Code cloud": "In the environment's settings at claude.ai/code, set network access to Custom, allowing `agentgraph.chofter.com` and `firebasestorage.googleapis.com`.",
-        "Codex cloud": "In the environment's settings at chatgpt.com/codex, turn on Agent internet access, add `agentgraph.chofter.com` to the additional allowed domains, and allow all HTTP methods.",
-        "Cursor cloud": "A cloud agent's machine can usually reach the internet: check your team's network settings in Cursor's dashboard allow `agentgraph.chofter.com`."
+        "Claude Code cloud": "In the environment's settings at claude.ai/code, set network access to Custom, allowing `agent-graph.net` and `firebasestorage.googleapis.com`.",
+        "Codex cloud": "In the environment's settings at chatgpt.com/codex, turn on Agent internet access, add `agent-graph.net` to the additional allowed domains, and allow all HTTP methods.",
+        "Cursor cloud": "A cloud agent's machine can usually reach the internet: check your team's network settings in Cursor's dashboard allow `agent-graph.net`."
       }
     },
     {

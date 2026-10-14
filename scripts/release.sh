@@ -54,7 +54,7 @@
 #   GCLOUD_ACCOUNT   the gcloud account to upload as (optional: gcloud's
 #                    active one otherwise)
 #   SITE_URL         the site whose install script is checked at the end
-#                    (optional: https://agentgraph.chofter.com otherwise)
+#                    (optional: https://agent-graph.net otherwise)
 # and notarize-mac.sh's (NOTARY_PROFILE, APPLE_TEAM_ID: see its --help).
 # npm must be logged in (npm login) as a member of the chofter org.
 # =============================================================================
@@ -90,7 +90,7 @@ RELEASE_BUCKET="${RELEASE_BUCKET:-}"
 RELEASE_BUCKET="${RELEASE_BUCKET%/}"
 HOMEBREW_TAP="${HOMEBREW_TAP:-}"
 # The site whose install script is checked for the release at the end.
-SITE_URL="${SITE_URL:-https://agentgraph.chofter.com}"
+SITE_URL="${SITE_URL:-https://agent-graph.net}"
 SITE_URL="${SITE_URL%/}"
 GCLOUD_ACCOUNT="${GCLOUD_ACCOUNT:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-AgentGraphNotary}"

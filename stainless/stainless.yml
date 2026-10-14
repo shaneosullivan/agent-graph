@@ -10,9 +10,9 @@ edition: 2026-01-30
 
 organization:
   name: agent-graph
-  docs: https://agentgraph.chofter.com/docs/api
-  contact: https://agentgraph.chofter.com/contact
-  security_contact: https://agentgraph.chofter.com/contact
+  docs: https://agent-graph.net/docs/api
+  contact: https://agent-graph.net/contact
+  security_contact: https://agent-graph.net/contact
 
 settings:
   license: MIT
@@ -21,7 +21,7 @@ settings:
   disable_mock_tests: true
 
 environments:
-  production: https://agentgraph.chofter.com/api/v1
+  production: https://agent-graph.net/api/v1
 
 targets:
   typescript:
@@ -40,7 +40,7 @@ client_settings:
         security_scheme: BearerAuth
       description: >-
         A secret (`ag_sk_live_…`) or restricted (`ag_rk_live_…`) key, made on
-        https://agentgraph.chofter.com/account. Keep it on your server.
+        https://agent-graph.net/account. Keep it on your server.
       example: ag_sk_live_51Hx7Qm2Vb9Kd4Tz0Ws3Ne8LrPq4Xa9T
     api_version:
       type: string

@@ -1,7 +1,7 @@
 "use client";
 
 // Calling the Agent Graph API from the browser, as any integration would:
-// GET https://agentgraph.chofter.com/api/v1/…, with a key in the
+// GET https://agent-graph.net/api/v1/…, with a key in the
 // Authorization header. (Here, the site's own /api/v1, and a key it hands
 // the page when it starts: keyFor, below.) Every call is recorded, so each
 // page can show exactly what it asked the API for, and how to ask it
@@ -105,7 +105,7 @@ export function useCallLog(): CallLog {
  */
 const pins = new Map<string, Promise<{id: string; at: number} | null>>();
 
-/** The API: this site's own (in production, https://agentgraph.chofter.com/api/v1). */
+/** The API: this site's own (in production, https://agent-graph.net/api/v1). */
 const API_URL = "/api/v1";
 
 /**

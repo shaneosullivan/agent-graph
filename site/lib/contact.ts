@@ -2,7 +2,7 @@
 export const CONTACT = {
   company: "HumTech Ltd",
   country: "Ireland",
-  email: "support@chofter.com",
+  email: "support@agent-graph.net",
   twitter: {handle: "@chofter", url: "https://x.com/chofter"},
   threads: {handle: "@shaneos", url: "https://www.threads.net/@shaneos"},
   source: "https://github.com/shaneosullivan/agent-graph",

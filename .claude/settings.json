@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] || curl -fsSL https://agentgraph.chofter.com/install.sh | AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh >/dev/null 2>&1; \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = true ] || exit 0; [ -x \"$HOME/.local/bin/agent-graph\" ] || curl -fsSL https://agent-graph.net/install.sh | AGENT_GRAPH_INSTALL_DIR=\"$HOME/.local/bin\" sh >/dev/null 2>&1; \"$HOME/.local/bin/agent-graph\" emit --provider claude-code; exit 0",
             "timeout": 180
           },
           {

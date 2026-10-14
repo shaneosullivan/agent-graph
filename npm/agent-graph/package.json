@@ -11,7 +11,7 @@
     "hooks",
     "cli"
   ],
-  "homepage": "https://agentgraph.chofter.com",
+  "homepage": "https://agent-graph.net",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/shaneosullivan/agent-graph.git",

@@ -16,7 +16,7 @@ export default function Terms() {
   return (
     <InfoPage title="Terms & Conditions" updated="30 September 2026">
       <p>
-        These terms cover your use of this site, agentgraph.chofter.com (the
+        These terms cover your use of this site, agent-graph.net (the
         &ldquo;site&rdquo;), run by {CONTACT.company}, in {CONTACT.country}{" "}
         (&ldquo;we&rdquo;): sharing logs, and sharing live with an account. By
         using the site you agree to them. If you don&rsquo;t, please don&rsquo;t

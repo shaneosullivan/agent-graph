@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {themeColor: "#090b11"};
 
 /** The API, as the curl commands under "Under the hood" call it. */
-const API_URL = `${(process.env.NEXT_PUBLIC_SITE_URL || "https://agentgraph.chofter.com").replace(/\/+$/, "")}/api/v1`;
+const API_URL = `${(process.env.NEXT_PUBLIC_SITE_URL || "https://agent-graph.net").replace(/\/+$/, "")}/api/v1`;
 
 /**
  * The API showcase: a demo account's graphs (or, logged in, your own),

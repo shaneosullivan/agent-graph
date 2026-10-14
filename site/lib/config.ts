@@ -118,7 +118,7 @@ export const ID_PATTERN = /^[A-Za-z0-9]{12}$/;
 export type Source = "watch" | "paste" | "upload";
 export const SOURCES: ReadonlyArray<Source> = ["watch", "paste", "upload"];
 
-/** The public origin for links, e.g. https://agentgraph.chofter.com. */
+/** The public origin for links, e.g. https://agent-graph.net. */
 export function siteUrl(req: Request): string {
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "");
   return configured || new URL(req.url).origin;

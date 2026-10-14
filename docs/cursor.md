@@ -201,7 +201,7 @@ A cloud agent at cursor.com/agents, on a branch of a throwaway repository with t
 - **A cloud agent's `conversation_id` is its cloud id**, `bc-<uuid>`: the id Cursor's cloud API (B) uses. Payloads have `cursor_version: "1.0.0"`, and `transcript_path` and `user_email` are null.
 - **What marks the cloud:** not `CURSOR_CODE_REMOTE` (unset). Every cloud hook gets `CLOUD_AGENT_ALL_SECRET_NAMES`, `CLOUD_AGENT_INJECTED_SECRET_NAMES` and `CURSOR_AGENT_SOCKET` (`/run/cursor/api.sock`), which local hooks don't; the agent's commands get these too, and `CURSOR_CONVERSATION_ID` and `AGENT_TRANSCRIPTS`.
 - **Secrets reach the hooks themselves, with their values** (`AGENT_GRAPH_PROBE=12345` in every hook's environment), not only the agent's commands: unlike Codex's cloud, an `AGENT_GRAPH_TOKEN` secret is all sharing needs.
-- **agentgraph.chofter.com is reachable** with the default settings (`200` for `install.sh`).
+- **agent-graph.net is reachable** with the default settings (`200` for `install.sh`).
 - **The VM lasts between turns** (the first turn's log was there in the second, a minute later). How long it lasts while idle isn't known.
 - **No `~/.cursor/chats`**: no CLI database, and no app's either. A cloud agent is recorded from its hooks alone: no names, todo lists, plans or questions from Cursor's databases. (`~/.cursor` has `agent-hooks`, git hooks Cursor puts in the workspace; `bin`; `projects`; and `skills-cursor`.)
 - **Every command ran outside the sandbox** (`sandbox: false`), and none was asked about: a cloud agent runs its commands itself. The hooks' 10-second guess ("may be waiting for your approval") would be wrong for every slow command, so in the cloud it's off.
@@ -238,7 +238,7 @@ The docs say cloud agents run **command hooks from the repository's `.cursor/hoo
 1. On your computer, in that repository, run `sh <this repository>/scripts/cursor-probe.sh install --project`, and commit the `.cursor/hooks.json` and `scripts/cursor-probe.sh` it writes to that branch. Push it.
 2. In Cursor's dashboard (Cloud Agents → Secrets), add `AGENT_GRAPH_PROBE` with any made-up value.
 3. At cursor.com/agents, start an agent on that branch with:
-   > Run each of these shell commands, and show me all their output, without changing anything: `env | cut -d= -f1 | sort`; `echo CURSOR_CODE_REMOTE=$CURSOR_CODE_REMOTE AGENT_GRAPH_PROBE=${AGENT_GRAPH_PROBE:+set}`; `id; uname -a; echo HOME=$HOME`; `ps -eo pid,ppid,args | head -40`; `ls -la ~/.cursor ~/.cursor/chats 2>&1 | head -40`; `cat ~/.agent-graph-probe/cursor.jsonl | cut -c1-400`; `curl -sS -o /dev/null -w '%{http_code}\n' https://agentgraph.chofter.com/install.sh`.
+   > Run each of these shell commands, and show me all their output, without changing anything: `env | cut -d= -f1 | sort`; `echo CURSOR_CODE_REMOTE=$CURSOR_CODE_REMOTE AGENT_GRAPH_PROBE=${AGENT_GRAPH_PROBE:+set}`; `id; uname -a; echo HOME=$HOME`; `ps -eo pid,ppid,args | head -40`; `ls -la ~/.cursor ~/.cursor/chats 2>&1 | head -40`; `cat ~/.agent-graph-probe/cursor.jsonl | cut -c1-400`; `curl -sS -o /dev/null -w '%{http_code}\n' https://agent-graph.net/install.sh`.
 4. Send it a follow-up:
    > Now use one subagent to count the files in the repository and report the count. Then show me the output of `cat ~/.agent-graph-probe/cursor-env.txt ~/.agent-graph-probe/cursor-env-names.txt` and `cat ~/.agent-graph-probe/cursor.jsonl | cut -c1-400`.
 5. Paste me both answers.
@@ -247,7 +247,7 @@ That shows:
 
 - whether hooks run in the cloud, which (`sessionStart`?), and in what order, so which hook comes first;
 - what marks the cloud (`CURSOR_CODE_REMOTE`, `is_background_agent`, or another variable), for the guard;
-- whether the secret reaches the agent's commands and hooks, and whether the VM can reach agentgraph.chofter.com;
+- whether the secret reaches the agent's commands and hooks, and whether the VM can reach agent-graph.net;
 - whether there's a CLI-style `~/.cursor/chats` in the VM (and so names and todo lists there), and what process runs the agent;
 - what a cloud subagent's hooks carry, and whether they run in the parent's VM or one of their own (the second answer shows whether the subagent's hooks reached the first VM's log);
 - whether the VM, and a background process in it, lasts between turns (the probe's log, from the first turn, still there in the second).
